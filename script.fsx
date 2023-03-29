@@ -31,20 +31,31 @@ let rec replace sel repl (els:_ list) =
   match sel with 
   | [] -> repl
   | Nth(is)::sel ->
-      [ for i, el in Seq.indexed els do
+      let repls = replace sel repl [ for i in is -> els.[i] ]
+      [ for i, el in Seq.indexed els ->
           if List.contains i is then 
-            yield! replace sel repl els.[i .. i] 
-          else yield el ]
+            let j = List.findIndex ((=) i) is
+            repls.[j]
+          else el ]
   | Children::sel ->
-      failwith "TODO"
+      [ for el in els do 
+          match el with 
+          | Emphasis els -> Emphasis(replace sel repl els)
+          | Paragraph els -> Paragraph(replace sel repl els)
+          | Heading(n, els) -> Heading(n, replace sel repl els)
+          | List(elss) -> List([for els in elss -> replace sel repl els])
+          | Table(cols, elss) -> Table(cols,[for els in elss -> replace sel repl els])
+          | el -> el ]
 
 type Edit =
+  | EditElement of Selectors * (Element -> Element)
   | MakeTable of Selectors * Selectors
   | SplitColumn of Selectors * string * string list * (Element -> Element list)
 
-
 let apply edit els = 
   match edit with
+  | EditElement(elementSel, update) ->
+      replace elementSel (List.map update (select elementSel els)) els
   | MakeTable(replaceSel, child) ->
       let repl = Table(["Column"], List.map List.singleton (select child els))
       replace replaceSel [repl] els
@@ -66,11 +77,11 @@ let doc =
     List [
       [ Paragraph [ Text "Adele Goldberg, adele@xerox.com" ] ]
       [ Paragraph [ Text "Margaret Hamilton, hamilton@mit.com" ] ]
-      [ Paragraph [ Text "Jean Jennings Bartik, betty@rand.com" ] ]
+      [ Paragraph [ Text "Betty Jean Jennings, betty@rand.com" ] ]
     ]
   ]
 
-let edits = [ 
+let edits1 = [ 
   MakeTable([Nth [2]], [ Nth [2]; Children; Children ])
   SplitColumn([Nth [2]], "Column", ["Name"; "Email"], fun (Text s) -> 
     let i = s.IndexOf(',') in [Text(s.Substring(0, i).Trim()); Text(s.Substring(i+1).Trim())]
@@ -80,7 +91,21 @@ let edits = [
   )
 ]
 
+let edits2 = [
+  EditElement([Nth [2]; Children; Nth [2]; Children], fun (Text s) ->
+    Text(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik"))
+  )
+]
+
 doc 
-|> apply edits.[0]
-|> apply edits.[1]
-|> apply edits.[2]
+|> apply edits1.[0]
+|> apply edits1.[1]
+|> apply edits1.[2]
+
+doc
+|> apply edits2.[0]
+
+let elementSel = [Nth [2]; Children; Nth [2]; Children]
+
+select elementSel doc
+replace elementSel [Text "!!!"] doc
