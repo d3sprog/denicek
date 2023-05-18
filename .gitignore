@@ -1,0 +1,5 @@
+src/.vs/
+src/obj/
+node_modules/
+*.fs.js
+bundle.js
