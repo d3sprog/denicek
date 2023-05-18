@@ -296,7 +296,7 @@ let createVirtualDomApp id initial r u =
   
   setState initial
   event.Publish.Add(fun e -> setState (u state e))
-  setState
+  trigger, setState
   
 let text s = Text(s)
 let (=>) k v = k, Attribute(v)
