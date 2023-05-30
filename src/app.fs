@@ -18,6 +18,7 @@ type Event =
   | Show of int
   | Move of int 
   | Evaluate 
+  | AddEdits of Edit list
 
 let rec renderNode pid nd = 
   //let nd = mostEvalauted nd
@@ -38,6 +39,9 @@ let render trigger (state:State) =
     ]
     h?div [ "id" => "edits" ] [
       h?button ["click" =!> fun _ _ -> trigger Evaluate ] [text "Evaluate!"]
+      h?button ["click" =!> fun _ _ -> trigger (AddEdits addSpeakerOps) ] [text "Add speaker"]
+      h?button ["click" =!> fun _ _ -> trigger (AddEdits fixSpeakerNameOps) ] [text "Fix name"]
+      h?button ["click" =!> fun _ _ -> trigger (AddEdits refactorListOps) ] [text "Refacor list"]
       h?ol [] [
         for i, ed in Seq.rev (Seq.indexed state.Edits) ->
           h?li [] [             
@@ -50,6 +54,12 @@ let render trigger (state:State) =
     ]
   ]
 
+//let ops = opsCore @ opsExtras
+//let ops = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
+//let ops = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
+//let ops = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
+let ops = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
+
 let state = 
   { Initial = rcd "root" "div"
     Edits = ops
@@ -58,6 +68,9 @@ let state =
 let update (state:State) = function
   | Evaluate -> 
     let edits = state.FinalDocument |> evaluate
+    { state with Edits = state.Edits @ edits }  
+  | AddEdits edits ->
+    // TODO: This is wrong way to merge
     { state with Edits = state.Edits @ edits }  
   | Move d ->
     { state with Location = max 0 (min (state.Edits.Length - 1) (state.Location + d)) }

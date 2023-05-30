@@ -1,7 +1,4 @@
-#if INTERACTIVE
-#else
 module Tbd.Doc
-#endif
 
 // TODO: Right now, we always identify 'Object' members by field
 // and 'List' members by 'Index' but those are not so different and
@@ -34,6 +31,8 @@ and Expr =
   | Record of RecordType * list<Node>
   | Primitive of Primitive
   | Reference of Selectors
+
+let transformations = System.Collections.Generic.Dictionary<string, string -> string>()
 
 // --------------------------------------------------------------------------------------
 // Elements, Selectors, Paths
@@ -90,11 +89,13 @@ let select sel doc =
 
 type Edit = 
   | Append of Selectors * Node
-  | EditText of Selectors * (string -> string)
+  | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
   | Copy of Selectors * Selectors 
   | WrapRecord of string * string * RecordType * Selectors 
   | Replace of Selectors * Node
+  | AddField of Selectors * Node
+  | UpdateTag of Selectors * string
 
 let apply doc edit =
   match edit with
@@ -114,24 +115,118 @@ let apply doc edit =
       replace (fun p el -> 
         match el.Expression with 
         | Primitive(String(s)) when matches p sel -> 
-            Some { el with Expression = Primitive(String(f s)) }
+            Some { el with Expression = Primitive(String(transformations.[f] s)) }
         | _ -> None ) doc
   | WrapRecord(id, tag, typ, sel) ->
       replace (fun p el -> 
         if matches p sel then Some { el with Expression = Record(typ, [{ el with ID = id; Tag = tag }]) }
         else None ) doc
   | Copy(sel1, sel2) ->
-      let expr = 
-        match select sel1 doc with 
-        | [nd] -> nd.Expression
-        | nds -> Record(List, nds)
+      // NOTE: This is a bit too clever (if there is one target, it 
+      // implicitly creates list with all source nodes to be copied there)
+      let mutable exprs = 
+        match select sel2 doc, select sel1 doc with         
+        | tgs, srcs when tgs.Length = srcs.Length -> [ for s in srcs -> s.Expression ]
+        | [_], nds -> [ Record(List, nds) ]
+        | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
+      let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
       replace (fun p el -> 
-        if matches p sel2 then Some({ el with Expression = expr })
+        if matches p sel2 then Some({ el with Expression = next() })
+        else None ) doc
+  | UpdateTag(sel, tag) ->
+      replace (fun p el -> 
+        if matches p sel then Some({ el with Tag = tag})
         else None ) doc
   | Replace(sel, nd) ->
       replace (fun p el -> 
         if matches p sel then Some(nd)
         else None ) doc
+  | AddField(sel, v) ->
+      replace (fun p el -> 
+        match el.Expression with 
+        | Record(Object, attrs) when matches p sel -> Some({ el with Expression = Record(Object, attrs @ [v]) })
+        | _ -> None ) doc
+
+// --------------------------------------------------------------------------------------
+// Merge
+// --------------------------------------------------------------------------------------
+
+let getSelectors = function
+  | EditText(s, _) | Append(s, _) | Reorder(s, _)
+  | UpdateTag(s, _) | Replace(s, _) | WrapRecord(_, _, _, s) | AddField(s, _) -> [s]
+  | Copy(s1, s2) -> [s1; s2]
+
+let withSelectors sels = function
+  | EditText(_, f) -> EditText(List.exactlyOne sels, f)
+  | Append(_, v) -> Append(List.exactlyOne sels, v) 
+  | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
+  | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
+  | AddField(_, v) -> AddField(List.exactlyOne sels, v) 
+  | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) 
+  | Replace(_, n) -> Replace(List.exactlyOne sels, n) 
+  | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
+
+
+// Assuming 'e1' and 'e2' happened independently,
+// modify 'e1' so that it can be placed after 'e2'.
+let moveBefore e1 e2 = 
+  match e2 with 
+  | Reorder(sel, ord) -> 
+      // Returns a modified version of 'selOther' to match
+      // reordering of indices 'ord' at location specified by 'selReord'
+      let rec reorder selOther selReord =
+        match selOther, selReord with 
+        | All::selOther, All::selReord -> All::(reorder selOther selReord)
+        | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(reorder selOther selReord)
+        | Field(_)::_, _ -> selOther
+        | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(reorder selOther selReord)
+        | Index(io)::selOther, All::selReord -> Index(io)::(reorder selOther selReord)
+        | Index(io)::selOther, [] -> Index(List.findIndex ((=) io) ord)::selOther
+        | All::selOther, [] -> All::selOther
+        | All::selOther, Index(i)::selReorder -> failwith "moveBefore.Reorder - Too specific reordering! Not sure what to do. See RANDOM NOTES in datatype-edits.fsx"
+        | (All|Index _)::_, Field(_)::_ 
+        | Field(_)::_, (All|Index _)::_ -> selOther        
+        | [], _ -> []
+        | _ -> failwith $"moveBefore.Reorder - Missing case: {selOther} vs. {selReord}"
+      let nsels = getSelectors e1 |> List.map (fun s1 -> reorder s1 sel)
+      withSelectors nsels e1
+
+  | WrapRecord(id, tag, typ, sel) -> 
+      // Returns a modified version of 'selOther' to match
+      // the additional wrapping at location specified by 'selReord'
+      let rec wrapsels selOther selReord =
+        match selOther, selReord with 
+        | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(wrapsels selOther selReord)
+        | Field(_)::_, _ -> selOther
+        | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(wrapsels selOther selReord)
+        | Index(io)::selOther, All::selReord -> Index(io)::(wrapsels selOther selReord)
+        | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {e2}"
+        | selOther, [] -> Field(id)::selOther
+        | (All|Index _)::_, Field(_)::_ 
+        | Field(_)::_, (All|Index _)::_ -> selOther        
+        | [], _ -> []
+        | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
+      let nsels = getSelectors e1 |> List.map (fun s1 -> wrapsels s1 sel)
+      withSelectors nsels e1  
+      
+  | Copy _ // TODO: If e1 modified source of copying, it should apply to its target now too!
+  | UpdateTag _
+  | AddField _
+  | EditText _ 
+  | Append _ ->
+      e1
+
+  | _ -> failwith $"moveBefore - Missing case: Edit to be considered: {e2}"
+  
+
+let merge e1s e2s = 
+  let rec loop acc e1s e2s =
+    match e1s, e2s with 
+    | e1::e1s, e2::e2s when e1 = e2 -> loop (e1::acc) e1s e2s
+    | e1s, e2s ->
+        let e2sAfter = e2s |> List.map (fun e2 -> List.fold moveBefore e2 e1s)
+        (List.rev acc) @ e1s @ e2sAfter
+  loop [] e1s e2s 
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -196,25 +291,68 @@ let evaluate nd =
 // Evaluation
 // --------------------------------------------------------------------------------------
 
-let ap s n = Append(s, n)
-let wr s typ id tag = WrapRecord(id, tag, typ, s)
-
 let nds id tag s = 
   { ID = id; Tag = tag; Expression = Primitive(String s); } //Evaluated = None }
-
 let ndn id tag n = 
   { ID = id; Tag = tag; Expression = Primitive(Number n); } //Evaluated = None }
-
 let rcd id tag = 
   { ID = id; Tag = tag; Expression = Record(Object, []); } //Evaluated = None }
-
 let lst id tag = 
   { ID = id; Tag = tag; Expression = Record(List, []); } //Evaluated = None }
-
 let ref id tag sel = 
   { ID = id; Tag = tag; Expression = Reference(sel); } //Evaluated = None }
 
-let ops = 
+let ap s n = Append(s, n)
+let wr s typ id tag = WrapRecord(id, tag, typ, s)
+let ord s l = Reorder(s, l)
+let ed sel fn f = transformations.[fn] <- f; EditText(sel, fn)
+let add sel n = AddField(sel, n)
+let cp s1 s2 = Copy(s1, s2)
+let tag s t = UpdateTag(s, t)
+
+(*
+  | Append of Selectors * Node
+  | EditText of Selectors * (string -> string)
+  | Reorder of Selectors * list<int>
+  | Copy of Selectors * Selectors 
+  | WrapRecord of string * string * RecordType * Selectors 
+  | Replace of Selectors * Node
+*)
+
+
+let addSpeakerOps = 
+  [ 
+    ap [Field "speakers"] (nds "" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    ord [Field "speakers"] [3; 0; 1; 2] 
+  ]
+
+let fixSpeakerNameOps = 
+  [
+    ed [Field("speakers"); Index(2)] "rename Jean" <| fun s -> 
+      s.Replace("Betty Jean Jennings", "Jean Jennings Bartik")
+  ]
+
+let refactorListOps = 
+  [
+    wr [Field "speakers"; All] Object "name" "td"
+    add [Field "speakers"; All] (nds "email" "td" "")
+    tag [Field "speakers"; All] "tr"
+    tag [Field "speakers"] "table"
+    
+    wr [Field "speakers"] Object "body" "tbody"
+    add [Field "speakers"] (rcd "head" "thead")
+    add [Field "speakers"; Field "head"] (nds "" "td" "Name")
+    add [Field "speakers"; Field "head"] (nds "" "td" "E-mail")
+
+    cp [Field "speakers"; Field "body"; All; Field "name"] [Field "speakers"; Field "body"; All; Field "email"]
+    ed [Field "speakers"; Field "body"; All; Field "name"] "get name" <| fun s -> 
+      s.Substring(0, s.IndexOf(','))
+    ed [Field "speakers"; Field "body"; All; Field "email"] "get email" <| fun s -> 
+      s.Substring(s.IndexOf(',')+1).Trim()
+  ]
+
+
+let opsCore = 
   [
     ap [] (nds "title" "h1" "Programming conference 2023")
     ap [] (nds "stitle" "h2" "Speakers")
@@ -222,7 +360,10 @@ let ops =
     ap [Field "speakers"] (nds "" "li" "Adele Goldberg, adele@xerox.com") 
     ap [Field "speakers"] (nds "" "li" "Margaret Hamilton, hamilton@mit.com") 
     ap [Field "speakers"] (nds "" "li" "Betty Jean Jennings, betty@rand.com") 
-    
+  ]
+
+let opsExtras = 
+  [
     ap [] (nds "btitle" "h2" "Budgeting")
     ap [] (nds "ntitle" "h3" "Number of people")
     ap [] (rcd "counts" "ul")
@@ -272,21 +413,7 @@ let ops =
     wr [Field "ultimate"; Field "item"] Apply "arg" "span"
     ap [Field "ultimate"; Field "item"] (ref "op" "span" [Field "$builtins"; Field "sum"])
   ]
-
-
-let doc =
-  ops |> List.fold apply (rcd "root" "div")
-
-
-let e d = 
-  d |> evaluate |> List.fold apply d
-
-let foo () =
-  doc 
-  |> e
-  |> e
-  |> e
-  |> evaluate
+ 
 
 (*
 

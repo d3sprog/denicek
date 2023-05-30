@@ -3,9 +3,11 @@
   "scripts": {
     "postinstall": "dotnet tool restore",
     "start": "dotnet fable watch src --run webpack-dev-server",
-    "build": "dotnet fable src && webpack"
+    "build": "dotnet fable src && webpack",
+    "test": "dotnet fable src -o output --run jest --config=jest.config.js"
   },
   "devDependencies": {
+    "jest": "^29.5.0",
     "webpack": "^5.75.0",
     "webpack-cli": "^4.10.0",
     "webpack-dev-server": "^4.11.1"
