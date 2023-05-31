@@ -87,7 +87,7 @@ let select sel doc =
 // Elements, Selectors, Paths
 // --------------------------------------------------------------------------------------
 
-type Edit = 
+type EditKind = 
   | Append of Selectors * Node
   | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
@@ -97,8 +97,12 @@ type Edit =
   | AddField of Selectors * Node
   | UpdateTag of Selectors * string
 
+type Edit = 
+  { Kind : EditKind 
+    CanDuplicate : bool }
+
 let apply doc edit =
-  match edit with
+  match edit.Kind with
   | Append(sel, nd) ->
       replace (fun p el ->
         match el.Expression with 
@@ -151,20 +155,39 @@ let apply doc edit =
 // Merge
 // --------------------------------------------------------------------------------------
 
-let getSelectors = function
-  | EditText(s, _) | Append(s, _) | Reorder(s, _)
-  | UpdateTag(s, _) | Replace(s, _) | WrapRecord(_, _, _, s) | AddField(s, _) -> [s]
+let rec getNodeSelectors = function
+  | { Expression = Record(_, nds) } -> List.collect getNodeSelectors nds
+  | { Expression = Reference sels } -> [sels]
+  | { Expression = Primitive _ } -> []
+
+let withNodeSelectors nd sels = 
+  let mutable sels = sels
+  let next() = let r = List.head sels in sels <- List.tail sels; r
+  let rec loop nd = 
+    match nd with 
+    | { Expression = Record(typ, nds) } -> { nd with Expression = Record(typ, List.map loop nds) }
+    | { Expression = Reference sels } -> { nd with Expression = Reference(next()) }
+    | { Expression = Primitive _ } -> nd
+  loop nd
+
+let getSelectors ed = 
+  match ed.Kind with 
+  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) -> [s]
+  | Append(s, nd) | Replace(s, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
   | Copy(s1, s2) -> [s1; s2]
 
-let withSelectors sels = function
-  | EditText(_, f) -> EditText(List.exactlyOne sels, f)
-  | Append(_, v) -> Append(List.exactlyOne sels, v) 
-  | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
-  | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
-  | AddField(_, v) -> AddField(List.exactlyOne sels, v) 
-  | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) 
-  | Replace(_, n) -> Replace(List.exactlyOne sels, n) 
-  | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
+let withSelectors sels ed =
+  let nkind =
+    match ed.Kind with 
+    | Append(_, nd) -> Append(List.head sels, withNodeSelectors nd (List.tail sels)) 
+    | AddField(_, nd) -> AddField(List.head sels, withNodeSelectors nd (List.tail sels)) 
+    | Replace(_, nd) -> Replace(List.head sels, withNodeSelectors nd (List.tail sels)) 
+    | EditText(_, f) -> EditText(List.exactlyOne sels, f)
+    | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
+    | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
+    | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) 
+    | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
+  { ed with Kind = nkind }
 
 /// If 'p1' is prefix of 'p2', return the rest of 'p2'.
 /// This also computes 'more specific prefix' which is a version
@@ -212,6 +235,7 @@ let wrapSelectors e1 sel typ id tag =
     match selOther, selReord with 
     | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(wrapsels selOther selReord)
     | Field(_)::_, _ -> selOther
+    | All::selOther, All::selReord -> All::(wrapsels selOther selReord)
     | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(wrapsels selOther selReord)
     | Index(io)::selOther, All::selReord -> Index(io)::(wrapsels selOther selReord)
     | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {(typ,id,tag,sel)}"
@@ -243,11 +267,12 @@ let copyEdit e1 srcSel tgtSel =
   else [e1; withSelectors newSels e1]
   
 let updateSelectors e1 e2 = 
-  match e2 with 
+  match e2.Kind with 
   | Reorder(sel, ord) -> [reorderSelectors e1 sel ord]
   | WrapRecord(id, tag, typ, sel) -> [wrapSelectors e1 sel typ id tag]
-  | Copy(srcSel, tgtSel) -> copyEdit e1 srcSel tgtSel 
+  | Copy(srcSel, tgtSel) when e1.CanDuplicate -> copyEdit e1 srcSel tgtSel 
 
+  | Copy _
   | UpdateTag _
   | AddField _
   | EditText _ 
@@ -256,7 +281,8 @@ let updateSelectors e1 e2 =
 
   | _ -> failwith $"moveBefore - Missing case: Edit to be considered: {e2}"
 
-
+/// If the 'edit' is to something with a prefix specified by the selector 'selbase',
+/// returns new edit that is relatively to the subtree specified by selbase 
 let scopeEdit selBase edit = 
   match edit with 
   | Append(RemoveSelectorPrefix selBase sel, nd) -> Some(Append(sel, nd))
@@ -267,26 +293,26 @@ let scopeEdit selBase edit =
   | AddField(RemoveSelectorPrefix selBase sel, nd) -> Some(AddField(sel, nd))
   | UpdateTag(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateTag(sel, t))
   | Copy(RemoveSelectorPrefix selBase s1, RemoveSelectorPrefix selBase s2) -> Some(Copy(s1, s2))
-  | Copy _ -> failwith "scopeEdit.Copy - non-local copy - need to think about this one"
+  | Copy _ // TODO: failwith "scopeEdit.Copy - non-local copy - need to think about this one"
   | _ -> None
 
 let applyToAdded e1 e2 = 
-  match e1 with 
+  match e1.Kind with 
   | Append(sel, nd) -> 
       // We are appending under 'sel', so the selector for 
       // the node 'nd' itself will be 'sel; All' (for added field, this needs the field name)
-      match scopeEdit (sel @ [All]) e2 with
+      match scopeEdit (sel @ [All]) e2.Kind with
       | Some e2scoped ->
-          printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
-          Append(sel, apply nd e2scoped)
+          //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
+          { e1 with Kind = Append(sel, apply nd { e2 with Kind = e2scoped }) }
       | None -> e1
 
   | AddField(sel, nd) -> 
       // TODO: Untested. Also maybe this assumes nd.ID <> ""
-      match scopeEdit (sel @ [Field nd.ID]) e2 with
+      match scopeEdit (sel @ [Field nd.ID]) e2.Kind with
       | Some e2scoped ->
-          printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
-          AddField(sel, apply nd e2scoped)
+          //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
+          { e1 with Kind = AddField(sel, apply nd { e2 with Kind = e2scoped }) }
       | None -> e1
 
   | Replace _ -> failwith "applyToAdded - Replace TODO"
@@ -344,11 +370,11 @@ and evalSite sels nd : option<Selectors> =
       | Object, None | List, None -> None
       | _ -> Some(List.rev sels)
 
-let evaluate nd =
+let evaluateRaw nd =
   match evalSite [] nd with
   | None -> []
   | Some sels ->
-      let it = match select sels nd with [it] -> it | _ -> failwith "evaluate: Ambiguous evaluation site"
+      let it = match select sels nd with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
       match it.Expression with 
       | Reference(p) -> [ Copy(p, sels) ]  
       | Record(Apply, Args({ Expression = Reference [ Field("$builtins"); Field op ] }, args)) ->
@@ -375,37 +401,32 @@ let evaluate nd =
           failwith $"evaluate: Unexpected format of arguments: {nds}"
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it.Expression}"
 
+let evaluate nd =
+  [ for ed in evaluateRaw nd -> { CanDuplicate = false; Kind = ed } ]
+
 // --------------------------------------------------------------------------------------
 // Evaluation
 // --------------------------------------------------------------------------------------
 
 let nds id tag s = 
-  { ID = id; Tag = tag; Expression = Primitive(String s); } //Evaluated = None }
+  { ID = id; Tag = tag; Expression = Primitive(String s); }
 let ndn id tag n = 
-  { ID = id; Tag = tag; Expression = Primitive(Number n); } //Evaluated = None }
+  { ID = id; Tag = tag; Expression = Primitive(Number n); }
 let rcd id tag = 
-  { ID = id; Tag = tag; Expression = Record(Object, []); } //Evaluated = None }
+  { ID = id; Tag = tag; Expression = Record(Object, []); }
 let lst id tag = 
-  { ID = id; Tag = tag; Expression = Record(List, []); } //Evaluated = None }
+  { ID = id; Tag = tag; Expression = Record(List, []); }
 let ref id tag sel = 
-  { ID = id; Tag = tag; Expression = Reference(sel); } //Evaluated = None }
+  { ID = id; Tag = tag; Expression = Reference(sel); }
 
-let ap s n = Append(s, n)
-let wr s typ id tag = WrapRecord(id, tag, typ, s)
-let ord s l = Reorder(s, l)
-let ed sel fn f = transformations.[fn] <- f; EditText(sel, fn)
-let add sel n = AddField(sel, n)
-let cp s1 s2 = Copy(s1, s2)
-let tag s t = UpdateTag(s, t)
-
-(*
-  | Append of Selectors * Node
-  | EditText of Selectors * (string -> string)
-  | Reorder of Selectors * list<int>
-  | Copy of Selectors * Selectors 
-  | WrapRecord of string * string * RecordType * Selectors 
-  | Replace of Selectors * Node
-*)
+let ap s n = { Kind = Append(s, n); CanDuplicate = true }
+let apnd s n = { Kind = Append(s, n); CanDuplicate = false }
+let wr s typ id tag = { Kind = WrapRecord(id, tag, typ, s); CanDuplicate = true }
+let ord s l = { Kind = Reorder(s, l); CanDuplicate = true }
+let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDuplicate = true }
+let add sel n = { Kind = AddField(sel, n); CanDuplicate = true }
+let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true }
+let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true }
 
 
 let addSpeakerOps = 
@@ -450,7 +471,7 @@ let opsCore =
     ap [Field "speakers"] (nds "" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
 
-let opsExtras = 
+let opsBudget = 
   [
     ap [] (nds "btitle" "h2" "Budgeting")
     ap [] (nds "ntitle" "h3" "Number of people")
@@ -460,7 +481,7 @@ let opsExtras =
     ap [Field "counts"; Field "attendees"] (ndn "count" "strong" 100)
     ap [Field "counts"] (nds "speakers" "li" "Speakers: ") 
     wr [Field "counts"; Field "speakers"] Object "" "span"
-    ap [Field "counts"; Field "speakers"] (ref "count" "strong" [Field "speakers"; All])
+    apnd [Field "counts"; Field "speakers"] (ref "count" "strong" [Field "speakers"; All])
     wr [Field "counts"; Field "speakers"; Field "count"] Apply "arg" "span"
     ap [Field "counts"; Field "speakers"; Field "count"] (ref "op" "span" [Field "$builtins"; Field "count"])
 
@@ -501,32 +522,3 @@ let opsExtras =
     wr [Field "ultimate"; Field "item"] Apply "arg" "span"
     ap [Field "ultimate"; Field "item"] (ref "op" "span" [Field "$builtins"; Field "sum"])
   ]
- 
-
-(*
-
-# Programming conference 2023
-
-## Speakers
-- Adele Goldberg, adele@xerox.com
-- Margaret Hamilton, hamilton@mit.com 
-- Betty Jean Jennings, betty@rand.com
-
-## Budgeting
-
-### Number of people
-- Attendees: 100
-- Speakers: =SUM(...)
-
-### Item costs
-- Coffee break per person: 5
-- Lunch per person: 20
-- Dinner per person: 100
-
-### Total costs
-- Refreshments: =Attendees*(Coffee+Lunch+Dinner)
-- Travel: =SUM(....)
-- Total: =Refreshments+Travel
-
-*)
-
