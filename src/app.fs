@@ -58,7 +58,7 @@ let render trigger (state:State) =
 //let ops = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
 //let ops = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
 //let ops = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
-let ops = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
+let ops = merge (opsCore @ refactorListOps) (merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps))
 
 let state = 
   { Initial = rcd "root" "div"

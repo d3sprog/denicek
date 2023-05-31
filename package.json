@@ -4,7 +4,7 @@
     "postinstall": "dotnet tool restore",
     "start": "dotnet fable watch src --run webpack-dev-server",
     "build": "dotnet fable src && webpack",
-    "test": "dotnet fable src -o output --run jest --config=jest.config.js"
+    "test": "dotnet run --project tests/tests.fsproj"
   },
   "devDependencies": {
     "webpack": "^5.75.0",

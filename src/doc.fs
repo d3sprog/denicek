@@ -167,48 +167,49 @@ let withSelectors sels = function
   | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
 
 
-// Assuming 'e1' and 'e2' happened independently,
-// modify 'e1' so that it can be placed after 'e2'.
-let moveBefore e1 e2 = 
-  match e2 with 
-  | Reorder(sel, ord) -> 
-      // Returns a modified version of 'selOther' to match
-      // reordering of indices 'ord' at location specified by 'selReord'
-      let rec reorder selOther selReord =
-        match selOther, selReord with 
-        | All::selOther, All::selReord -> All::(reorder selOther selReord)
-        | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(reorder selOther selReord)
-        | Field(_)::_, _ -> selOther
-        | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(reorder selOther selReord)
-        | Index(io)::selOther, All::selReord -> Index(io)::(reorder selOther selReord)
-        | Index(io)::selOther, [] -> Index(List.findIndex ((=) io) ord)::selOther
-        | All::selOther, [] -> All::selOther
-        | All::selOther, Index(i)::selReorder -> failwith "moveBefore.Reorder - Too specific reordering! Not sure what to do. See RANDOM NOTES in datatype-edits.fsx"
-        | (All|Index _)::_, Field(_)::_ 
-        | Field(_)::_, (All|Index _)::_ -> selOther        
-        | [], _ -> []
-        | _ -> failwith $"moveBefore.Reorder - Missing case: {selOther} vs. {selReord}"
-      let nsels = getSelectors e1 |> List.map (fun s1 -> reorder s1 sel)
-      withSelectors nsels e1
+let reorderSelectors e1 sel ord = 
+  // Returns a modified version of 'selOther' to match
+  // reordering of indices 'ord' at location specified by 'selReord'
+  let rec reorder selOther selReord =
+    match selOther, selReord with 
+    | All::selOther, All::selReord -> All::(reorder selOther selReord)
+    | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(reorder selOther selReord)
+    | Field(_)::_, _ -> selOther
+    | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(reorder selOther selReord)
+    | Index(io)::selOther, All::selReord -> Index(io)::(reorder selOther selReord)
+    | Index(io)::selOther, [] -> Index(List.findIndex ((=) io) ord)::selOther
+    | All::selOther, [] -> All::selOther
+    | All::selOther, Index(i)::selReorder -> failwith "moveBefore.Reorder - Too specific reordering! Not sure what to do. See RANDOM NOTES in datatype-edits.fsx"
+    | (All|Index _)::_, Field(_)::_ 
+    | Field(_)::_, (All|Index _)::_ -> selOther        
+    | [], _ -> []
+    | _ -> failwith $"moveBefore.Reorder - Missing case: {selOther} vs. {selReord}"
+  let nsels = getSelectors e1 |> List.map (fun s1 -> reorder s1 sel)
+  withSelectors nsels e1
 
-  | WrapRecord(id, tag, typ, sel) -> 
-      // Returns a modified version of 'selOther' to match
-      // the additional wrapping at location specified by 'selReord'
-      let rec wrapsels selOther selReord =
-        match selOther, selReord with 
-        | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(wrapsels selOther selReord)
-        | Field(_)::_, _ -> selOther
-        | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(wrapsels selOther selReord)
-        | Index(io)::selOther, All::selReord -> Index(io)::(wrapsels selOther selReord)
-        | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {e2}"
-        | selOther, [] -> Field(id)::selOther
-        | (All|Index _)::_, Field(_)::_ 
-        | Field(_)::_, (All|Index _)::_ -> selOther        
-        | [], _ -> []
-        | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
-      let nsels = getSelectors e1 |> List.map (fun s1 -> wrapsels s1 sel)
-      withSelectors nsels e1  
-      
+let wrapSelectors e1 sel typ id tag =
+  // Returns a modified version of 'selOther' to match
+  // the additional wrapping at location specified by 'selReord'
+  let rec wrapsels selOther selReord =
+    match selOther, selReord with 
+    | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(wrapsels selOther selReord)
+    | Field(_)::_, _ -> selOther
+    | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(wrapsels selOther selReord)
+    | Index(io)::selOther, All::selReord -> Index(io)::(wrapsels selOther selReord)
+    | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {(typ,id,tag,sel)}"
+    | selOther, [] -> Field(id)::selOther
+    | (All|Index _)::_, Field(_)::_ 
+    | Field(_)::_, (All|Index _)::_ -> selOther        
+    | [], _ -> []
+    | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
+  let nsels = getSelectors e1 |> List.map (fun s1 -> wrapsels s1 sel)
+  withSelectors nsels e1  
+
+let updateSelectors e1 e2 = 
+  match e2 with 
+  | Reorder(sel, ord) -> reorderSelectors e1 sel ord
+  | WrapRecord(id, tag, typ, sel) -> wrapSelectors e1 sel typ id tag
+  
   | Copy _ // TODO: If e1 modified source of copying, it should apply to its target now too!
   | UpdateTag _
   | AddField _
@@ -217,8 +218,63 @@ let moveBefore e1 e2 =
       e1
 
   | _ -> failwith $"moveBefore - Missing case: Edit to be considered: {e2}"
-  
 
+
+/// If 'p1' is prefix of 'p2', return the rest of 'p2'
+let rec removeSelectorPrefix p1 p2 = 
+  match p1, p2 with 
+  | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> removeSelectorPrefix p1 p2
+  | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> removeSelectorPrefix p1 p2
+  // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
+  // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
+  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 | All::p1, All::p2 -> removeSelectorPrefix p1 p2
+  | [], p2 -> Some p2
+  | _ -> None
+  
+let (|RemoveSelectorPrefix|_|) selbase sel = removeSelectorPrefix selbase sel
+
+let scopeEdit selBase edit = 
+  match edit with 
+  | Append(RemoveSelectorPrefix selBase sel, nd) -> Some(Append(sel, nd))
+  | EditText(RemoveSelectorPrefix selBase sel, f) -> Some(EditText(sel, f))
+  | Reorder(RemoveSelectorPrefix selBase sel, p) -> Some(Reorder(sel, p))
+  | WrapRecord(id, tag, typ, RemoveSelectorPrefix selBase sel) -> Some(WrapRecord(id, tag, typ, sel))
+  | Replace(RemoveSelectorPrefix selBase sel, nd) -> Some(Replace(sel, nd))
+  | AddField(RemoveSelectorPrefix selBase sel, nd) -> Some(AddField(sel, nd))
+  | UpdateTag(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateTag(sel, t))
+  | Copy(RemoveSelectorPrefix selBase s1, RemoveSelectorPrefix selBase s2) -> Some(Copy(s1, s2))
+  | Copy _ -> failwith "scopeEdit.Copy - non-local copy - need to think about this one"
+  | _ -> None
+
+let applyToAdded e1 e2 = 
+  match e1 with 
+  | Append(sel, nd) -> 
+      // We are appending under 'sel', so the selector for 
+      // the node 'nd' itself will be 'sel; All' (for added field, this needs the field name)
+      match scopeEdit (sel @ [All]) e2 with
+      | Some e2scoped ->
+          printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
+          Append(sel, apply nd e2scoped)
+      | None -> e1
+
+  | AddField(sel, nd) -> 
+      // TODO: Untested. Also maybe this assumes nd.ID <> ""
+      match scopeEdit (sel @ [Field nd.ID]) e2 with
+      | Some e2scoped ->
+          printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
+          AddField(sel, apply nd e2scoped)
+      | None -> e1
+
+  | Replace _ -> failwith "applyToAdded - Replace TODO"
+  | _ -> e1
+
+// Assuming 'e1' and 'e2' happened independently,
+// modify 'e1' so that it can be placed after 'e2'.
+let moveBefore e1 e2 = 
+  let e1 = applyToAdded e1 e2
+  let e1 = updateSelectors e1 e2
+  e1
+  
 let merge e1s e2s = 
   let rec loop acc e1s e2s =
     match e1s, e2s with 
@@ -329,7 +385,7 @@ let addSpeakerOps =
 let fixSpeakerNameOps = 
   [
     ed [Field("speakers"); Index(2)] "rename Jean" <| fun s -> 
-      s.Replace("Betty Jean Jennings", "Jean Jennings Bartik")
+      s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@")
   ]
 
 let refactorListOps = 
