@@ -91,7 +91,7 @@ type Edit =
   | Append of Selectors * Node
   | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
-  | Copy of Selectors * Selectors 
+  | Copy of source:Selectors * target:Selectors 
   | WrapRecord of string * string * RecordType * Selectors 
   | Replace of Selectors * Node
   | AddField of Selectors * Node
@@ -166,6 +166,24 @@ let withSelectors sels = function
   | Replace(_, n) -> Replace(List.exactlyOne sels, n) 
   | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
 
+/// If 'p1' is prefix of 'p2', return the rest of 'p2'.
+/// This also computes 'more specific prefix' which is a version
+/// of the prefix where 'Index' is preferred over 'All' when matched.
+let removeSelectorPrefix p1 p2 = 
+  let rec loop specPref p1 p2 = 
+    match p1, p2 with 
+    | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::specPref) p1 p2
+    | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::specPref) p1 p2
+    // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
+    // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
+    | Index(i)::p1, All::p2 | All::p1, Index(i)::p2 -> loop (Index(i)::specPref) p1 p2
+    | All::p1, All::p2 -> loop (All::specPref) p1 p2
+    | [], p2 -> Some(List.rev specPref, p2)
+    | _ -> None
+  loop [] p1 p2
+  
+let (|RemoveSelectorPrefix|_|) selbase sel = 
+  removeSelectorPrefix selbase sel |> Option.map snd
 
 let reorderSelectors e1 sel ord = 
   // Returns a modified version of 'selOther' to match
@@ -205,33 +223,39 @@ let wrapSelectors e1 sel typ id tag =
   let nsels = getSelectors e1 |> List.map (fun s1 -> wrapsels s1 sel)
   withSelectors nsels e1  
 
+let rec substituteWithMoreSpecific specPrefix sels = 
+  match specPrefix, sels with
+  | Field(f1)::specPrefix, Field(f2)::sels when f1 = f2 -> Field(f1)::(substituteWithMoreSpecific specPrefix sels)
+  | Index(i1)::specPrefix, Index(i2)::sels when i1 = i2 -> Index(i1)::(substituteWithMoreSpecific specPrefix sels)
+  | All::specPrefix, Index(i1)::sels 
+  | Index(i1)::specPrefix, All::sels -> Index(i1)::(substituteWithMoreSpecific specPrefix sels)
+  | All::specPrefix, All::sels -> All::(substituteWithMoreSpecific specPrefix sels)
+  | _ -> sels  // Not matching, but that's OK, we only want to subsitute prefix
+ 
+let copyEdit e1 srcSel tgtSel = 
+  let origSels = getSelectors e1 
+  let newSels = origSels |> List.map (fun sel ->
+    match removeSelectorPrefix srcSel sel with 
+    | Some(specPrefix, suffix) -> 
+        tgtSel @ suffix |> substituteWithMoreSpecific specPrefix
+    | _ -> sel)
+  if origSels = newSels then [e1]
+  else [e1; withSelectors newSels e1]
+  
 let updateSelectors e1 e2 = 
   match e2 with 
-  | Reorder(sel, ord) -> reorderSelectors e1 sel ord
-  | WrapRecord(id, tag, typ, sel) -> wrapSelectors e1 sel typ id tag
-  
-  | Copy _ // TODO: If e1 modified source of copying, it should apply to its target now too!
+  | Reorder(sel, ord) -> [reorderSelectors e1 sel ord]
+  | WrapRecord(id, tag, typ, sel) -> [wrapSelectors e1 sel typ id tag]
+  | Copy(srcSel, tgtSel) -> copyEdit e1 srcSel tgtSel 
+
   | UpdateTag _
   | AddField _
   | EditText _ 
   | Append _ ->
-      e1
+      [e1]
 
   | _ -> failwith $"moveBefore - Missing case: Edit to be considered: {e2}"
 
-
-/// If 'p1' is prefix of 'p2', return the rest of 'p2'
-let rec removeSelectorPrefix p1 p2 = 
-  match p1, p2 with 
-  | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> removeSelectorPrefix p1 p2
-  | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> removeSelectorPrefix p1 p2
-  // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
-  // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
-  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 | All::p1, All::p2 -> removeSelectorPrefix p1 p2
-  | [], p2 -> Some p2
-  | _ -> None
-  
-let (|RemoveSelectorPrefix|_|) selbase sel = removeSelectorPrefix selbase sel
 
 let scopeEdit selBase edit = 
   match edit with 
@@ -278,9 +302,17 @@ let moveBefore e1 e2 =
 let merge e1s e2s = 
   let rec loop acc e1s e2s =
     match e1s, e2s with 
-    | e1::e1s, e2::e2s when e1 = e2 -> loop (e1::acc) e1s e2s
+    | e1::e1s, e2::e2s when e1 = e2 -> 
+        // Collect shared edits until the two histories diverge
+        loop (e1::acc) e1s e2s
     | e1s, e2s ->
-        let e2sAfter = e2s |> List.map (fun e2 -> List.fold moveBefore e2 e1s)
+        // Modify 'e2' edits so that they can be placed after 'e1'
+        let e2sAfter = 
+          e2s |> List.collect (fun e2 ->
+              // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
+              // (caveat is that the operation can turn it into multiple edits)
+              List.fold (fun e2 e1 -> 
+                e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s )         
         (List.rev acc) @ e1s @ e2sAfter
   loop [] e1s e2s 
 
