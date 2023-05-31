@@ -1,4 +1,6 @@
 output/
+tests/obj/
+tests/bin/
 src/.vs/
 src/obj/
 node_modules/
