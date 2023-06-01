@@ -8,25 +8,30 @@ let equals a b = Expect.equal a b "Should equal"
 #endif
 open Tbd.Doc
 
-let evaluate = List.fold apply (rcd "root" "div")
+let applyAll = List.fold apply (rcd "root" "div")
 
 [<Tests>]
-let tests =
-  testList "merging" [
-    
+let evalTests =
+  testList "merging" [    
+    //opsCore @ opsBudget
+  ]
+
+[<Tests>]
+let mergeTests =
+  testList "merging" [    
     test "indexing merges with reordering" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
-      let doc1 = evaluate ops1 
+      let doc1 = applyAll ops1 
       let ops2 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps)
-      let doc2 = evaluate ops2 
+      let doc2 = applyAll ops2 
       doc1 |> equals doc2
     }
 
     test "refactoring merges with adding" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
-      let doc1 = evaluate ops1 
+      let doc1 = applyAll ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
-      let doc2 = evaluate ops2
+      let doc2 = applyAll ops2
       doc1 |> equals doc2
     }
 
@@ -34,6 +39,14 @@ let tests =
       let ops1 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
       let doc1 = ops1 |> List.fold apply (rcd "root" "div")
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
+      let doc2 = ops2 |> List.fold apply (rcd "root" "div")
+      doc1 |> equals doc2 
+    }
+
+    test "adding budget merges with refactoring" {
+      let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
+      let doc1 = ops1 |> List.fold apply (rcd "root" "div")
+      let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
       let doc2 = ops2 |> List.fold apply (rcd "root" "div")
       doc1 |> equals doc2 
     }

@@ -84,7 +84,7 @@ let select sel doc =
     if matches sel p then value::st else st) [] |> List.rev
 
 // --------------------------------------------------------------------------------------
-// Elements, Selectors, Paths
+// Edits
 // --------------------------------------------------------------------------------------
 
 type EditKind = 
@@ -101,58 +101,8 @@ type Edit =
   { Kind : EditKind 
     CanDuplicate : bool }
 
-let apply doc edit =
-  match edit.Kind with
-  | Append(sel, nd) ->
-      replace (fun p el ->
-        match el.Expression with 
-        | Record(typ, nds) when matches p sel -> 
-            Some { el with Expression = Record(typ, nds @ [nd]) }
-        | _ -> None ) doc
-  | Reorder(sel, indices) ->
-      replace (fun p el ->
-        match el.Expression with 
-        | Record(typ, vals) when matches p sel -> 
-            Some { el with Expression = Record(typ, [ for i in indices -> vals.[i]]) }
-        | _ -> None ) doc
-  | EditText(sel, f) ->
-      replace (fun p el -> 
-        match el.Expression with 
-        | Primitive(String(s)) when matches p sel -> 
-            Some { el with Expression = Primitive(String(transformations.[f] s)) }
-        | _ -> None ) doc
-  | WrapRecord(id, tag, typ, sel) ->
-      replace (fun p el -> 
-        if matches p sel then Some { el with Expression = Record(typ, [{ el with ID = id; Tag = tag }]) }
-        else None ) doc
-  | Copy(sel1, sel2) ->
-      // NOTE: This is a bit too clever (if there is one target, it 
-      // implicitly creates list with all source nodes to be copied there)
-      let mutable exprs = 
-        match select sel2 doc, select sel1 doc with         
-        | tgs, srcs when tgs.Length = srcs.Length -> [ for s in srcs -> s.Expression ]
-        | [_], nds -> [ Record(List, nds) ]
-        | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
-      let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
-      replace (fun p el -> 
-        if matches p sel2 then Some({ el with Expression = next() })
-        else None ) doc
-  | UpdateTag(sel, tag) ->
-      replace (fun p el -> 
-        if matches p sel then Some({ el with Tag = tag})
-        else None ) doc
-  | Replace(sel, nd) ->
-      replace (fun p el -> 
-        if matches p sel then Some(nd)
-        else None ) doc
-  | AddField(sel, v) ->
-      replace (fun p el -> 
-        match el.Expression with 
-        | Record(Object, attrs) when matches p sel -> Some({ el with Expression = Record(Object, attrs @ [v]) })
-        | _ -> None ) doc
-
 // --------------------------------------------------------------------------------------
-// Merge
+// Merge and apply helpers
 // --------------------------------------------------------------------------------------
 
 let rec getNodeSelectors = function
@@ -208,7 +158,7 @@ let removeSelectorPrefix p1 p2 =
 let (|RemoveSelectorPrefix|_|) selbase sel = 
   removeSelectorPrefix selbase sel |> Option.map snd
 
-let reorderSelectors e1 sel ord = 
+let reorderSelectors ord selOther selReord = 
   // Returns a modified version of 'selOther' to match
   // reordering of indices 'ord' at location specified by 'selReord'
   let rec reorder selOther selReord =
@@ -225,10 +175,9 @@ let reorderSelectors e1 sel ord =
     | Field(_)::_, (All|Index _)::_ -> selOther        
     | [], _ -> []
     | _ -> failwith $"moveBefore.Reorder - Missing case: {selOther} vs. {selReord}"
-  let nsels = getSelectors e1 |> List.map (fun s1 -> reorder s1 sel)
-  withSelectors nsels e1
+  reorder selOther selReord
 
-let wrapSelectors e1 sel typ id tag =
+let wrapSelectors typ id tag selOther selReord =
   // Returns a modified version of 'selOther' to match
   // the additional wrapping at location specified by 'selReord'
   let rec wrapsels selOther selReord =
@@ -238,14 +187,89 @@ let wrapSelectors e1 sel typ id tag =
     | All::selOther, All::selReord -> All::(wrapsels selOther selReord)
     | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(wrapsels selOther selReord)
     | Index(io)::selOther, All::selReord -> Index(io)::(wrapsels selOther selReord)
-    | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {(typ,id,tag,sel)}"
+    | selOther, [] when typ <> Object || tag = "" -> failwith $"moveBefore.WrapRecord - Cannot add field ref for non-object or wrap without a name! c.f. {(typ,id,tag,selOther)}"
     | selOther, [] -> Field(id)::selOther
     | (All|Index _)::_, Field(_)::_ 
     | Field(_)::_, (All|Index _)::_ -> selOther        
     | [], _ -> []
     | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
-  let nsels = getSelectors e1 |> List.map (fun s1 -> wrapsels s1 sel)
-  withSelectors nsels e1  
+  wrapsels selOther selReord
+
+// --------------------------------------------------------------------------------------
+// Apply
+// --------------------------------------------------------------------------------------
+
+let apply doc edit =
+  match edit.Kind with
+  | Append(sel, nd) ->
+      replace (fun p el ->
+        match el.Expression with 
+        | Record(typ, nds) when matches p sel -> 
+            Some { el with Expression = Record(typ, nds @ [nd]) }
+        | _ -> None ) doc
+
+  | EditText(sel, f) ->
+      replace (fun p el -> 
+        match el.Expression with 
+        | Primitive(String(s)) when matches p sel -> 
+            Some { el with Expression = Primitive(String(transformations.[f] s)) }
+        | _ -> None ) doc
+
+  // The next two also need to fix selectors in code references
+  // (this logic is mirrored below in 'updateSelectors' called when merging)
+  | Reorder(sel, ord) ->
+      // Do the actual reordering 
+      let doc = replace (fun p el ->
+        match el.Expression with 
+        | Record(typ, vals) when matches p sel -> 
+            Some { el with Expression = Record(typ, [ for i in ord -> vals.[i]]) }
+        | _ -> None ) doc
+      // Replace all relevant selectors (in references in code)
+      // NOTE: This is untested, but may work.
+      let nsels = getNodeSelectors doc |> List.map (fun s1 -> reorderSelectors ord s1 sel)
+      withNodeSelectors doc nsels
+
+  | WrapRecord(id, tag, typ, sel) ->
+      // Do the actual record wrapping
+      let doc = replace (fun p el -> 
+        if matches p sel then Some { el with Expression = Record(typ, [{ el with ID = id; Tag = tag }]) }
+        else None ) doc
+      // Replace all relevant selectors (in references in code)
+      let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
+      withNodeSelectors doc nsels
+
+  | Copy(sel1, sel2) ->
+      // NOTE: This is a bit too clever (if there is one target, it 
+      // implicitly creates list with all source nodes to be copied there)
+      let mutable exprs = 
+        match select sel2 doc, select sel1 doc with         
+        | tgs, srcs when tgs.Length = srcs.Length -> [ for s in srcs -> s.Expression ]
+        | [_], nds -> [ Record(List, nds) ]
+        | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
+      let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
+      replace (fun p el -> 
+        if matches p sel2 then Some({ el with Expression = next() })
+        else None ) doc
+
+  | UpdateTag(sel, tag) ->
+      replace (fun p el -> 
+        if matches p sel then Some({ el with Tag = tag})
+        else None ) doc
+
+  | Replace(sel, nd) ->
+      replace (fun p el -> 
+        if matches p sel then Some(nd)
+        else None ) doc
+
+  | AddField(sel, v) ->
+      replace (fun p el -> 
+        match el.Expression with 
+        | Record(Object, attrs) when matches p sel -> Some({ el with Expression = Record(Object, attrs @ [v]) })
+        | _ -> None ) doc
+
+// --------------------------------------------------------------------------------------
+// Merge
+// --------------------------------------------------------------------------------------
 
 let rec substituteWithMoreSpecific specPrefix sels = 
   match specPrefix, sels with
@@ -268,8 +292,16 @@ let copyEdit e1 srcSel tgtSel =
   
 let updateSelectors e1 e2 = 
   match e2.Kind with 
-  | Reorder(sel, ord) -> [reorderSelectors e1 sel ord]
-  | WrapRecord(id, tag, typ, sel) -> [wrapSelectors e1 sel typ id tag]
+  // Similar selector update is also applied when editing existing document!
+  // (this logic is mirrored below in 'apply' called when applying edit)
+  // Edits creating code are for now typically marked 'CanDuplicate=false' so the 
+  // logic for 'Copy' is not duplicated above.
+  | Reorder(sel, ord) -> 
+      let nsels = getSelectors e1 |> List.map (fun s1 -> reorderSelectors ord s1 sel)
+      [withSelectors nsels e1]
+  | WrapRecord(id, tag, typ, sel) -> 
+      let nsels = getSelectors e1 |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
+      [withSelectors nsels e1]
   | Copy(srcSel, tgtSel) when e1.CanDuplicate -> copyEdit e1 srcSel tgtSel 
 
   | Copy _
