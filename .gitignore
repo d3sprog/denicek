@@ -2,6 +2,7 @@ output/
 tests/obj/
 tests/bin/
 src/.vs/
+src/bin/
 src/obj/
 node_modules/
 *.fs.js

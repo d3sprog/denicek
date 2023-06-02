@@ -12,8 +12,22 @@ let applyAll = List.fold apply (rcd "root" "div")
 
 [<Tests>]
 let evalTests =
-  testList "merging" [    
-    //opsCore @ opsBudget
+  testList "evaluation" [    
+    test "adding speaker invalidates evaluated results" {
+      let doc = opsCore @ opsBudget |> List.fold apply (rcd "root" "div")
+      let evalOps = evaluateAll doc |> List.ofSeq
+      let ops1 = merge (opsCore @ opsBudget @ evalOps) (opsCore @ opsBudget @ addSpeakerOps)
+      let postEvalOps = evaluateAll (applyAll ops1) |> List.ofSeq
+
+      let r1 = applyAll (opsCore @ opsBudget @ evalOps) |> select [Field "ultimate"; Field "item"]
+      match r1 with [{ Expression = Primitive(Number n) }] -> equals n 3500.0 | _ -> failtest "Expected primitive result" 
+      
+      let r2 = applyAll ops1 |> select [Field "ultimate"; Field "item"]
+      match r2 with [{ Expression = Record(Apply, _) }] -> () | _ -> failtest "Expected unevaluated record"
+
+      let r3 = applyAll (ops1 @ postEvalOps) |> select [Field "ultimate"; Field "item"]
+      match r3 with [{ Expression = Primitive(Number n) }] -> equals n 4500.0 | _ -> failtest "Expected primitive result" 
+    }
   ]
 
 [<Tests>]

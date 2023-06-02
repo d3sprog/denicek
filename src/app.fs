@@ -18,7 +18,7 @@ type State =
 type Event = 
   | Show of int
   | Move of int 
-  | Evaluate 
+  | Evaluate of all:bool
   | MergeEdits of Edit list
   | HighlightSelector of Selectors option
 
@@ -61,27 +61,33 @@ let rec renderNode state trigger path pid nd =
     | Primitive(Number n) -> yield text (string n)        
   ]
 
-let renderEdit state trigger ed = 
-  let render n fa sel args = [ 
-    yield h?i [ "class" => "fa " + fa ] [] 
-    yield text " "
-    yield h?strong [] [ text n ]
-    yield text " at "
-    yield formatSelector state trigger sel
-    yield text " with ("
-    for i, (k, v) in Seq.indexed args do
-      if i <> 0 then yield text ", "
-      yield text $"{k} = "
-      yield v
-    yield text ")"
-  ]
+let renderEdit i state trigger ed = 
+  let render n fa sel args = 
+    h?li [] [             
+      h?a [ 
+        "class" => (if i = state.Location then "sel " else " ") + (if ed.IsEvaluated then "eval" else "")
+        "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(Show i) 
+      ] [ 
+        yield h?i [ "class" => "fa " + fa ] [] 
+        yield text " "
+        yield h?strong [] [ text n ]
+        yield text " at "
+        yield formatSelector state trigger sel
+        yield text " with ("
+        for i, (k, v) in Seq.indexed args do
+          if i <> 0 then yield text ", "
+          yield text $"{k} = "
+          yield v
+        yield text ")"
+      ]
+    ]
   match ed.Kind with 
   | Append(sel, nd) -> render "append" "fa-at" sel ["node", text (string nd)]
   | EditText(sel, fn) -> render "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
   | Reorder(sel, perm) -> render "reorder" "fa-list-ol" sel ["perm", text (string perm)]
   | Copy(src, tgt) -> render "copy" "fa-copy" tgt ["from", formatSelector state trigger src]
   | WrapRecord(id, tg, typ, sel) -> render "wrap" "fa-regular fa-square" sel ["id", text id; "tag", text tg; "typ", text (string typ)]
-  | Replace(sel, nd) -> render "replace" "fa-repeat" sel ["node", text (string nd)]
+  | Replace(sel, _, nd) -> render "replace" "fa-repeat" sel ["node", text (string nd)]
   | AddField(sel, nd) -> render "addfield" "fa-plus" sel ["node", text (string nd)]
   | UpdateTag(sel, tag) -> render "retag" "fa-code" sel ["tag", text tag]
 
@@ -91,19 +97,14 @@ let render trigger (state:State) =
       renderNode state trigger [] "" state.CurrentDocument
     ]
     h?div [ "id" => "edits" ] [
-      h?button ["click" =!> fun _ _ -> trigger Evaluate ] [text "Evaluate!"]
+      h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
+      h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addSpeakerOps)) ] [text "Add speaker"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
       h?ol [] [
-        for i, ed in Seq.rev (Seq.indexed state.Edits) ->
-          h?li [] [             
-            h?a 
-              [ "class" => if i = state.Location then "sel" else ""
-                "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(Show i) ] 
-              (renderEdit state trigger ed)
-          ]
+        for i, ed in Seq.rev (Seq.indexed state.Edits) -> renderEdit i state trigger ed
       ]
     ]
   ]
@@ -126,12 +127,15 @@ let state =
 let update (state:State) = function
   | HighlightSelector sel ->
     { state with HighlightedSelector = sel }
-  | Evaluate -> 
+  | Evaluate true -> 
+    let edits = state.FinalDocument |> evaluateAll |> List.ofSeq
+    { state with Edits = state.Edits @ edits }
+  | Evaluate false -> 
     let edits = state.FinalDocument |> evaluate
-    { state with Edits = state.Edits @ edits }  
+    { state with Edits = state.Edits @ edits } 
   | MergeEdits edits ->
-    // TODO: This is wrong way to merge
-    { state with Edits = merge state.Edits edits }  
+    let state = { state with Edits = merge state.Edits edits } 
+    { state with Location = min (state.Edits.Length-1) state.Location }
   | Move d ->
     { state with Location = max 0 (min (state.Edits.Length - 1) (state.Location + d)) }
   | Show i ->

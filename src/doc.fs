@@ -77,7 +77,7 @@ let rec matches p1 p2 =
   | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && matches p1 p2
   | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && matches p1 p2
   | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> matches p1 p2
-  | _ -> failwithf "matches: Incompatible paths %A and %A" p1 p2
+  | _ -> false
 
 let select sel doc = 
   doc |> fold (fun p value st -> 
@@ -92,13 +92,14 @@ type EditKind =
   | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
   | Copy of source:Selectors * target:Selectors 
-  | WrapRecord of string * string * RecordType * Selectors 
-  | Replace of Selectors * Node
+  | WrapRecord of tag:string * id:string * kind:RecordType * target:Selectors 
+  | Replace of target:Selectors * dependencies:Selectors list * Node
   | AddField of Selectors * Node
   | UpdateTag of Selectors * string
 
 type Edit = 
   { Kind : EditKind 
+    IsEvaluated : bool
     CanDuplicate : bool }
 
 // --------------------------------------------------------------------------------------
@@ -123,15 +124,43 @@ let withNodeSelectors nd sels =
 let getSelectors ed = 
   match ed.Kind with 
   | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) -> [s]
-  | Append(s, nd) | Replace(s, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
+  | Append(s, nd) | Replace(s, _, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
   | Copy(s1, s2) -> [s1; s2]
+
+/// Not including 'Reference' selectors in expressions
+let getDependenciesSelectors ed = 
+  match ed.Kind with 
+  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) 
+  | Append(s, _) | AddField(s, _) -> [s]
+  | Replace(s, ss, _) -> s::ss
+  | Copy(s1, s2) -> [s1; s2]
+
+let getTargetSelector ed = 
+  match ed.Kind with 
+  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | Replace(s, _, _) | Copy(_, s) -> s
+  | WrapRecord(_, id, _, s) | AddField(s, { ID = id }) -> s @ [Field id]
+  | Append(s, _)-> s @ [All]
+
+let withTargetSelector tgt ed = 
+  let dropLast (tgt:_ list) = tgt.[0 .. tgt.Length - 2] // Remove the last, added in 'getTargetSelector'
+  let nkind =
+    match ed.Kind with 
+    | Append(_, nd) -> Append(dropLast tgt, nd) 
+    | AddField(_, nd) -> AddField(dropLast tgt, nd) 
+    | Replace(_, ss, nd) -> Replace(tgt, ss, nd) 
+    | EditText(_, f) -> EditText(tgt, f)
+    | Reorder(_, m) -> Reorder(tgt, m)
+    | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, dropLast tgt) 
+    | UpdateTag(_, t) -> UpdateTag(tgt, t) 
+    | Copy(_, s) -> Copy(tgt, s)
+  { ed with Kind = nkind }
 
 let withSelectors sels ed =
   let nkind =
     match ed.Kind with 
     | Append(_, nd) -> Append(List.head sels, withNodeSelectors nd (List.tail sels)) 
     | AddField(_, nd) -> AddField(List.head sels, withNodeSelectors nd (List.tail sels)) 
-    | Replace(_, nd) -> Replace(List.head sels, withNodeSelectors nd (List.tail sels)) 
+    | Replace(_, ss, nd) -> Replace(List.head sels, ss, withNodeSelectors nd (List.tail sels)) 
     | EditText(_, f) -> EditText(List.exactlyOne sels, f)
     | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
     | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
@@ -256,7 +285,7 @@ let apply doc edit =
         if matches p sel then Some({ el with Tag = tag})
         else None ) doc
 
-  | Replace(sel, nd) ->
+  | Replace(sel, _, nd) ->
       replace (fun p el -> 
         if matches p sel then Some(nd)
         else None ) doc
@@ -281,15 +310,25 @@ let rec substituteWithMoreSpecific specPrefix sels =
   | _ -> sels  // Not matching, but that's OK, we only want to subsitute prefix
  
 let copyEdit e1 srcSel tgtSel = 
+  // For cases when the copied thing is directly the target of the edit 'e1'
+  let e1tgtSel = getTargetSelector e1
+  if e1tgtSel = srcSel then 
+    Some [e1; withTargetSelector tgtSel e1]
+  else
+  // For cases when the edit 'e1' targets something inside the copied (from srcSel to tgtSel)
   let origSels = getSelectors e1 
   let newSels = origSels |> List.map (fun sel ->
     match removeSelectorPrefix srcSel sel with 
     | Some(specPrefix, suffix) -> 
         tgtSel @ suffix |> substituteWithMoreSpecific specPrefix
     | _ -> sel)
-  if origSels = newSels then [e1]
-  else [e1; withSelectors newSels e1]
+  if origSels = newSels then None
+  else 
+    Some [e1; withSelectors newSels e1]
   
+/// Returns [e1;e1'] with modified (possibly duplicated) edits;
+/// Also returns bool to indicate that e2 is evalauted, conflicts with e1 and should be removed (true)
+/// REFACTOR: Arguably, conflict checking shoudld be done in a separate function?? I guess
 let updateSelectors e1 e2 = 
   match e2.Kind with 
   // Similar selector update is also applied when editing existing document!
@@ -302,16 +341,23 @@ let updateSelectors e1 e2 =
   | WrapRecord(id, tag, typ, sel) -> 
       let nsels = getSelectors e1 |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
       [withSelectors nsels e1]
-  | Copy(srcSel, tgtSel) when e1.CanDuplicate -> copyEdit e1 srcSel tgtSel 
 
-  | Copy _
+  | Copy(srcSel, tgtSel) -> 
+      match copyEdit e1 srcSel tgtSel with 
+      | Some res when e1.CanDuplicate -> res
+      | _ ->
+          let target = getTargetSelector e1
+          let conflict = removeSelectorPrefix srcSel target |> Option.isSome
+          if conflict && e2.IsEvaluated then failwith $"CONFLICT (but isEvaluated=true)!!!\ne1={e1}\ne2={e2}"
+          elif conflict then failwith $"CONFLICT!!!\ne1={e1}\ne2={e2}"
+          else [e1]
+    
+  | Replace _ // TODO: EVALUATION?
   | UpdateTag _
   | AddField _
   | EditText _ 
   | Append _ ->
       [e1]
-
-  | _ -> failwith $"moveBefore - Missing case: Edit to be considered: {e2}"
 
 /// If the 'edit' is to something with a prefix specified by the selector 'selbase',
 /// returns new edit that is relatively to the subtree specified by selbase 
@@ -321,7 +367,7 @@ let scopeEdit selBase edit =
   | EditText(RemoveSelectorPrefix selBase sel, f) -> Some(EditText(sel, f))
   | Reorder(RemoveSelectorPrefix selBase sel, p) -> Some(Reorder(sel, p))
   | WrapRecord(id, tag, typ, RemoveSelectorPrefix selBase sel) -> Some(WrapRecord(id, tag, typ, sel))
-  | Replace(RemoveSelectorPrefix selBase sel, nd) -> Some(Replace(sel, nd))
+  | Replace(RemoveSelectorPrefix selBase sel, ss, nd) -> Some(Replace(sel, ss, nd)) 
   | AddField(RemoveSelectorPrefix selBase sel, nd) -> Some(AddField(sel, nd))
   | UpdateTag(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateTag(sel, t))
   | Copy(RemoveSelectorPrefix selBase s1, RemoveSelectorPrefix selBase s2) -> Some(Copy(s1, s2))
@@ -364,14 +410,34 @@ let merge e1s e2s =
         // Collect shared edits until the two histories diverge
         loop (e1::acc) e1s e2s
     | e1s, e2s ->
-        // Modify 'e2' edits so that they can be placed after 'e1'
+        // We want to modify 'e2' edits so that they can be placed after 'e1'
+        // If edits in 'e2' conflict with "evaluation" edits in 'e1', remove those
+        //printfn $"MERGEING! Target selectors={e2s |> List.map getTargetSelector}"
+        let mutable tgtSels = e2s |> List.map getTargetSelector |> Set.ofSeq
+        let e1s = e1s |> List.filter (fun e1 ->
+          if not e1.IsEvaluated then true else
+            let sels = getDependenciesSelectors e1
+            let affected = sels |> Seq.exists (fun sel -> 
+              tgtSels |> Set.exists (fun tgtSel -> Option.isSome (removeSelectorPrefix tgtSel sel)))
+            if affected then 
+              //printfn $"AFFECTED - {e1}"
+              //printfn $"AFFECTED - target selector {getTargetSelector e1}"
+              tgtSels <- tgtSels.Add(getTargetSelector e1)
+              false
+            else 
+              //printfn $"FINE - {e1}"
+              true )
+        
+
         let e2sAfter = 
           e2s |> List.collect (fun e2 ->
               // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
               // (caveat is that the operation can turn it into multiple edits)
               List.fold (fun e2 e1 -> 
                 e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s )         
+
         (List.rev acc) @ e1s @ e2sAfter
+
   loop [] e1s e2s 
 
 // --------------------------------------------------------------------------------------
@@ -402,7 +468,7 @@ and evalSite sels nd : option<Selectors> =
       | Object, None | List, None -> None
       | _ -> Some(List.rev sels)
 
-let evaluateRaw nd =
+let evaluateRaw nd = //: int list =
   match evalSite [] nd with
   | None -> []
   | Some sels ->
@@ -410,6 +476,7 @@ let evaluateRaw nd =
       match it.Expression with 
       | Reference(p) -> [ Copy(p, sels) ]  
       | Record(Apply, Args({ Expression = Reference [ Field("$builtins"); Field op ] }, args)) ->
+          let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
           match op with 
           | "count" | "sum" ->
               let sum = List.map (function { Expression = Primitive(Number n) } -> n | _ -> failwith "evaluate: Argument of 'sum' is not a number.") >> List.sum 
@@ -418,7 +485,7 @@ let evaluateRaw nd =
               match args.TryFind "arg" with
               | Some { Expression = Record(List, nds) } -> 
                   let res = Primitive(Number(f nds))
-                  [ Replace(sels, { it with Expression = res } )  ] 
+                  [ Replace(sels, ss, { it with Expression = res } )  ] 
               | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
           | "+" | "*" -> 
               let f = (dict [ "+",(+); "*",(*) ]).[op]
@@ -426,7 +493,7 @@ let evaluateRaw nd =
               | Some { Expression = Primitive(Number n1) },
                 Some { Expression = Primitive(Number n2) } -> 
                   let res = Primitive(Number(f n1 n2))
-                  [ Replace(sels, { it with Expression = res } )  ] 
+                  [ Replace(sels, ss, { it with Expression = res } )  ] 
               | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
           | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
       | Record(Apply, nds) -> 
@@ -434,7 +501,13 @@ let evaluateRaw nd =
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it.Expression}"
 
 let evaluate nd =
-  [ for ed in evaluateRaw nd -> { CanDuplicate = false; Kind = ed } ]
+  [ for ed in evaluateRaw nd -> { CanDuplicate = false; IsEvaluated = true; Kind = ed } ]
+
+let rec evaluateAll doc = seq {
+  let edits = evaluate doc
+  yield! edits
+  let ndoc = edits |> List.fold apply doc
+  if doc <> ndoc then yield! evaluateAll ndoc }
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -451,14 +524,14 @@ let lst id tag =
 let ref id tag sel = 
   { ID = id; Tag = tag; Expression = Reference(sel); }
 
-let ap s n = { Kind = Append(s, n); CanDuplicate = true }
-let apnd s n = { Kind = Append(s, n); CanDuplicate = false }
-let wr s typ id tag = { Kind = WrapRecord(id, tag, typ, s); CanDuplicate = true }
-let ord s l = { Kind = Reorder(s, l); CanDuplicate = true }
-let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDuplicate = true }
-let add sel n = { Kind = AddField(sel, n); CanDuplicate = true }
-let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true }
-let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true }
+let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false }
+let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false }
+let wr s typ id tag = { Kind = WrapRecord(id, tag, typ, s); CanDuplicate = true; IsEvaluated = false }
+let ord s l = { Kind = Reorder(s, l); CanDuplicate = true; IsEvaluated = false }
+let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDuplicate = true; IsEvaluated = false }
+let add sel n = { Kind = AddField(sel, n); CanDuplicate = true; IsEvaluated = false }
+let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true; IsEvaluated = false }
+let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true; IsEvaluated = false }
 
 
 let addSpeakerOps = 
