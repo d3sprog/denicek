@@ -21,7 +21,7 @@ type Node =
   { ID : string
     Tag : string 
     Expression : Expr
-//    Evaluated : Node option 
+    Previous : Node option 
     }
 
 and RecordType = 
@@ -38,12 +38,10 @@ let transformations = System.Collections.Generic.Dictionary<string, string -> st
 // Elements, Selectors, Paths
 // --------------------------------------------------------------------------------------
 
-let replace f nd = 
+let replace recordHistory f nd = 
   let rec loop path nd =
-    //match nd.Evaluated with 
-    //| Some nd -> loop path nd
-    //| _ -> 
     match f path nd with 
+    | Some res when recordHistory -> { res with Previous = Some nd }
     | Some res -> res
     | _ -> 
     let rtrn e = { nd with Expression = e }
@@ -231,14 +229,14 @@ let wrapSelectors typ id tag selOther selReord =
 let apply doc edit =
   match edit.Kind with
   | Append(sel, nd) ->
-      replace (fun p el ->
+      replace edit.IsEvaluated (fun p el ->
         match el.Expression with 
         | Record(typ, nds) when matches p sel -> 
             Some { el with Expression = Record(typ, nds @ [nd]) }
         | _ -> None ) doc
 
   | EditText(sel, f) ->
-      replace (fun p el -> 
+      replace edit.IsEvaluated (fun p el -> 
         match el.Expression with 
         | Primitive(String(s)) when matches p sel -> 
             Some { el with Expression = Primitive(String(transformations.[f] s)) }
@@ -248,7 +246,7 @@ let apply doc edit =
   // (this logic is mirrored below in 'updateSelectors' called when merging)
   | Reorder(sel, ord) ->
       // Do the actual reordering 
-      let doc = replace (fun p el ->
+      let doc = replace edit.IsEvaluated (fun p el ->
         match el.Expression with 
         | Record(typ, vals) when matches p sel -> 
             Some { el with Expression = Record(typ, [ for i in ord -> vals.[i]]) }
@@ -260,7 +258,7 @@ let apply doc edit =
 
   | WrapRecord(id, tag, typ, sel) ->
       // Do the actual record wrapping
-      let doc = replace (fun p el -> 
+      let doc = replace edit.IsEvaluated (fun p el -> 
         if matches p sel then Some { el with Expression = Record(typ, [{ el with ID = id; Tag = tag }]) }
         else None ) doc
       // Replace all relevant selectors (in references in code)
@@ -276,22 +274,22 @@ let apply doc edit =
         | [_], nds -> [ Record(List, nds) ]
         | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
-      replace (fun p el -> 
+      replace edit.IsEvaluated (fun p el -> 
         if matches p sel2 then Some({ el with Expression = next() })
         else None ) doc
 
   | UpdateTag(sel, tag) ->
-      replace (fun p el -> 
+      replace edit.IsEvaluated (fun p el -> 
         if matches p sel then Some({ el with Tag = tag})
         else None ) doc
 
   | Replace(sel, _, nd) ->
-      replace (fun p el -> 
+      replace edit.IsEvaluated (fun p el -> 
         if matches p sel then Some(nd)
         else None ) doc
 
   | AddField(sel, v) ->
-      replace (fun p el -> 
+      replace edit.IsEvaluated (fun p el -> 
         match el.Expression with 
         | Record(Object, attrs) when matches p sel -> Some({ el with Expression = Record(Object, attrs @ [v]) })
         | _ -> None ) doc
@@ -514,15 +512,15 @@ let rec evaluateAll doc = seq {
 // --------------------------------------------------------------------------------------
 
 let nds id tag s = 
-  { ID = id; Tag = tag; Expression = Primitive(String s); }
+  { ID = id; Tag = tag; Expression = Primitive(String s); Previous = None }
 let ndn id tag n = 
-  { ID = id; Tag = tag; Expression = Primitive(Number n); }
+  { ID = id; Tag = tag; Expression = Primitive(Number n); Previous = None }
 let rcd id tag = 
-  { ID = id; Tag = tag; Expression = Record(Object, []); }
+  { ID = id; Tag = tag; Expression = Record(Object, []); Previous = None }
 let lst id tag = 
-  { ID = id; Tag = tag; Expression = Record(List, []); }
+  { ID = id; Tag = tag; Expression = Record(List, []); Previous = None }
 let ref id tag sel = 
-  { ID = id; Tag = tag; Expression = Reference(sel); }
+  { ID = id; Tag = tag; Expression = Reference(sel); Previous = None }
 
 let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false }
 let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false }
