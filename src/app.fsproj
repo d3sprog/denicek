@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="doc.fs" />
+    <Compile Include="matcher.fs" />
     <Compile Include="html.fs" />
     <Compile Include="app.fs" />
   </ItemGroup>

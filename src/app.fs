@@ -38,35 +38,26 @@ let formatSelector state trigger sel =
     text ("/" + (String.concat "/" parts))
   ]
 
-let rec formatExpr state trigger (expr:Expr) = 
-  match expr with 
+let rec formatNode state trigger (nd:Node) = 
+  match nd.Expression with 
   | Primitive(Number n) -> text (string n)
   | Primitive(String s) -> text s
   | Reference(sel) -> formatSelector state trigger sel
-  | Record(List, nds) -> h?span [] [
+  | Record(tag, List, nds) -> h?span [] [
         yield text "["
         for i, nd in Seq.indexed nds do 
           if i <> 0 then yield text ", "
-          yield formatExpr state trigger nd.Expression
+          yield formatNode state trigger nd
         yield text "]"
       ]
-  | Record(_, nds) -> h?span [] [
+  | Record(tag, _, nds) -> h?span [] [
         yield text "{"
         for i, nd in Seq.indexed nds do 
           if i <> 0 then yield text ", "
           yield text $"{nd.ID}="
-          yield formatExpr state trigger nd.Expression
+          yield formatNode state trigger nd
         yield text "}"
       ]
-
-let formatNode state trigger (nd:Node) = 
-  h?span [] [ 
-    ( if nd.ID = "" then text $"""<{nd.Tag}>"""
-      else text $"""<{nd.Tag} id="{nd.ID}">""" )
-    formatExpr state trigger nd.Expression
-    text $"</{nd.Tag}>"  
-  ]
-
 
 let rec getPreviousNode nd i = 
   match nd.Previous with 
@@ -80,7 +71,13 @@ let rec renderNode state trigger path pid nd =
     match state.HistoryIndex.TryFind(pid) with 
     | Some hist -> getPreviousNode nd hist, hist
     | _ -> nd, 0
-  h?(nd.Tag) [ 
+  let tag = 
+    match nd.Expression with 
+    | Record(tag, _, _) -> tag
+    | Primitive(Number _) -> "x-prim-num"
+    | Primitive(String _) -> "x-prim-str"
+    | Reference _ -> "x-ref"
+  h?(tag) [ 
     "id" => pid 
     "class" => 
       ( match state.HighlightedSelector with Some s when matches s path -> "hidoc " | _ -> " ") + 
@@ -102,7 +99,7 @@ let rec renderNode state trigger path pid nd =
         h?span [ "class" => "details" ] [ formatNode state trigger nd ]
       ]
     match nd.Expression with 
-    | Record(Apply, nds) -> 
+    | Record(_, Apply, nds) -> 
         let op = nds |> List.tryFind (fun nd -> nd.ID = "op")
         let args = nds |> List.filter (fun nd -> nd.ID <> "op")
         if op.IsSome then yield renderNode state trigger (path @ [Field "op"]) (pid ++ "op") op.Value
@@ -113,9 +110,9 @@ let rec renderNode state trigger path pid nd =
           yield text $"{a.ID}="
           yield renderNode state trigger (path @ [Field a.ID]) (pid ++ a.ID) a
         yield text ")"
-    | Record(List, nds) -> 
+    | Record(_, List, nds) -> 
         for i, a in Seq.indexed nds -> renderNode state trigger (path @ [Index i]) (pid ++ string i) a
-    | Record(Object, nds) -> 
+    | Record(_, Object, nds) -> 
         for a in nds -> renderNode state trigger (path @ [Field a.ID]) (pid ++ a.ID) a
     | Reference(sel) -> yield formatSelector state trigger sel
     | Primitive(String s) -> yield text s
@@ -151,11 +148,13 @@ let renderEdit i state trigger ed =
   | Replace(sel, _, nd) -> render "replace" "fa-repeat" sel ["node", formatNode state trigger nd]
   | AddField(sel, nd) -> render "addfield" "fa-plus" sel ["node", formatNode state trigger nd]
   | UpdateTag(sel, tag) -> render "retag" "fa-code" sel ["tag", text tag]
+  | UpdateId(sel, id) -> render "updid" "fa-font" sel ["id", text id]
 
 let render trigger (state:State) = 
   h?div [ "id" => "main" ] [
     h?div [ "id" => "doc" ] [
-      renderNode state trigger [] "" state.CurrentDocument
+      let doc = Matcher.applyMatchers state.CurrentDocument 
+      renderNode state trigger [] "" doc
     ]
     h?div [ "id" => "edits" ] [
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
@@ -164,6 +163,7 @@ let render trigger (state:State) =
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addSpeakerOps)) ] [text "Add speaker"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
       h?ol [] [
         for i, ed in Seq.rev (Seq.indexed state.Edits) -> renderEdit i state trigger ed
       ]
@@ -177,7 +177,7 @@ let render trigger (state:State) =
 //let ops1 = merge (opsCore @ refactorListOps) (merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps))
 //let ops = merge ops1 (opsCore @ opsBudget)
 //let ops = merge (opsCore @ opsBudget) ops1
-let ops = opsCore
+let ops = opsCore 
 
 let state = 
   { Initial = rcd "root" "div"

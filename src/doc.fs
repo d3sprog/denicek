@@ -19,7 +19,6 @@ type Primitive =
 
 type Node = 
   { ID : string
-    Tag : string 
     Expression : Expr
     Previous : Node option 
     }
@@ -28,7 +27,7 @@ and RecordType =
   | List | Object | Apply
 
 and Expr = 
-  | Record of RecordType * list<Node>
+  | Record of string * RecordType * list<Node>
   | Primitive of Primitive
   | Reference of Selectors
 
@@ -46,8 +45,8 @@ let replace recordHistory f nd =
     | _ -> 
     let rtrn e = { nd with Expression = e }
     match nd.Expression with 
-    | Record(typ, attrs) -> 
-        Record(typ, List.mapi (fun i nd -> 
+    | Record(tag, typ, attrs) -> 
+        Record(tag, typ, List.mapi (fun i nd -> 
           let sel = if typ = List then Index(i) else Field(nd.ID)
           loop (path @ [sel]) nd) attrs) |> rtrn
     | Reference _ | Primitive _ -> nd 
@@ -60,7 +59,7 @@ let fold f st value =
     //| _ -> 
     let st = f path nd st 
     match nd.Expression with 
-    | Record(typ, nds) -> 
+    | Record(tag, typ, nds) -> 
         nds |> List.indexed |> List.fold (fun st (i, nd) -> 
           let sel = if typ = List then Index(i) else Field(nd.ID)
           loop (path @ [sel]) st nd) st
@@ -94,6 +93,7 @@ type EditKind =
   | Replace of target:Selectors * dependencies:Selectors list * Node
   | AddField of Selectors * Node
   | UpdateTag of Selectors * string
+  | UpdateId of Selectors * string
 
 type Edit = 
   { Kind : EditKind 
@@ -105,7 +105,7 @@ type Edit =
 // --------------------------------------------------------------------------------------
 
 let rec getNodeSelectors = function
-  | { Expression = Record(_, nds) } -> List.collect getNodeSelectors nds
+  | { Expression = Record(_, _, nds) } -> List.collect getNodeSelectors nds
   | { Expression = Reference sels } -> [sels]
   | { Expression = Primitive _ } -> []
 
@@ -114,28 +114,28 @@ let withNodeSelectors nd sels =
   let next() = let r = List.head sels in sels <- List.tail sels; r
   let rec loop nd = 
     match nd with 
-    | { Expression = Record(typ, nds) } -> { nd with Expression = Record(typ, List.map loop nds) }
+    | { Expression = Record(tag, typ, nds) } -> { nd with Expression = Record(tag, typ, List.map loop nds) }
     | { Expression = Reference sels } -> { nd with Expression = Reference(next()) }
     | { Expression = Primitive _ } -> nd
   loop nd
 
 let getSelectors ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) -> [s]
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) -> [s]
   | Append(s, nd) | Replace(s, _, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
   | Copy(s1, s2) -> [s1; s2]
 
 /// Not including 'Reference' selectors in expressions
 let getDependenciesSelectors ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) 
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) 
   | Append(s, _) | AddField(s, _) -> [s]
   | Replace(s, ss, _) -> s::ss
   | Copy(s1, s2) -> [s1; s2]
 
 let getTargetSelector ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateTag(s, _) | Replace(s, _, _) | Copy(_, s) -> s
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | Replace(s, _, _) | Copy(_, s) -> s
   | WrapRecord(_, id, _, s) | AddField(s, { ID = id }) -> s @ [Field id]
   | Append(s, _)-> s @ [All]
 
@@ -150,6 +150,7 @@ let withTargetSelector tgt ed =
     | Reorder(_, m) -> Reorder(tgt, m)
     | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, dropLast tgt) 
     | UpdateTag(_, t) -> UpdateTag(tgt, t) 
+    | UpdateId(_, s) -> UpdateTag(tgt, s) 
     | Copy(_, s) -> Copy(tgt, s)
   { ed with Kind = nkind }
 
@@ -163,6 +164,7 @@ let withSelectors sels ed =
     | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
     | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
     | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) 
+    | UpdateId(_, s) -> UpdateId(List.exactlyOne sels, s) 
     | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
   { ed with Kind = nkind }
 
@@ -222,6 +224,25 @@ let wrapSelectors typ id tag selOther selReord =
     | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
   wrapsels selOther selReord
 
+let updateSelectorsId id selOther selReord =
+  // Returns a modified version of 'selOther' to match
+  // the changed ID at location specified by 'selReord'
+  // NOTE: Pretty much the same as above, except for the removed "selOther, []" cases
+  // and added "Rename ID" case
+  let rec reidsels selOther selReord =
+    match selOther, selReord with 
+    | Field(fo)::selOther, Field(fr)::[] when fo = fr -> Field(id)::(reidsels selOther []) // Rename ID in the selector!
+    | Field(fo)::selOther, Field(fr)::selReord when fo = fr -> Field(fo)::(reidsels selOther selReord)
+    | Field(_)::_, _ -> selOther
+    | All::selOther, All::selReord -> All::(reidsels selOther selReord)
+    | Index(io)::selOther, Index(ir)::selReord when io = ir -> Index(io)::(reidsels selOther selReord)
+    | Index(io)::selOther, All::selReord -> Index(io)::(reidsels selOther selReord)
+    | (All|Index _)::_, Field(_)::_ 
+    | Field(_)::_, (All|Index _)::_ -> selOther        
+    | [], _ -> []
+    | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
+  reidsels selOther selReord
+
 // --------------------------------------------------------------------------------------
 // Apply
 // --------------------------------------------------------------------------------------
@@ -231,8 +252,8 @@ let apply doc edit =
   | Append(sel, nd) ->
       replace edit.IsEvaluated (fun p el ->
         match el.Expression with 
-        | Record(typ, nds) when matches p sel -> 
-            Some { el with Expression = Record(typ, nds @ [nd]) }
+        | Record(tag, typ, nds) when matches p sel -> 
+            Some { el with Expression = Record(tag, typ, nds @ [nd]) }
         | _ -> None ) doc
 
   | EditText(sel, f) ->
@@ -248,8 +269,8 @@ let apply doc edit =
       // Do the actual reordering 
       let doc = replace edit.IsEvaluated (fun p el ->
         match el.Expression with 
-        | Record(typ, vals) when matches p sel -> 
-            Some { el with Expression = Record(typ, [ for i in ord -> vals.[i]]) }
+        | Record(tag, typ, vals) when matches p sel -> 
+            Some { el with Expression = Record(tag, typ, [ for i in ord -> vals.[i]]) }
         | _ -> None ) doc
       // Replace all relevant selectors (in references in code)
       // NOTE: This is untested, but may work.
@@ -259,7 +280,7 @@ let apply doc edit =
   | WrapRecord(id, tag, typ, sel) ->
       // Do the actual record wrapping
       let doc = replace edit.IsEvaluated (fun p el -> 
-        if matches p sel then Some { el with Expression = Record(typ, [{ el with ID = id; Tag = tag }]) }
+        if matches p sel then Some { el with Expression = Record(tag, typ, [{ el with ID = id }]) }
         else None ) doc
       // Replace all relevant selectors (in references in code)
       let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
@@ -271,7 +292,7 @@ let apply doc edit =
       let mutable exprs = 
         match select sel2 doc, select sel1 doc with         
         | tgs, srcs when tgs.Length = srcs.Length -> [ for s in srcs -> s.Expression ]
-        | [_], nds -> [ Record(List, nds) ]
+        | [_], nds -> [ Record("div", List, nds) ]
         | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
       replace edit.IsEvaluated (fun p el -> 
@@ -280,8 +301,14 @@ let apply doc edit =
 
   | UpdateTag(sel, tag) ->
       replace edit.IsEvaluated (fun p el -> 
-        if matches p sel then Some({ el with Tag = tag})
-        else None ) doc
+        match el with 
+        | { Expression = Record(_, typ, nds) } when matches p sel -> 
+            Some({ el with Expression = Record(tag, typ, nds)})
+        | _ -> None ) doc
+
+  | UpdateId(sel, id) ->
+      replace edit.IsEvaluated (fun p el -> 
+        if matches p sel then Some { el with ID = id } else None) doc
 
   | Replace(sel, _, nd) ->
       replace edit.IsEvaluated (fun p el -> 
@@ -291,7 +318,7 @@ let apply doc edit =
   | AddField(sel, v) ->
       replace edit.IsEvaluated (fun p el -> 
         match el.Expression with 
-        | Record(Object, attrs) when matches p sel -> Some({ el with Expression = Record(Object, attrs @ [v]) })
+        | Record(tag, Object, attrs) when matches p sel -> Some({ el with Expression = Record(tag, Object, attrs @ [v]) })
         | _ -> None ) doc
 
 // --------------------------------------------------------------------------------------
@@ -324,9 +351,7 @@ let copyEdit e1 srcSel tgtSel =
   else 
     Some [e1; withSelectors newSels e1]
   
-/// Returns [e1;e1'] with modified (possibly duplicated) edits;
-/// Also returns bool to indicate that e2 is evalauted, conflicts with e1 and should be removed (true)
-/// REFACTOR: Arguably, conflict checking shoudld be done in a separate function?? I guess
+/// Returns [e1;e1'] with modified (possibly duplicated) edits
 let updateSelectors e1 e2 = 
   match e2.Kind with 
   // Similar selector update is also applied when editing existing document!
@@ -339,7 +364,9 @@ let updateSelectors e1 e2 =
   | WrapRecord(id, tag, typ, sel) -> 
       let nsels = getSelectors e1 |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
       [withSelectors nsels e1]
-
+  | UpdateId(sel, id) ->
+      let nsels = getSelectors e1 |> List.map (fun s1 -> updateSelectorsId id s1 sel)
+      [withSelectors nsels e1]
   | Copy(srcSel, tgtSel) -> 
       match copyEdit e1 srcSel tgtSel with 
       | Some res when e1.CanDuplicate -> res
@@ -368,6 +395,7 @@ let scopeEdit selBase edit =
   | Replace(RemoveSelectorPrefix selBase sel, ss, nd) -> Some(Replace(sel, ss, nd)) 
   | AddField(RemoveSelectorPrefix selBase sel, nd) -> Some(AddField(sel, nd))
   | UpdateTag(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateTag(sel, t))
+  | UpdateId(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateId(sel, t))
   | Copy(RemoveSelectorPrefix selBase s1, RemoveSelectorPrefix selBase s2) -> Some(Copy(s1, s2))
   | Copy _ // TODO: failwith "scopeEdit.Copy - non-local copy - need to think about this one"
   | _ -> None
@@ -397,6 +425,9 @@ let applyToAdded e1 e2 =
 // Assuming 'e1' and 'e2' happened independently,
 // modify 'e1' so that it can be placed after 'e2'.
 let moveBefore e1 e2 = 
+  //printfn "MOVE BEFORE"
+  //printfn "move => %A" e1.Kind
+  //printfn "beore => %A" e2.Kind
   let e1 = applyToAdded e1 e2
   let e1 = updateSelectors e1 e2
   e1
@@ -460,7 +491,7 @@ and evalSite sels nd : option<Selectors> =
   match nd.Expression with 
   | Primitive _ | Reference(Field "$builtins"::_) -> None
   | Reference(p) -> Some (List.rev sels)
-  | Record(typ, nds) -> 
+  | Record(_, typ, nds) -> 
       match typ, evalSiteChildren sels typ nds with
       | _, Some res -> Some res
       | Object, None | List, None -> None
@@ -473,7 +504,7 @@ let evaluateRaw nd = //: int list =
       let it = match select sels nd with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
       match it.Expression with 
       | Reference(p) -> [ Copy(p, sels) ]  
-      | Record(Apply, Args({ Expression = Reference [ Field("$builtins"); Field op ] }, args)) ->
+      | Record(_, Apply, Args({ Expression = Reference [ Field("$builtins"); Field op ] }, args)) ->
           let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
           match op with 
           | "count" | "sum" ->
@@ -481,7 +512,7 @@ let evaluateRaw nd = //: int list =
               let count = List.length >> float
               let f = (dict [ "count", count; "sum", sum ]).[op]
               match args.TryFind "arg" with
-              | Some { Expression = Record(List, nds) } -> 
+              | Some { Expression = Record(_, List, nds) } -> 
                   let res = Primitive(Number(f nds))
                   [ Replace(sels, ss, { it with Expression = res } )  ] 
               | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
@@ -494,8 +525,8 @@ let evaluateRaw nd = //: int list =
                   [ Replace(sels, ss, { it with Expression = res } )  ] 
               | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
           | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
-      | Record(Apply, nds) -> 
-          failwith $"evaluate: Unexpected format of arguments: {nds}"
+      | Record(_, Apply, nds) -> 
+          failwith $"evaluate: Unexpected format of arguments {[for nd in nds -> nd.ID]}: {nds}"
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it.Expression}"
 
 let evaluate nd =
@@ -511,16 +542,19 @@ let rec evaluateAll doc = seq {
 // Evaluation
 // --------------------------------------------------------------------------------------
 
-let nds id tag s = 
-  { ID = id; Tag = tag; Expression = Primitive(String s); Previous = None }
-let ndn id tag n = 
-  { ID = id; Tag = tag; Expression = Primitive(Number n); Previous = None }
 let rcd id tag = 
-  { ID = id; Tag = tag; Expression = Record(Object, []); Previous = None }
+  { ID = id; Expression = Record(tag, Object, []); Previous = None }
 let lst id tag = 
-  { ID = id; Tag = tag; Expression = Record(List, []); Previous = None }
-let ref id tag sel = 
-  { ID = id; Tag = tag; Expression = Reference(sel); Previous = None }
+  { ID = id; Expression = Record(tag, List, []); Previous = None }
+
+let wrap id tag nd =
+  { ID = id; Expression = Record(tag, Object, [nd]); Previous = None }  
+let ref id sel = 
+  { ID = id; Expression = Reference(sel); Previous = None }
+let nds id tag s = 
+  wrap id tag { ID = id; Expression = Primitive(String s); Previous = None }
+let ndn id tag n = 
+  wrap id tag { ID = "value"; Expression = Primitive(Number n); Previous = None }
 
 let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false }
 let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false }
@@ -530,7 +564,7 @@ let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDupl
 let add sel n = { Kind = AddField(sel, n); CanDuplicate = true; IsEvaluated = false }
 let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true; IsEvaluated = false }
 let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true; IsEvaluated = false }
-
+let uid s id = { Kind = UpdateId(s, id); CanDuplicate = true; IsEvaluated = false }
 
 let addSpeakerOps = 
   [ 
@@ -540,29 +574,41 @@ let addSpeakerOps =
 
 let fixSpeakerNameOps = 
   [
-    ed [Field("speakers"); Index(2)] "rename Jean" <| fun s -> 
+    ed [Field("speakers"); Index(2); Field("")] "rename Jean" <| fun s -> 
       s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@")
   ]
 
 let refactorListOps = 
   [
-    wr [Field "speakers"; All] Object "name" "td"
+    uid [Field "speakers"; All; Field ""] "name"
+    wr [Field "speakers"; All; Field "name"] Object "contents" "td"
     add [Field "speakers"; All] (nds "email" "td" "")
     tag [Field "speakers"; All] "tr"
-    tag [Field "speakers"] "table"
+    tag [Field "speakers"] "tbody"
     
-    wr [Field "speakers"] Object "body" "tbody"
+    wr [Field "speakers"] Object "body" "table"
     add [Field "speakers"] (rcd "head" "thead")
-    add [Field "speakers"; Field "head"] (nds "" "td" "Name")
-    add [Field "speakers"; Field "head"] (nds "" "td" "E-mail")
+    add [Field "speakers"; Field "head"] (nds "name" "td" "Name")
+    add [Field "speakers"; Field "head"] (nds "email" "td" "E-mail")
 
     cp [Field "speakers"; Field "body"; All; Field "name"] [Field "speakers"; Field "body"; All; Field "email"]
-    ed [Field "speakers"; Field "body"; All; Field "name"] "get name" <| fun s -> 
+    ed [Field "speakers"; Field "body"; All; Field "name"; Field "contents"] "get name" <| fun s -> 
       s.Substring(0, s.IndexOf(','))
-    ed [Field "speakers"; Field "body"; All; Field "email"] "get email" <| fun s -> 
+    ed [Field "speakers"; Field "body"; All; Field "email"; Field "contents"] "get email" <| fun s -> 
       s.Substring(s.IndexOf(',')+1).Trim()
   ]
 
+let addTransformOps = 
+  [
+    ap [] (nds "ttitle" "h2" "Transformers")
+    add [] (rcd "x-patterns" "x-patterns")
+    add [ Field "x-patterns"] (rcd "head" "thead")
+    add [ Field "x-patterns"; Field "head" ] (rcd "*" "td")
+    add [ Field "x-patterns"; Field "head"; Field "*" ] (rcd "hole" "x-hole")
+    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole" ] (rcd "td" "td")
+    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole"; Field "td" ] (rcd "mq" "marquee")
+    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole"; Field "td"; Field "mq" ] (rcd "" "x-match")
+  ] 
 
 let opsCore = 
   [
@@ -579,49 +625,51 @@ let opsBudget =
     ap [] (nds "btitle" "h2" "Budgeting")
     ap [] (nds "ntitle" "h3" "Number of people")
     ap [] (rcd "counts" "ul")
-    ap [Field "counts"] (nds "attendees" "li" "Attendees: ") 
-    wr [Field "counts"; Field "attendees"] Object "" "span"
+    ap [Field "counts"] (nds "attendees" "span" "Attendees: ") 
+    wr [Field "counts"; Field "attendees"] Object "" "li"
     ap [Field "counts"; Field "attendees"] (ndn "count" "strong" 100)
-    ap [Field "counts"] (nds "speakers" "li" "Speakers: ") 
-    wr [Field "counts"; Field "speakers"] Object "" "span"
-    apnd [Field "counts"; Field "speakers"] (ref "count" "strong" [Field "speakers"; All])
+    ap [Field "counts"] (nds "speakers" "span" "Speakers: ") 
+    wr [Field "counts"; Field "speakers"] Object "" "li"
+    apnd [Field "counts"; Field "speakers"] (ref "count" [Field "speakers"; All])
     wr [Field "counts"; Field "speakers"; Field "count"] Apply "arg" "span"
-    ap [Field "counts"; Field "speakers"; Field "count"] (ref "op" "span" [Field "$builtins"; Field "count"])
+    ap [Field "counts"; Field "speakers"; Field "count"] (ref "op" [Field "$builtins"; Field "count"])
 
     ap [] (nds "ititle" "h3" "Item costs")
     ap [] (rcd "costs" "ul")
-    ap [Field "costs"] (nds "travel" "li" "Travel per speaker: ") 
-    wr [Field "costs"; Field "travel"] Object "" "span"
+    ap [Field "costs"] (nds "travel" "span" "Travel per speaker: ") 
+    wr [Field "costs"; Field "travel"] Object "" "li"
     ap [Field "costs"; Field "travel"] (ndn "cost" "strong" 1000)
-    ap [Field "costs"] (nds "coffee" "li" "Coffee break per person: ") 
-    wr [Field "costs"; Field "coffee"] Object "" "span"
+    ap [Field "costs"] (nds "coffee" "span" "Coffee break per person: ") 
+    wr [Field "costs"; Field "coffee"] Object "" "li"
     ap [Field "costs"; Field "coffee"] (ndn "cost" "strong" 5)
-    ap [Field "costs"] (nds "lunch" "li" "Lunch per person: ") 
-    wr [Field "costs"; Field "lunch"] Object "" "span"
+    ap [Field "costs"] (nds "lunch" "span" "Lunch per person: ") 
+    wr [Field "costs"; Field "lunch"] Object "" "li"
     ap [Field "costs"; Field "lunch"] (ndn "cost" "strong" 20)
-    ap [Field "costs"] (nds "dinner" "li" "Dinner per person: ") 
-    wr [Field "costs"; Field "dinner"] Object "" "span"
+    ap [Field "costs"] (nds "dinner" "span" "Dinner per person: ") 
+    wr [Field "costs"; Field "dinner"] Object "" "li"
     ap [Field "costs"; Field "dinner"] (ndn "cost" "strong" 80)
     
     ap [] (nds "ttitle" "h3" "Total costs")
     ap [] (lst "totals" "ul")
-    ap [Field "totals"] (nds "" "li" "Refreshments: ") 
-    wr [Field "totals"; Index 0] Object "" "span"
-    ap [Field "totals"; Index 0] (ref "item" "strong" [Field "costs"; Field "coffee"; Field "cost"])
+    ap [Field "totals"] (nds "" "span" "Refreshments: ") 
+    wr [Field "totals"; Index 0] Object "" "li"
+    ap [Field "totals"; Index 0] (ref "item" [Field "costs"; Field "coffee"; Field "cost"; Field "value"])
     wr [Field "totals"; Index 0; Field "item"] Apply "left" "span"
-    ap [Field "totals"; Index 0; Field "item"] (ref "right" "span" [Field "counts"; Field "attendees"; Field "count"])
-    ap [Field "totals"; Index 0; Field "item"] (ref "op" "span" [Field "$builtins"; Field "*"])
+    ap [Field "totals"; Index 0; Field "item"] (ref "right" [Field "counts"; Field "attendees"; Field "count"; Field "value"])
+    ap [Field "totals"; Index 0; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
+    wr [Field "totals"; Index 0; Field "item"] Object "value" "strong"
 
-    ap [Field "totals"] (nds "" "li" "Speaker travel: ") 
-    wr [Field "totals"; Index 1] Object "" "span"
-    ap [Field "totals"; Index 1] (ref "item" "strong" [Field "costs"; Field "travel"; Field "cost"])
+    ap [Field "totals"] (nds "" "span" "Speaker travel: ") 
+    wr [Field "totals"; Index 1] Object "" "li"
+    ap [Field "totals"; Index 1] (ref "item" [Field "costs"; Field "travel"; Field "cost"; Field "value"])
     wr [Field "totals"; Index 1; Field "item"] Apply "left" "span"
-    ap [Field "totals"; Index 1; Field "item"] (ref "right" "span" [Field "counts"; Field "speakers"; Field "count"])
-    ap [Field "totals"; Index 1; Field "item"] (ref "op" "span" [Field "$builtins"; Field "*"])
+    ap [Field "totals"; Index 1; Field "item"] (ref "right" [Field "counts"; Field "speakers"; Field "count"])
+    ap [Field "totals"; Index 1; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
+    wr [Field "totals"; Index 1; Field "item"] Object "value" "strong"
 
     ap [] (nds "ultimate" "h3" "Total: ") 
     wr [Field "ultimate" ] Object "" "span"
-    ap [Field "ultimate" ] (ref "item" "strong" [Field "totals"; All; Field "item"])
+    ap [Field "ultimate" ] (ref "item" [Field "totals"; All; Field "item"; Field "value"])
     wr [Field "ultimate"; Field "item"] Apply "arg" "span"
-    ap [Field "ultimate"; Field "item"] (ref "op" "span" [Field "$builtins"; Field "sum"])
+    ap [Field "ultimate"; Field "item"] (ref "op" [Field "$builtins"; Field "sum"])
   ]
