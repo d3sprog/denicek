@@ -1,24 +1,16 @@
 ﻿module Tbd.Matcher
 open Tbd.Doc
 
-(*
-let samplePattern =
-  [
-    add [] (rcd "head" "thead")
-    add [ Field "head" ] (rcd "*" "td")
-    add [ Field "head"; Field "*" ] (rcd "hole" "x-hole")
-    add [ Field "head"; Field "*"; Field "hole" ] (nds "" "td" "hello?")
-  ] |> List.fold apply (rcd "*" "table")
-
 let rec matches nd pattern = 
-  if (nd.ID <> pattern.ID && pattern.ID <> "*") ||
-     (nd.Tag <> pattern.Tag && pattern.Tag <> "*") then None else
+  if (nd.ID <> pattern.ID && pattern.ID <> "*" && pattern.ID <> "#") then None else
   match nd.Expression, pattern.Expression with 
-  | _, Record(Object, [ { Tag = "x-hole"; Expression = Record(Object, [ rplc ]) } ]) ->
+  | _, Record("x-hole", Object, [ rplc ]) ->
       let rplc = rplc |> replace false (fun _ innernd -> 
-        if innernd.Tag = "x-match" then Some nd else None)
+        match innernd with 
+        | { Expression = Record("x-match", _, _) } -> Some nd
+        | _ -> None)
       Some { rplc with ID = nd.ID }
-  | Record(nty, nnds), Record(pty, pnds) when nty = pty ->
+  | Record(ntag, nty, nnds), Record(ptag, pty, pnds) when nty = pty && ntag = ptag ->
       match pnds with 
       | [ { ID = "*"} & pnd ] -> 
           let mutable matched = false
@@ -29,7 +21,7 @@ let rec matches nd pattern =
                 repls
             | _ -> nd)
           if not matched then None else
-          Some { nd with Expression = Record(nty, newNds) }
+          Some { nd with Expression = Record(ntag, nty, newNds) }
       | _ ->
           for pnd in pnds do if pnd.ID = "*" then failwith "Only one '*' ID allowed in a pattern!" 
           let pndsLookup = Map.ofList [ for pnd in pnds -> pnd.ID, pnd ]
@@ -44,8 +36,9 @@ let rec matches nd pattern =
                 | _ -> nnd
             | _ -> nnd)
           if not (pndsMatched.Values |> Seq.forall id) then None else
-          Some { nd with Expression = Record(nty, newNds) }
-  | _ -> None
+          Some { nd with Expression = Record(ntag, nty, newNds) }
+  | _ -> 
+    None
 
 let matchAndReplace doc pattern =
   doc |> replace false (fun path nd -> 
@@ -56,9 +49,6 @@ let applyMatchers doc =
   doc 
   |> fold (fun _ nd st ->
     match nd with 
-    | { Tag = "x-patterns"; Expression = Record(_, nodes) } -> nodes @ st
+    | { Expression = Record("x-patterns", _, nodes) } -> nodes @ st
     | _ -> st ) []
   |> List.fold matchAndReplace doc
-
-*)
-let applyMatchers doc = doc

@@ -604,10 +604,9 @@ let addTransformOps =
     add [] (rcd "x-patterns" "x-patterns")
     add [ Field "x-patterns"] (rcd "head" "thead")
     add [ Field "x-patterns"; Field "head" ] (rcd "*" "td")
-    add [ Field "x-patterns"; Field "head"; Field "*" ] (rcd "hole" "x-hole")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole" ] (rcd "td" "td")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole"; Field "td" ] (rcd "mq" "marquee")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "hole"; Field "td"; Field "mq" ] (rcd "" "x-match")
+    add [ Field "x-patterns"; Field "head"; Field "*" ] (rcd "*" "x-hole")
+    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*" ] (rcd "mq" "marquee")
+    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*"; Field "mq" ] (rcd "" "x-match")
   ] 
 
 let opsCore = 
