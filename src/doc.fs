@@ -555,6 +555,8 @@ let nds id tag s =
   wrap id tag { ID = id; Expression = Primitive(String s); Previous = None }
 let ndn id tag n = 
   wrap id tag { ID = "value"; Expression = Primitive(Number n); Previous = None }
+let ndnp id n = 
+  { ID = id; Expression = Primitive(Number n); Previous = None }
 
 let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false }
 let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false }
@@ -565,6 +567,102 @@ let add sel n = { Kind = AddField(sel, n); CanDuplicate = true; IsEvaluated = fa
 let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true; IsEvaluated = false }
 let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true; IsEvaluated = false }
 let uid s id = { Kind = UpdateId(s, id); CanDuplicate = true; IsEvaluated = false }
+
+
+let representSel sel = 
+  Record("x-selectors", List, 
+    [ for s in sel ->
+        match s with 
+        | All -> { ID = ""; Expression = Primitive(String "*"); Previous = None }
+        | Index n -> { ID = ""; Expression = Primitive(Number n); Previous = None }
+        | Field f -> { ID = ""; Expression = Primitive(String f); Previous = None } ])
+
+let unrepresentSel expr =
+  match expr with 
+  | Record("x-selectors", List, sels) ->
+      sels |> List.map (function 
+        | { Expression = Primitive(String "*") } -> All 
+        | { Expression = Primitive(String s) } -> Field s
+        | { Expression = Primitive(Number n) } -> Index (int n)
+        | _ -> failwith "unrepresentSel: Invalid selector")
+  | _ -> failwith "unrepresentSel: Not a selector"
+  
+
+let unrepresent nd = 
+  let (|Lookup|) args = dict [ for a in args -> a.ID, a ]
+  let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
+    if d.ContainsKey k then Some(d.[k].Expression) else None
+  let editKind =
+    match nd.ID, nd.Expression with
+    | "x-edit-wrap", Record(_, _, Lookup args) ->
+        let (|ParseKind|_|) = function "object" -> Some Object | "apply" -> Some Apply | "list" -> Some List | _ -> None
+        match args with 
+        | Find "tag" (Primitive(String tag)) &
+          Find "id" (Primitive(String id)) &
+          Find "kind" (Primitive(String(ParseKind kind))) &
+          Find "target" sel ->
+            EditKind.WrapRecord(tag, id, kind, unrepresentSel sel)
+        | _ -> failwith "unrepresent - invalid arguments of x-edit-wrap"
+    | "x-edit-append", Record(_, _, Lookup (Find "target" sel & Find "node" (Record(_, _, [nd])))) ->
+        EditKind.Append(unrepresentSel sel, nd)
+    | "x-edit-updateid", Record(_, _, Lookup (Find "target" sel & Find "id" (Primitive(String id)))) ->
+        EditKind.UpdateId(unrepresentSel sel, id) 
+  { Kind = editKind; CanDuplicate = false; IsEvaluated = false }
+
+let represent op = 
+  let repr id kvp = 
+    let args = [ for k,v in kvp -> { ID=k; Expression=v; Previous=None } ]
+    { ID = id; Expression = Record(id, Object, args); Previous=None }
+  match op.Kind with 
+  | EditKind.WrapRecord(tag, id, kind, target) ->
+      let ty = match kind with Object -> "object" | Apply -> "apply" | List -> "list"
+      repr "x-edit-wrap" [ 
+        "tag", Primitive(String tag); "id", Primitive(String id)
+        "kind", Primitive(String ty); "target", representSel target 
+      ]
+  | EditKind.Append(target, nd) ->
+      repr "x-edit-append" [
+        "target", representSel target; "node", Record("x-node-wrapper", Object, [nd])
+      ]
+  | EditKind.UpdateId(target, id) ->
+      repr "x-edit-updateid" [
+        "target", representSel target; "id", Primitive(String id)
+      ]
+      
+
+let opsBaseCounter = 
+  [ 
+    ap [] (nds "title" "h1" "Counter")
+    ap [] (rcd "counter" "p")
+    ap [Field "counter"] (nds "label" "strong" "Count: ")
+    ap [Field "counter"] (ndnp "value" 0)
+    ap [] (nds "inc" "button" "Increment")
+    ap [] (nds "dec" "button" "Decrement")
+  ]
+let opsCounterInc = 
+  [
+    wr [Field "counter"; Field "value"] Apply "value" "span"
+    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
+    ap [Field "counter"; Field "value"] (ndnp "left" 1)
+    uid [Field "counter"; Field "value"; Field "value"] "right"
+  ]
+let opsCounterDec = 
+  [
+    wr [Field "counter"; Field "value"] Apply "value" "span"
+    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
+    ap [Field "counter"; Field "value"] (ndnp "left" -1)
+    uid [Field "counter"; Field "value"; Field "value"] "right"
+  ]
+let opsCounterHndl = 
+  [ yield ap [Field "inc"] (lst "click" "x-event-handler")
+    for op in opsCounterInc ->
+      ap [Field "inc"; Field "click"] (represent op) 
+    yield ap [Field "dec"] (lst "click" "x-event-handler")
+    for op in opsCounterDec ->
+      ap [Field "dec"; Field "click"] (represent op) ]
+
+let opsCounter = opsBaseCounter @ opsCounterInc @ opsCounterHndl
+
 
 let addSpeakerOps = 
   [ 

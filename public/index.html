@@ -31,6 +31,14 @@
     #hcontrols .histindex { display:inline-block; text-align:center; width:20px; }
     #hcontrols .disabled { color:#808080; }
     #hcontrols .details { margin:0px 0px -4px 10px; letter-spacing:-0.5px; text-overflow:ellipsis; max-width:400px; white-space:nowrap; overflow:hidden; display:inline-block; }
+
+    x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
+    x-match {  display:inline-block; }
+    x-match::before { content:"(matched content)" }
+
+    x-event-handler { display:block; padding-left:20px; text-align:left; }
+    x-event-handler > * { display:list-item; }
+    x-event-handler { display:none; }
   </style>
 </head>
 <body>

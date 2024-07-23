@@ -77,14 +77,30 @@ let rec renderNode state trigger path pid nd =
     | Primitive(Number _) -> "x-prim-num"
     | Primitive(String _) -> "x-prim-str"
     | Reference _ -> "x-ref"
+  let handlers = 
+    match nd.Expression with 
+    | Record(_, _, nds) -> nds |> List.choose (function
+        | { Expression = Record("x-event-handler", _, edits); ID = id } ->
+            Some(id =!> fun _ _ ->
+              let handler = [ for e in edits -> unrepresent e ]
+              trigger(Evaluate(true))
+              trigger(MergeEdits(state.Edits @ handler))
+              trigger(Evaluate(true))
+              trigger(Move(System.Int32.MaxValue))
+            )
+        | _ -> None)
+    | _ -> []
   h?(tag) [ 
-    "id" => pid 
-    "class" => 
+    yield "id" => pid 
+    yield "class" => 
       ( match state.HighlightedSelector with Some s when matches s path -> "hidoc " | _ -> " ") + 
       ( if historyIndex > 0 then "historical" else "")
-    "click" =!> fun h e ->     
-      e.cancelBubble <- true;
-      trigger(SelectNode(Some(pid, (h.offsetLeft(* + h.offsetWidth*), h.offsetTop))))
+    yield! handlers
+    if List.forall (fun (k, _) -> k <> "click") handlers then
+      yield "click" =!> fun h e ->
+        if (unbox<Browser.Types.MouseEvent> e).ctrlKey then
+          e.cancelBubble <- true;
+          trigger(SelectNode(Some(pid, (h.offsetLeft(* + h.offsetWidth*), h.offsetTop))))
   ] [
     if state.SelectedNode = Some pid then 
       let x, y = state.ControlsLocation
@@ -177,8 +193,11 @@ let render trigger (state:State) =
 //let ops1 = merge (opsCore @ refactorListOps) (merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps))
 //let ops = merge ops1 (opsCore @ opsBudget)
 //let ops = merge (opsCore @ opsBudget) ops1
-let ops = opsCore 
 
+//let ops = opsCore 
+
+let ops = opsCounter
+  
 let state = 
   { Initial = rcd "root" "div"
     HighlightedSelector = None
