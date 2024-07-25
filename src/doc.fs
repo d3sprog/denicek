@@ -80,6 +80,11 @@ let select sel doc =
   doc |> fold (fun p value st -> 
     if matches sel p then value::st else st) [] |> List.rev
 
+let selectSingle sel doc = 
+  match select sel doc with
+  | [it] -> it
+  | _ -> failwith "selectSingle: Expected to find single node"
+
 // --------------------------------------------------------------------------------------
 // Edits
 // --------------------------------------------------------------------------------------
@@ -89,7 +94,7 @@ type EditKind =
   | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
   | Copy of source:Selectors * target:Selectors 
-  | WrapRecord of tag:string * id:string * kind:RecordType * target:Selectors 
+  | WrapRecord of id:string * tag:string * kind:RecordType * target:Selectors 
   | Replace of target:Selectors * dependencies:Selectors list * Node
   | AddField of Selectors * Node
   | UpdateTag of Selectors * string
@@ -552,7 +557,7 @@ let wrap id tag nd =
 let ref id sel = 
   { ID = id; Expression = Reference(sel); Previous = None }
 let nds id tag s = 
-  wrap id tag { ID = id; Expression = Primitive(String s); Previous = None }
+  wrap id tag { ID = "value"; Expression = Primitive(String s); Previous = None }
 let ndn id tag n = 
   wrap id tag { ID = "value"; Expression = Primitive(Number n); Previous = None }
 let ndnp id n = 
@@ -661,7 +666,7 @@ let opsCounterHndl =
     for op in opsCounterDec ->
       ap [Field "dec"; Field "click"] (represent op) ]
 
-let opsCounter = opsBaseCounter @ opsCounterInc @ opsCounterHndl
+let opsCounter = opsBaseCounter //@ opsCounterInc @ opsCounterHndl
 
 
 let addSpeakerOps = 
