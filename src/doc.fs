@@ -677,13 +677,13 @@ let addSpeakerOps =
 
 let fixSpeakerNameOps = 
   [
-    ed [Field("speakers"); Index(2); Field("")] "rename Jean" <| fun s -> 
+    ed [Field("speakers"); Index(2); Field("value")] "rename Jean" <| fun s -> 
       s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@")
   ]
 
 let refactorListOps = 
   [
-    uid [Field "speakers"; All; Field ""] "name"
+    uid [Field "speakers"; All; Field "value"] "name"
     wr [Field "speakers"; All; Field "name"] Object "contents" "td"
     add [Field "speakers"; All] (nds "email" "td" "")
     tag [Field "speakers"; All] "tr"

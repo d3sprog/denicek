@@ -10,6 +10,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		src\experiments.fsx = src\experiments.fsx
 	EndProjectSection
 EndProject
+Project("{6EC3EE1D-3C4E-46DD-8F32-0CC8E7565705}") = "tests", "tests\tests.fsproj", "{9A09AB51-171D-4910-ADF3-9DE77CBAD9B9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,6 +22,10 @@ Global
 		{89F703D8-E75F-4989-89A5-54E4F0CF5E18}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{89F703D8-E75F-4989-89A5-54E4F0CF5E18}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{89F703D8-E75F-4989-89A5-54E4F0CF5E18}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A09AB51-171D-4910-ADF3-9DE77CBAD9B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A09AB51-171D-4910-ADF3-9DE77CBAD9B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A09AB51-171D-4910-ADF3-9DE77CBAD9B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A09AB51-171D-4910-ADF3-9DE77CBAD9B9}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -239,7 +239,6 @@ let render trigger (state:State) =
     | _ -> ()
   ]
 
-//let ops = opsCore @ opsExtras
 //let ops = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
 //let ops = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
 //let ops = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
@@ -247,9 +246,9 @@ let render trigger (state:State) =
 //let ops = merge ops1 (opsCore @ opsBudget)
 //let ops = merge (opsCore @ opsBudget) ops1
 
-//let ops = opsCore 
+let ops = opsCore 
 
-let ops = opsCounter
+//let ops = opsCounter
   
 let state = 
   { Initial = rcd "root" "div"
