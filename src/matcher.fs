@@ -5,7 +5,7 @@ let rec matches nd pattern =
   if (nd.ID <> pattern.ID && pattern.ID <> "*" && pattern.ID <> "#") then None else
   match nd.Expression, pattern.Expression with 
   | _, Record("x-hole", Object, [ rplc ]) ->
-      let rplc = rplc |> replace false (fun _ innernd -> 
+      let rplc = rplc |> replace (fun _ innernd -> 
         match innernd with 
         | { Expression = Record("x-match", _, _) } -> Some nd
         | _ -> None)
@@ -41,7 +41,7 @@ let rec matches nd pattern =
     None
 
 let matchAndReplace doc pattern =
-  doc |> replace false (fun path nd -> 
+  doc |> replace (fun path nd -> 
     if List.exists (fun s -> s = Field "x-patterns") path then None 
     else matches nd pattern)
 

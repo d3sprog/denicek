@@ -20,7 +20,6 @@ type Primitive =
 type Node = 
   { ID : string
     Expression : Expr
-    Previous : Node option 
     }
 
 and RecordType = 
@@ -37,10 +36,9 @@ let transformations = System.Collections.Generic.Dictionary<string, string -> st
 // Elements, Selectors, Paths
 // --------------------------------------------------------------------------------------
 
-let replace recordHistory f nd = 
+let replace f nd = 
   let rec loop path nd =
     match f path nd with 
-    | Some res when recordHistory -> { res with Previous = Some nd }
     | Some res -> res
     | _ -> 
     let rtrn e = { nd with Expression = e }
@@ -94,14 +92,22 @@ type EditKind =
   | EditText of Selectors * string //(string -> string)
   | Reorder of Selectors * list<int>
   | Copy of source:Selectors * target:Selectors 
-  | WrapRecord of id:string * tag:string * kind:RecordType * target:Selectors 
-  | Replace of target:Selectors * dependencies:Selectors list * Node
+  | WrapRecord of id:string * tag:string * kind:RecordType * target:Selectors * noupdaterefs:bool
+  | Replace of target:Selectors * Node
   | AddField of Selectors * Node
   | UpdateTag of Selectors * string
   | UpdateId of Selectors * string
 
+type RelationalOperator = 
+  | Equals | NotEquals 
+
+type EditCondition = 
+  | TagCondition of Selectors * RelationalOperator * string
+
 type Edit = 
   { Kind : EditKind 
+    Conditions : EditCondition list
+    Dependencies : Selectors list
     IsEvaluated : bool
     CanDuplicate : bool }
 
@@ -126,22 +132,21 @@ let withNodeSelectors nd sels =
 
 let getSelectors ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) -> [s]
-  | Append(s, nd) | Replace(s, _, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s, _) -> [s]
+  | Append(s, nd) | Replace(s, nd) | AddField(s, nd) -> s :: (getNodeSelectors nd)
   | Copy(s1, s2) -> [s1; s2]
 
 /// Not including 'Reference' selectors in expressions
 let getDependenciesSelectors ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s) 
-  | Append(s, _) | AddField(s, _) -> [s]
-  | Replace(s, ss, _) -> s::ss
-  | Copy(s1, s2) -> [s1; s2]
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | WrapRecord(_, _, _, s, _) 
+  | Append(s, _) | AddField(s, _) | Replace(s, _) -> s::ed.Dependencies
+  | Copy(s1, s2) -> s1::s2::ed.Dependencies
 
 let getTargetSelector ed = 
   match ed.Kind with 
-  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | Replace(s, _, _) | Copy(_, s) -> s
-  | WrapRecord(_, id, _, s) | AddField(s, { ID = id }) -> s @ [Field id]
+  | EditText(s, _) | Reorder(s, _) | UpdateId(s, _) | UpdateTag(s, _) | Replace(s, _) | Copy(_, s) -> s
+  | WrapRecord(_, id, _, s, _) | AddField(s, { ID = id }) -> s @ [Field id]
   | Append(s, _)-> s @ [All]
 
 let withTargetSelector tgt ed = 
@@ -150,10 +155,10 @@ let withTargetSelector tgt ed =
     match ed.Kind with 
     | Append(_, nd) -> Append(dropLast tgt, nd) 
     | AddField(_, nd) -> AddField(dropLast tgt, nd) 
-    | Replace(_, ss, nd) -> Replace(tgt, ss, nd) 
+    | Replace(_, nd) -> Replace(tgt, nd) 
     | EditText(_, f) -> EditText(tgt, f)
     | Reorder(_, m) -> Reorder(tgt, m)
-    | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, dropLast tgt) 
+    | WrapRecord(t, i, k, _, n) -> WrapRecord(t, i, k, dropLast tgt, n) 
     | UpdateTag(_, t) -> UpdateTag(tgt, t) 
     | UpdateId(_, s) -> UpdateTag(tgt, s) 
     | Copy(_, s) -> Copy(tgt, s)
@@ -164,10 +169,10 @@ let withSelectors sels ed =
     match ed.Kind with 
     | Append(_, nd) -> Append(List.head sels, withNodeSelectors nd (List.tail sels)) 
     | AddField(_, nd) -> AddField(List.head sels, withNodeSelectors nd (List.tail sels)) 
-    | Replace(_, ss, nd) -> Replace(List.head sels, ss, withNodeSelectors nd (List.tail sels)) 
+    | Replace(_, nd) -> Replace(List.head sels, withNodeSelectors nd (List.tail sels)) 
     | EditText(_, f) -> EditText(List.exactlyOne sels, f)
     | Reorder(_, m) -> Reorder(List.exactlyOne sels, m)
-    | WrapRecord(t, i, k, _) -> WrapRecord(t, i, k, List.exactlyOne sels) 
+    | WrapRecord(t, i, k, _, n) -> WrapRecord(t, i, k, List.exactlyOne sels, n) 
     | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) 
     | UpdateId(_, s) -> UpdateId(List.exactlyOne sels, s) 
     | Copy(_, _) -> Copy(List.head sels, List.exactlyOne (List.tail sels))
@@ -226,6 +231,7 @@ let wrapSelectors typ id tag selOther selReord =
     | (All|Index _)::_, Field(_)::_ 
     | Field(_)::_, (All|Index _)::_ -> selOther        
     | [], _ -> []
+    | All::_, Index _::_ -> selOther // TODO: This should be removed because we cannot do this right, but it is useful?
     | _ -> failwith $"moveBefore.WrapCase - Missing case: {selOther} vs. {selReord}"
   wrapsels selOther selReord
 
@@ -253,16 +259,23 @@ let updateSelectorsId id selOther selReord =
 // --------------------------------------------------------------------------------------
 
 let apply doc edit =
+  let enabled = edit.Conditions |> List.forall (function 
+    | TagCondition(sel, rel, t1) -> select sel doc |> List.forall (function
+        | { Expression = Record(t2, _, _) } ->
+            (rel = Equals && t1 = t2) || (rel = NotEquals && t1 <> t2)        
+        | _ -> rel = NotEquals )) // No tag - also passes != check
   match edit.Kind with
+  | _ when not enabled ->
+      doc
   | Append(sel, nd) ->
-      replace edit.IsEvaluated (fun p el ->
+      replace (fun p el ->
         match el.Expression with 
         | Record(tag, typ, nds) when matches p sel -> 
             Some { el with Expression = Record(tag, typ, nds @ [nd]) }
         | _ -> None ) doc
 
   | EditText(sel, f) ->
-      replace edit.IsEvaluated (fun p el -> 
+      replace (fun p el -> 
         match el.Expression with 
         | Primitive(String(s)) when matches p sel -> 
             Some { el with Expression = Primitive(String(transformations.[f] s)) }
@@ -272,7 +285,7 @@ let apply doc edit =
   // (this logic is mirrored below in 'updateSelectors' called when merging)
   | Reorder(sel, ord) ->
       // Do the actual reordering 
-      let doc = replace edit.IsEvaluated (fun p el ->
+      let doc = replace (fun p el ->
         match el.Expression with 
         | Record(tag, typ, vals) when matches p sel -> 
             Some { el with Expression = Record(tag, typ, [ for i in ord -> vals.[i]]) }
@@ -282,15 +295,16 @@ let apply doc edit =
       let nsels = getNodeSelectors doc |> List.map (fun s1 -> reorderSelectors ord s1 sel)
       withNodeSelectors doc nsels
 
-  | WrapRecord(id, tag, typ, sel) ->
+  | WrapRecord(id, tag, typ, sel, notupd) ->
       // Do the actual record wrapping
-      let doc = replace edit.IsEvaluated (fun p el -> 
+      let doc = replace (fun p el -> 
         if matches p sel then Some { el with Expression = Record(tag, typ, [{ el with ID = id }]) }
         else None ) doc
       // Replace all relevant selectors (in references in code)
+      if notupd then doc else
       let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
       withNodeSelectors doc nsels
-
+      
   | Copy(sel1, sel2) ->
       // NOTE: This is a bit too clever (if there is one target, it 
       // implicitly creates list with all source nodes to be copied there)
@@ -300,28 +314,31 @@ let apply doc edit =
         | [_], nds -> [ Record("div", List, nds) ]
         | _ -> failwith "apply.Copy: Mismatching number of source and target notes"
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy: Unexpected"
-      replace edit.IsEvaluated (fun p el -> 
+      replace (fun p el -> 
         if matches p sel2 then Some({ el with Expression = next() })
         else None ) doc
 
   | UpdateTag(sel, tag) ->
-      replace edit.IsEvaluated (fun p el -> 
+      replace (fun p el -> 
         match el with 
         | { Expression = Record(_, typ, nds) } when matches p sel -> 
             Some({ el with Expression = Record(tag, typ, nds)})
         | _ -> None ) doc
 
   | UpdateId(sel, id) ->
-      replace edit.IsEvaluated (fun p el -> 
+      let doc = replace (fun p el -> 
         if matches p sel then Some { el with ID = id } else None) doc
+      // Replace all relevant selectors (in references in code)
+      let nsels = getNodeSelectors doc |> List.map (fun s1 -> updateSelectorsId id s1 sel)
+      withNodeSelectors doc nsels
 
-  | Replace(sel, _, nd) ->
-      replace edit.IsEvaluated (fun p el -> 
+  | Replace(sel, nd) ->
+      replace (fun p el -> 
         if matches p sel then Some(nd)
         else None ) doc
 
   | AddField(sel, v) ->
-      replace edit.IsEvaluated (fun p el -> 
+      replace (fun p el -> 
         match el.Expression with 
         | Record(tag, Object, attrs) when matches p sel -> Some({ el with Expression = Record(tag, Object, attrs @ [v]) })
         | _ -> None ) doc
@@ -366,7 +383,7 @@ let updateSelectors e1 e2 =
   | Reorder(sel, ord) -> 
       let nsels = getSelectors e1 |> List.map (fun s1 -> reorderSelectors ord s1 sel)
       [withSelectors nsels e1]
-  | WrapRecord(id, tag, typ, sel) -> 
+  | WrapRecord(id, tag, typ, sel, _) -> 
       let nsels = getSelectors e1 |> List.map (fun s1 -> wrapSelectors typ id tag s1 sel)
       [withSelectors nsels e1]
   | UpdateId(sel, id) ->
@@ -396,8 +413,8 @@ let scopeEdit selBase edit =
   | Append(RemoveSelectorPrefix selBase sel, nd) -> Some(Append(sel, nd))
   | EditText(RemoveSelectorPrefix selBase sel, f) -> Some(EditText(sel, f))
   | Reorder(RemoveSelectorPrefix selBase sel, p) -> Some(Reorder(sel, p))
-  | WrapRecord(id, tag, typ, RemoveSelectorPrefix selBase sel) -> Some(WrapRecord(id, tag, typ, sel))
-  | Replace(RemoveSelectorPrefix selBase sel, ss, nd) -> Some(Replace(sel, ss, nd)) 
+  | WrapRecord(id, tag, typ, RemoveSelectorPrefix selBase sel, n) -> Some(WrapRecord(id, tag, typ, sel, n))
+  | Replace(RemoveSelectorPrefix selBase sel, nd) -> Some(Replace(sel, nd)) 
   | AddField(RemoveSelectorPrefix selBase sel, nd) -> Some(AddField(sel, nd))
   | UpdateTag(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateTag(sel, t))
   | UpdateId(RemoveSelectorPrefix selBase sel, t) -> Some(UpdateId(sel, t))
@@ -496,11 +513,12 @@ and evalSite sels nd : option<Selectors> =
   match nd.Expression with 
   | Primitive _ | Reference(Field "$builtins"::_) -> None
   | Reference(p) -> Some (List.rev sels)
+  | Record("x-evaluated", _, _) -> None
   | Record(_, typ, nds) -> 
       match typ, evalSiteChildren sels typ nds with
       | _, Some res -> Some res
       | Object, None | List, None -> None
-      | _ -> Some(List.rev sels)
+      | Apply, None -> Some(List.rev sels)
 
 let evaluateRaw nd = //: int list =
   match evalSite [] nd with
@@ -508,34 +526,44 @@ let evaluateRaw nd = //: int list =
   | Some sels ->
       let it = match select sels nd with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
       match it.Expression with 
-      | Reference(p) -> [ Copy(p, sels) ]  
+      | Reference(p) -> 
+          [ Copy(p, sels), [TagCondition(p, NotEquals, "x-evaluated")], [p]
+            Copy(p @ [Field "result"], sels), [TagCondition(p, Equals, "x-evaluated")], [p @ [Field "result"]] ]           
       | Record(_, Apply, Args({ Expression = Reference [ Field("$builtins"); Field op ] }, args)) ->
           let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
-          match op with 
-          | "count" | "sum" ->
-              let sum = List.map (function { Expression = Primitive(Number n) } -> n | _ -> failwith "evaluate: Argument of 'sum' is not a number.") >> List.sum 
-              let count = List.length >> float
-              let f = (dict [ "count", count; "sum", sum ]).[op]
-              match args.TryFind "arg" with
-              | Some { Expression = Record(_, List, nds) } -> 
-                  let res = Primitive(Number(f nds))
-                  [ Replace(sels, ss, { it with Expression = res } )  ] 
-              | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
-          | "+" | "*" -> 
-              let f = (dict [ "+",(+); "*",(*) ]).[op]
-              match args.TryFind "left", args.TryFind "right" with
-              | Some { Expression = Primitive(Number n1) },
-                Some { Expression = Primitive(Number n2) } -> 
-                  let res = Primitive(Number(f n1 n2))
-                  [ Replace(sels, ss, { it with Expression = res } )  ] 
-              | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
-          | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
+          let res = 
+            match op with 
+            | "count" | "sum" ->
+                let sum = List.map (function { Expression = Primitive(Number n) } -> n | _ -> failwith "evaluate: Argument of 'sum' is not a number.") >> List.sum 
+                let count = List.length >> float
+                let f = (dict [ "count", count; "sum", sum ]).[op]
+                match args.TryFind "arg" with
+                | Some { Expression = Record(_, List, nds) } -> 
+                     Primitive(Number(f nds))
+                | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
+            | "+" | "*" -> 
+                let f = (dict [ "+",(+); "*",(*) ]).[op]
+                match args.TryFind "left", args.TryFind "right" with
+                | Some { Expression = Primitive(Number n1) },
+                  Some { Expression = Primitive(Number n2) } -> 
+                    Primitive(Number(f n1 n2))
+                | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
+            | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
+            
+          printfn "wrap %A" sels
+          // [ Replace(sels, ss, { it with Expression = res } )  ] 
+          [ WrapRecord("result", "x-evaluated", Object, sels, true), [], ss
+            Append(sels, { ID = "previous"; Expression = Primitive(String "na") }), [], ss
+            Copy(sels @ [Field "result"], sels @ [Field "previous"]), [], ss
+            Replace(sels @ [Field "result"], { ID = "result"; Expression = res } ), [], ss
+            ] 
       | Record(_, Apply, nds) -> 
           failwith $"evaluate: Unexpected format of arguments {[for nd in nds -> nd.ID]}: {nds}"
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it.Expression}"
 
 let evaluate nd =
-  [ for ed in evaluateRaw nd -> { CanDuplicate = false; IsEvaluated = true; Kind = ed } ]
+  [ for ed, conds, deps in evaluateRaw nd -> 
+      { CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
 
 let rec evaluateAll doc = seq {
   let edits = evaluate doc
@@ -548,39 +576,39 @@ let rec evaluateAll doc = seq {
 // --------------------------------------------------------------------------------------
 
 let rcd id tag = 
-  { ID = id; Expression = Record(tag, Object, []); Previous = None }
+  { ID = id; Expression = Record(tag, Object, []) }
 let lst id tag = 
-  { ID = id; Expression = Record(tag, List, []); Previous = None }
+  { ID = id; Expression = Record(tag, List, []) }
 
 let wrap id tag nd =
-  { ID = id; Expression = Record(tag, Object, [nd]); Previous = None }  
+  { ID = id; Expression = Record(tag, Object, [nd]) }  
 let ref id sel = 
-  { ID = id; Expression = Reference(sel); Previous = None }
+  { ID = id; Expression = Reference(sel) }
 let nds id tag s = 
-  wrap id tag { ID = "value"; Expression = Primitive(String s); Previous = None }
+  wrap id tag { ID = "value"; Expression = Primitive(String s) }
 let ndn id tag n = 
-  wrap id tag { ID = "value"; Expression = Primitive(Number n); Previous = None }
+  wrap id tag { ID = "value"; Expression = Primitive(Number n) }
 let ndnp id n = 
-  { ID = id; Expression = Primitive(Number n); Previous = None }
+  { ID = id; Expression = Primitive(Number n) }
 
-let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false }
-let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false }
-let wr s typ id tag = { Kind = WrapRecord(id, tag, typ, s); CanDuplicate = true; IsEvaluated = false }
-let ord s l = { Kind = Reorder(s, l); CanDuplicate = true; IsEvaluated = false }
-let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDuplicate = true; IsEvaluated = false }
-let add sel n = { Kind = AddField(sel, n); CanDuplicate = true; IsEvaluated = false }
-let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true; IsEvaluated = false }
-let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true; IsEvaluated = false }
-let uid s id = { Kind = UpdateId(s, id); CanDuplicate = true; IsEvaluated = false }
+let ap s n = { Kind = Append(s, n); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let apnd s n = { Kind = Append(s, n); CanDuplicate = false; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let wr s typ id tag = { Kind = WrapRecord(id, tag, typ, s, false); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let ord s l = { Kind = Reorder(s, l); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let ed sel fn f = transformations.[fn] <- f; { Kind = EditText(sel, fn); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let add sel n = { Kind = AddField(sel, n); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let cp s1 s2 = { Kind = Copy(s1, s2); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let tag s t = { Kind = UpdateTag(s, t); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
+let uid s id = { Kind = UpdateId(s, id); CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
 
 
 let representSel sel = 
   Record("x-selectors", List, 
     [ for s in sel ->
         match s with 
-        | All -> { ID = ""; Expression = Primitive(String "*"); Previous = None }
-        | Index n -> { ID = ""; Expression = Primitive(Number n); Previous = None }
-        | Field f -> { ID = ""; Expression = Primitive(String f); Previous = None } ])
+        | All -> { ID = ""; Expression = Primitive(String "*") }
+        | Index n -> { ID = ""; Expression = Primitive(Number n) }
+        | Field f -> { ID = ""; Expression = Primitive(String f) } ])
 
 let unrepresentSel expr =
   match expr with 
@@ -606,20 +634,20 @@ let unrepresent nd =
           Find "id" (Primitive(String id)) &
           Find "kind" (Primitive(String(ParseKind kind))) &
           Find "target" sel ->
-            EditKind.WrapRecord(tag, id, kind, unrepresentSel sel)
+            EditKind.WrapRecord(tag, id, kind, unrepresentSel sel, false)
         | _ -> failwith "unrepresent - invalid arguments of x-edit-wrap"
     | "x-edit-append", Record(_, _, Lookup (Find "target" sel & Find "node" (Record(_, _, [nd])))) ->
         EditKind.Append(unrepresentSel sel, nd)
     | "x-edit-updateid", Record(_, _, Lookup (Find "target" sel & Find "id" (Primitive(String id)))) ->
         EditKind.UpdateId(unrepresentSel sel, id) 
-  { Kind = editKind; CanDuplicate = false; IsEvaluated = false }
+  { Kind = editKind; CanDuplicate = false; IsEvaluated = false; Conditions = []; Dependencies=[] }
 
 let represent op = 
   let repr id kvp = 
-    let args = [ for k,v in kvp -> { ID=k; Expression=v; Previous=None } ]
-    { ID = id; Expression = Record(id, Object, args); Previous=None }
+    let args = [ for k,v in kvp -> { ID=k; Expression=v } ]
+    { ID = id; Expression = Record(id, Object, args) }
   match op.Kind with 
-  | EditKind.WrapRecord(tag, id, kind, target) ->
+  | EditKind.WrapRecord(tag, id, kind, target, _) ->
       let ty = match kind with Object -> "object" | Apply -> "apply" | List -> "list"
       repr "x-edit-wrap" [ 
         "tag", Primitive(String tag); "id", Primitive(String id)
@@ -666,7 +694,6 @@ let opsCounterHndl =
     for op in opsCounterDec ->
       ap [Field "dec"; Field "click"] (represent op) ]
 
-let opsCounter = opsBaseCounter //@ opsCounterInc @ opsCounterHndl
 
 
 let addSpeakerOps = 
@@ -753,22 +780,22 @@ let opsBudget =
     
     ap [] (nds "ttitle" "h3" "Total costs")
     ap [] (lst "totals" "ul")
+
+    // NOTE: Construct things in a way where all structural edits (wrapping)
+    // are applied to the entire list using All (this should be required!)
+    // because otherwise we may end up with inconsistent structures
     ap [Field "totals"] (nds "" "span" "Refreshments: ") 
-    wr [Field "totals"; Index 0] Object "" "li"
-    ap [Field "totals"; Index 0] (ref "item" [Field "costs"; Field "coffee"; Field "cost"; Field "value"])
-    wr [Field "totals"; Index 0; Field "item"] Apply "left" "span"
-    ap [Field "totals"; Index 0; Field "item"] (ref "right" [Field "counts"; Field "attendees"; Field "count"; Field "value"])
-    ap [Field "totals"; Index 0; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
-    wr [Field "totals"; Index 0; Field "item"] Object "value" "strong"
-
     ap [Field "totals"] (nds "" "span" "Speaker travel: ") 
-    wr [Field "totals"; Index 1] Object "" "li"
+    wr [Field "totals"; All] Object "" "li"
+    ap [Field "totals"; Index 0] (ref "item" [Field "costs"; Field "coffee"; Field "cost"; Field "value"])
     ap [Field "totals"; Index 1] (ref "item" [Field "costs"; Field "travel"; Field "cost"; Field "value"])
-    wr [Field "totals"; Index 1; Field "item"] Apply "left" "span"
+    wr [Field "totals"; All; Field "item"] Apply "left" "span"
+    ap [Field "totals"; Index 0; Field "item"] (ref "right" [Field "counts"; Field "attendees"; Field "count"; Field "value"])
     ap [Field "totals"; Index 1; Field "item"] (ref "right" [Field "counts"; Field "speakers"; Field "count"])
+    ap [Field "totals"; Index 0; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
     ap [Field "totals"; Index 1; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
-    wr [Field "totals"; Index 1; Field "item"] Object "value" "strong"
-
+    wr [Field "totals"; All; Field "item"] Object "value" "strong"
+    
     ap [] (nds "ultimate" "h3" "Total: ") 
     wr [Field "ultimate" ] Object "" "span"
     ap [Field "ultimate" ] (ref "item" [Field "totals"; All; Field "item"; Field "value"])

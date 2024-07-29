@@ -6,10 +6,10 @@ open Tbd.Doc
 type State = 
   { Initial : Node 
     Edits : Edit list 
-    SelectedNode : string option
+    //SelectedNode : string option
     HighlightedSelector : Selectors option
-    ControlsLocation : float * float
-    HistoryIndex : Map<string, int>
+    //ControlsLocation : float * float
+    //HistoryIndex : Map<string, int>
     Location : int 
 
     Cursor : Selectors
@@ -44,8 +44,9 @@ type Event =
   | Evaluate of all:bool
   | MergeEdits of Edit list
   | HighlightSelector of Selectors option
-  | SelectNode of option<string * (float * float)>
-  | MoveHistory of int 
+
+  //| SelectNode of option<string * (float * float)>
+  //| MoveHistory of int 
 
 
 let formatSelector state trigger sel = 
@@ -80,18 +81,21 @@ let rec formatNode state trigger (nd:Node) =
         yield text "}"
       ]
 
+(*
 let rec getPreviousNode nd i = 
   match nd.Previous with 
   | _ when i = 0 -> nd 
   | Some nd -> getPreviousNode nd (i - 1)
   | None -> nd
-
+  *)
 let rec renderNode state trigger path pid nd = 
   let (++) s1 s2 = if s1 <> "" then s1 + "_" + s2 else s2
+  (*
   let nd, historyIndex = 
     match state.HistoryIndex.TryFind(pid) with 
     | Some hist -> getPreviousNode nd hist, hist
     | _ -> nd, 0
+  *)
   let tag = 
     match nd.Expression with 
     | Record(tag, _, _) -> tag
@@ -115,18 +119,21 @@ let rec renderNode state trigger path pid nd =
     yield "id" => pid 
     yield "class" => 
       ( match state.HighlightedSelector with Some s when matches s path -> "hidoc " | _ -> "") + 
-      ( if historyIndex > 0 then "historical " else "") +
+      //( if historyIndex > 0 then "historical " else "") +
       ( if matches state.Cursor path then "cursor " else "")
     yield! handlers
+    (*
     if List.forall (fun (k, _) -> k <> "click") handlers then
       yield "click" =!> fun h e ->
         if (unbox<Browser.Types.MouseEvent> e).ctrlKey then
           e.cancelBubble <- true;
           trigger(SelectNode(Some(pid, (h.offsetLeft(* + h.offsetWidth*), h.offsetTop))))
+    *)
   ] 
   let body = [
+    (*
     if state.SelectedNode = Some pid then 
-      let x, y = state.ControlsLocation
+      let x, y = state.ControlsLocation      
       let canDown = historyIndex > 0 
       let canUp = nd.Previous.IsSome
       yield h?div ["id" => "hcontrols"; "style" => $"left:{int x}px; top:{int y}px"] [
@@ -137,6 +144,7 @@ let rec renderNode state trigger path pid nd =
               "click" =!> fun _ e -> e.cancelBubble <- true; if canUp then trigger(MoveHistory 1) ] []
         h?span [ "class" => "details" ] [ formatNode state trigger nd ]
       ]
+      *)
     match nd.Expression with 
     | Record(_, List, nds) -> 
         for i, a in Seq.indexed nds -> renderNode state trigger (path @ [Index i]) (pid ++ string i) a
@@ -182,6 +190,8 @@ let renderEdit i state trigger ed =
           yield text $"{k} = "
           yield v
         yield text ")"
+        if ed.Conditions <> [] then 
+          yield text " [*]"
       ]
     ]
   match ed.Kind with 
@@ -189,8 +199,8 @@ let renderEdit i state trigger ed =
   | EditText(sel, fn) -> render "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
   | Reorder(sel, perm) -> render "reorder" "fa-list-ol" sel ["perm", text (string perm)]
   | Copy(src, tgt) -> render "copy" "fa-copy" tgt ["from", formatSelector state trigger src]
-  | WrapRecord(id, tg, typ, sel) -> render "wrap" "fa-regular fa-square" sel ["id", text id; "tag", text tg; "typ", text (string typ)]
-  | Replace(sel, _, nd) -> render "replace" "fa-repeat" sel ["node", formatNode state trigger nd]
+  | WrapRecord(id, tg, typ, sel, _) -> render "wrap" "fa-regular fa-square" sel ["id", text id; "tag", text tg; "typ", text (string typ)]
+  | Replace(sel, nd) -> render "replace" "fa-repeat" sel ["node", formatNode state trigger nd]
   | AddField(sel, nd) -> render "addfield" "fa-plus" sel ["node", formatNode state trigger nd]
   | UpdateTag(sel, tag) -> render "retag" "fa-code" sel ["tag", text tag]
   | UpdateId(sel, id) -> render "updid" "fa-font" sel ["id", text id]
@@ -220,8 +230,9 @@ let render trigger (state:State) =
           let commands = [
             "wr", " [tag] [id] [list|object|apply]", "Wrap current element in a record" 
             "id", " [id]", "Change id of current element to 'id'"
-            "an", " [fld] [num]", "Append number 'num' as a field 'fld' to the current record"
-            "ar", " [fld] [num|str]*", "Append reference (selector) as a field 'fld' to the currnet record"
+            "an", " [fld] [num]", "Append number 'num' as a field 'fld' to the current list"
+            "as", " [fld] [str]", "Append string 'str' as a field 'fld' to the current list"
+            "ar", " [fld] [num|str]*", "Append reference (selector) as a field 'fld' to the currnet list"
             "ah", " [evt]", "Append recorded edits as handler for event 'evt'"
             "ms", "", "Start macro recording"
             "me", "", "End macro recording"
@@ -246,17 +257,19 @@ let render trigger (state:State) =
 //let ops = merge ops1 (opsCore @ opsBudget)
 //let ops = merge (opsCore @ opsBudget) ops1
 
-let ops = opsCore 
+let ops = opsCore @ opsBudget
+//let ops = opsCore 
 
-//let ops = opsCounter
+//let ops = opsBaseCounter
+//let ops = opsBaseCounter @ opsCounterInc @ opsCounterHndl
   
 let state = 
   { Initial = rcd "root" "div"
     HighlightedSelector = None
     Edits = ops
-    HistoryIndex = Map.empty
-    ControlsLocation = 0.0, 0.0
-    SelectedNode = None
+    //HistoryIndex = Map.empty
+    //ControlsLocation = 0.0, 0.0
+    //SelectedNode = None
     Location = ops.Length - 1 
     Cursor = []
     Command = None
@@ -264,6 +277,7 @@ let state =
     }
 
 let rec update (state:State) = function
+  (*
   | MoveHistory diff ->
     match state.SelectedNode with 
     | Some nd -> 
@@ -274,6 +288,7 @@ let rec update (state:State) = function
     { state with SelectedNode = None }
   | SelectNode(Some(pid, pos)) ->
     { state with SelectedNode = Some(pid); ControlsLocation = pos }
+  *)
   | HighlightSelector sel ->
     { state with HighlightedSelector = sel }
   | Evaluate all -> 
@@ -337,13 +352,13 @@ let rec update (state:State) = function
                 | "*", _ -> All
                 | s, _ -> Field s ]
           let retEhEds eds = 
-            let eds = [ for ed in eds -> { Kind = ed; CanDuplicate = true; IsEvaluated = false } ]
+            let eds = [ for ed in eds -> { Kind = ed; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies = [] } ]
             { state with 
                 Edits = merge state.Edits (state.Edits @ eds) 
                 MacroRange = None, None
                 Location = state.Edits.Length + eds.Length - 1; Command = None }
           let retEd ed = 
-            let ed = { Kind = ed; CanDuplicate = true; IsEvaluated = false } 
+            let ed = { Kind = ed; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies = [] } 
             let mr = match state.MacroRange with Some s, _ -> Some s, Some (state.Edits.Length) | _ -> state.MacroRange
             { state with 
                 Edits = merge state.Edits (state.Edits @ [ed]) 
@@ -355,19 +370,21 @@ let rec update (state:State) = function
           match List.ofSeq (cmd.Split(' ')) with 
           | "wr"::tag::id::(kind & ("list" | "object" | "apply"))::[] ->
               let kind = match kind with "list" -> List | "object" -> Object | "apply" -> Apply | _ -> failwith "impossible"
-              WrapRecord(id, tag, kind, state.Cursor) |> retEd
+              WrapRecord(id, tag, kind, state.Cursor, false) |> retEd
           | "id"::id::[] ->
               UpdateId(state.Cursor, id) |> retEd
           | "an"::fld::num::[] ->
-              Append(state.Cursor, { ID = fld; Expression = Primitive(Number (int num)); Previous = None }) |> retEd
+              Append(state.Cursor, { ID = fld; Expression = Primitive(Number (int num)) }) |> retEd
+          | "as"::fld::strs ->
+              Append(state.Cursor, { ID = fld; Expression = Primitive(String (String.concat " " strs)) }) |> retEd
           | "ar"::fld::sel ->
-              Append(state.Cursor, { ID = fld; Expression = Reference (parseSel sel); Previous = None }) |> retEd
+              Append(state.Cursor, { ID = fld; Expression = Reference (parseSel sel) }) |> retEd
           | "ah"::evt::[] -> 
               let eds =
                 match state.MacroRange with 
                 | Some l, Some h -> state.Edits.[l .. h]
                 | _ -> []
-              [ yield Append(state.Cursor, { ID = evt; Expression = Record("x-event-handler", List, []); Previous = None }) 
+              [ yield Append(state.Cursor, { ID = evt; Expression = Record("x-event-handler", List, []) }) 
                 for op in eds ->
                   Append(state.Cursor @ [Field evt], represent op) ]
               |> retEhEds
@@ -395,8 +412,8 @@ let rec update (state:State) = function
   
 
 let trigger, _ = createVirtualDomApp "out" state render update
-Browser.Dom.window.onclick <- fun e -> 
-  trigger(SelectNode None)
+//Browser.Dom.window.onclick <- fun e -> 
+//  trigger(SelectNode None)
 
 Browser.Dom.window.onkeypress <- fun e -> 
   if e.key = "!" then e.preventDefault(); trigger(StartCommand)
