@@ -1,6 +1,6 @@
 ﻿module Tbd.Matcher
 open Tbd.Doc
-
+(*
 let rec matches nd pattern = 
   if (nd.ID <> pattern.ID && pattern.ID <> "*" && pattern.ID <> "#") then None else
   match nd.Expression, pattern.Expression with 
@@ -52,3 +52,4 @@ let applyMatchers doc =
     | { Expression = Record("x-patterns", _, nodes) } -> nodes @ st
     | _ -> st ) []
   |> List.fold matchAndReplace doc
+*)
