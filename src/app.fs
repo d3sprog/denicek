@@ -2,6 +2,7 @@ module Tbd.App
 
 open Tbd.Html
 open Tbd.Doc
+open Tbd.Demos
 
 type State = 
   { Initial : Node 
@@ -200,7 +201,7 @@ let renderEdit i state trigger ed =
   | ListReorder(sel, perm) -> render "reorder" "fa-list-ol" sel ["perm", text (string perm)]
   | Copy(src, tgt) -> render "copy" "fa-copy" tgt ["from", formatSelector state trigger src]
   | WrapRecord(id, tg, sel) -> render "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
-  | WrapList(tg, sel) -> render "wraprec" "fa-regular fa-list-ul" sel ["tag", text tg]
+  | WrapList(tg, sel) -> render "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
   | Replace(sel, nd) -> render "replace" "fa-repeat" sel ["node", formatNode state trigger nd]
   | RecordAdd(sel, f, nd) -> render "addfield" "fa-plus" sel ["node", formatNode state trigger nd; "fld", text f]
   | UpdateTag(sel, t1, t2) -> render "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
@@ -215,10 +216,10 @@ let render trigger (state:State) =
     yield h?div [ "id" => "edits" ] [
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
-      //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
-      //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addSpeakerOps)) ] [text "Add speaker"]
-      //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
-      //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addSpeakerOps)) ] [text "Add speaker"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
       //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
       h?ol [] [
         for i, ed in Seq.rev (Seq.indexed state.Edits) -> renderEdit i state trigger ed

@@ -7,7 +7,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="../src/utils.fs" />
     <Compile Include="../src/doc.fs" />
+    <Compile Include="../src/demos.fs" />
     <Compile Include="tests.fs" />
     <Compile Include="main.fs" />
   </ItemGroup>

@@ -5,6 +5,7 @@
   <ItemGroup>
     <Compile Include="utils.fs" />
     <Compile Include="doc.fs" />
+    <Compile Include="demos.fs" />
     <Compile Include="matcher.fs" />
     <Compile Include="html.fs" />
     <Compile Include="app.fs" />

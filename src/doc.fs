@@ -216,15 +216,32 @@ let removeSelectorPrefix p1 p2 =
     | Tag(t1)::p1, Tag(t2)::p2 when t1 = t2 -> loop (Tag(t1)::specPref) p1 p2
     // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
     // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
-    | Index(i)::p1, All::p2 | All::p1, Index(i)::p2 -> 
-        failwithf "removeSelectorPrefix - Index/All - arguably error"; loop (Index(i)::specPref) p1 p2
-    | Tag(t)::p1, All::p2 | All::p1, Tag(t)::p2 -> loop (Tag(t)::specPref) p1 p2
+    //| Index(i)::p1, All::p2 | All::p1, Index(i)::p2 -> 
+        //failwith "removeSelectorPrefix - Index/All - arguably error %"
+      //  loop (Index(i)::specPref) p1 p2
+    //| Index(_)::_ | All(_::)
+    //| Tag(t)::p1, All::p2 | All::p1, Tag(t)::p2 -> loop (Tag(t)::specPref) p1 p2
+    //
+    // More thinking - When called from 'scopeEdit' we maybe do not want to scope edits that 
+    // have been applied to specific indices (because we do not want to 
+    // apply those to newly added nodes)? but maybe it is ok??
+    //
+    // When called from 'copyEdits' - if we copied All of something (p1) but
+    // have an edit to a specific index in the source, we want to also apply it
+    // to the other location at the given index.
+    // So for that we need -
+    // (when called from scopeEdit, if we are appending to All, but an edit was
+    // done at a specific index, we do not want to apply it to All - but are ok
+    // with applying it at the specific index - so this is also OK)
+    | All::p1, Index(i)::p2 ->
+        loop (Index(i)::specPref) p1 p2
+
     | All::p1, All::p2 -> loop (All::specPref) p1 p2
     | [], p2 -> Some(List.rev specPref, p2)
     | _ -> None
   loop [] p1 p2
   
-let (|RemoveSelectorPrefix|_|) selbase sel = 
+let (|ScopeSelector|_|) selbase sel = 
   removeSelectorPrefix selbase sel |> Option.map snd
 
 let (|MatchingFirst|_|) = function 
@@ -237,6 +254,9 @@ let (|MatchingFirst|_|) = function
   | _ -> None
 
 let (|IncompatibleFirst|_|) = function
+  | Field(f1)::_, Field(f2)::_ when f1 <> f2 -> Some()
+  | Index(i1)::_, Index(i2)::_ when i1 <> i2 -> Some()
+  | Tag(t1)::_, Tag(t2)::_ when t1 <> t2 -> Some()
   | (All|Index _|Tag _|Field _)::_, []
   | (All|Index _|Tag _)::_, Field(_)::_ 
   | Field(_)::_, (All|Index _|Tag _)::_ -> Some()
@@ -261,12 +281,13 @@ let reorderSelectors ord selOther selReord =
   reorder selOther selReord
 
 let wrapRecordSelectors id selOther selWrap =
-  if id = "" then failwith "wrapRecordSelectors - Cannot wrap without an id"
   // Returns a modified version of 'selOther' to match
   // the additional wrapping (in a record with original at @id) at location specified by 'selWrap'
   let rec wrapsels selOther selWrap =
     match selOther, selWrap with 
-    | selOther, [] -> Field(id)::selOther // interesting case here
+    | selOther, [] -> 
+        if id = "" then failwith "wrapRecordSelectors - Cannot wrap without an id"
+        Field(id)::selOther // interesting case here
     | MatchingFirst(s, selOther, selWrap) -> s::(wrapsels selOther selWrap)
     | TooSpecific(s) -> failwith $"wrapRecordSelectors - Too specific selector {s} matched against Any"
     | IncompatibleFirst() -> selOther
@@ -393,9 +414,10 @@ let apply doc edit =
   // (dtto.)
   | UpdateTag(sel, tagOld, tagNew) ->
       if not (isStructuralSelector sel) then failwith $"apply.UpdateTag - Maybe allow, but do not update refs? UpdateTag with non-structural selector {sel}"
-      let doc = replace (fun p el -> 
+      let doc = replace (fun p el ->
         match el with 
         | Record(t, nds) when matches p sel && t = tagOld -> Some(Record(tagNew, nds))
+        | List(t, nds) when matches p sel && t = tagOld -> Some(List(tagNew, nds))
         | _ -> None ) doc
       let nsels = getNodeSelectors doc |> List.map (fun s1 -> updateTagSelectors tagOld tagNew s1 sel)
       withNodeSelectors doc nsels
@@ -412,14 +434,25 @@ let apply doc edit =
       withNodeSelectors doc nsels
 
   // Changes structure, so only do this if selector is not value-specific
+  // Could in principle break references pointing to the replaced thing
+  // (but we have no fix)
   | Replace(sel, nd) ->
-      if not (isStructuralSelector sel) then failwith $"apply.Replace - Maybe allow, but do not update refs? Replace  with non-structural selector {sel}"
+      if not (isStructuralSelector sel) then
+        // NOTE: As in copy - this potentially changes the structure of the target list
+        // but we need to allow this so that we can evaluate lists of formulas!
+        ()
+        //failwith $"apply.Replace - Maybe allow, but do not update refs? Replace  with non-structural selector {sel}"
       replace (fun p el -> 
         if matches p sel then Some(nd)
         else None ) doc
 
+  // Changes structure, so only do this if selector is not value-specific
+  // Additive so no need to update references
   | RecordAdd(sel, fld, v) ->
-      if not (isStructuralSelector sel) then failwith $"apply.RecordAdd - Maybe allow, but do not update refs? RecordAdd  with non-structural selector {sel}"
+      // NOTE: Allowing this, otherwise we cannot construct a list of formulas!
+      // (but the operation creates a heterogeneous list temporarily...)
+      //
+      // if not (isStructuralSelector sel) then failwith $"apply.RecordAdd - Maybe allow, but do not update refs? RecordAdd  with non-structural selector {sel}"
       replace (fun p el -> 
         match el with 
         | Record(tag, nds) when matches p sel -> Some(Record(tag, nds @ [fld, v]))
@@ -429,17 +462,49 @@ let apply doc edit =
   // What should we do if there are selectors in the doc pointing to the copied source?
   // (duplicate something? this makes no good sense...)
   | Copy(sel1, sel2) ->
-      if not (isStructuralSelector sel2) then failwith $"apply.Copy - Maybe allow, but potentially changes structure"
+      if not (isStructuralSelector sel2) then 
+        ()
+        // NOTE: As below - this potentially changes the structure of the target list
+        // but we need to allow this so that we can evaluate lists of formulas!
+        // failwith $"apply.Copy - Maybe allow, but potentially changes structure"
       let codeRefExists = getNodeSelectors doc |> List.exists (fun s1 -> includes sel1 s1)
-      if codeRefExists then failwith "apply.Copy - Maybe allow, but there are refs to the source"
+      if codeRefExists then 
+        // NOTE: What to do if there are refs to the source in the document?
+        // For now, allow, because we need to allow this for "transient" evaluated edits!
+        () //failwith "apply.Copy - Maybe allow, but there are refs to the source"
 
-      // NOTE: This is a bit too clever (if there is one target, it 
-      // implicitly creates list with all source nodes to be copied there)
-      let mutable exprs = 
+      let sel2, exprs = 
         match select sel2 doc, select sel1 doc with         
-        | tgs, srcs when tgs.Length = srcs.Length -> srcs
-        | [_], nds -> failwith "apply.Copy - Be too clever and autowrap target??"; [ List("div", nds) ]
+        | tgs, srcs when tgs.Length = srcs.Length -> sel2, srcs
+
+        | [tgt], nds -> 
+            // NOTE: This is a bit too clever (if there is one target, it 
+            // implicitly creates list with all source nodes to be copied there)
+            // NOTE: In the conf organizer, we had /$builtins/count(arg=/speakers/*)
+            // which refers to multiple nodes - copying that into a single node required
+            // evil magic - but we can just refer to /speakers/ directly.
+            // 
+            // printfn $"TGTSEL={sel2}, TARGETS={tgt}, SOURCES={nds.Length}"
+            //
+            // But the above does not work for computing the totals where we need
+            // to select /totals/*/item/formula - so
+            // perhaps this is ok if the target to be copied into is a list???
+            //
+            // "splice" values into the parent list
+            match List.rev sel2 with 
+            | Index _::sel2par ->
+                let sel2mod = List.rev sel2par
+                match select sel2mod doc with
+                | [List(t, _)] ->
+                    sel2mod, [ List(t, nds) ]
+                | tgt ->
+                    failwith $"apply.Copy - Tried to be too clever, but no list here = {tgt}"
+            | _ ->
+              failwith "apply.Copy - Be too clever and autowrap target??"; 
+
         | _ -> failwith "apply.Copy - Mismatching number of source and target notes"
+
+      let mutable exprs = exprs
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       replace (fun p el -> 
         if matches p sel2 then Some(next())
@@ -468,6 +533,7 @@ let copyEdit e1 srcSel tgtSel =
   // For cases when the edit 'e1' targets something inside the copied (from srcSel to tgtSel)
   let origSels = getSelectors e1 
   let newSels = origSels |> List.map (fun sel ->
+    printfn $"COPY EDIT {srcSel}, {sel}"
     match removeSelectorPrefix srcSel sel with 
     | Some(specPrefix, suffix) -> 
         tgtSel @ suffix |> substituteWithMoreSpecific specPrefix
@@ -520,16 +586,17 @@ let updateSelectors e1 e2 =
 /// returns new edit that is relatively to the subtree specified by selbase 
 let scopeEdit selBase edit = 
   match edit with 
-  | ListAppend(RemoveSelectorPrefix selBase sel, nd) -> Some(ListAppend(sel, nd))
-  | PrimitiveEdit(RemoveSelectorPrefix selBase sel, f) -> Some(PrimitiveEdit(sel, f))
-  | ListReorder(RemoveSelectorPrefix selBase sel, p) -> Some(ListReorder(sel, p))
-  | WrapRecord(id, tag, RemoveSelectorPrefix selBase sel) -> Some(WrapRecord(id, tag, sel))
-  | Replace(RemoveSelectorPrefix selBase sel, nd) -> Some(Replace(sel, nd)) 
-  | RecordAdd(RemoveSelectorPrefix selBase sel, fld, nd) -> Some(RecordAdd(sel, fld, nd))
-  | UpdateTag(RemoveSelectorPrefix selBase sel, t1, t2) -> Some(UpdateTag(sel, t1, t2))
-  | RecordRenameField(RemoveSelectorPrefix selBase sel, t) -> Some(RecordRenameField(sel, t))
-  | Copy(RemoveSelectorPrefix selBase s1, RemoveSelectorPrefix selBase s2) -> Some(Copy(s1, s2))
-  | Copy _ // TODO: failwith "scopeEdit.Copy - non-local copy - need to think about this one"
+  | ListAppend(ScopeSelector selBase sel, nd) -> Some(ListAppend(sel, nd))
+  | PrimitiveEdit(ScopeSelector selBase sel, f) -> Some(PrimitiveEdit(sel, f))
+  | ListReorder(ScopeSelector selBase sel, p) -> Some(ListReorder(sel, p))
+  | WrapRecord(id, tag, ScopeSelector selBase sel) -> Some(WrapRecord(id, tag, sel))
+  | Replace(ScopeSelector selBase sel, nd) -> Some(Replace(sel, nd)) 
+  | RecordAdd(ScopeSelector selBase sel, fld, nd) -> Some(RecordAdd(sel, fld, nd))
+  | UpdateTag(ScopeSelector selBase sel, t1, t2) -> Some(UpdateTag(sel, t1, t2))
+  | RecordRenameField(ScopeSelector selBase sel, t) -> Some(RecordRenameField(sel, t))
+  | Copy(ScopeSelector selBase s1, ScopeSelector selBase s2) -> Some(Copy(s1, s2))
+  | Copy _ -> // TODO: 
+      failwith "scopeEdit.Copy - non-local copy - need to think about this one"
   | _ -> None
 
 let applyToAdded e1 e2 = 
@@ -703,24 +770,6 @@ let rec evaluateAll doc = seq {
 // --------------------------------------------------------------------------------------
 // Evaluation
 // --------------------------------------------------------------------------------------
-
-let rcd tag = Record(tag, [])
-let lst tag = List(tag, [])
-let ref sel = Reference(sel)
-let nds fld tag s = Record(tag, [fld, Primitive(String s)])
-let ndn fld tag n = Record(tag, [fld, Primitive(Number n)])
-
-let ap s n = { Kind = ListAppend(s, n) } //}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let apnd s n = { Kind = ListAppend(s, n) } //}//; CanDuplicate = false; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let wr s fld tag = { Kind = WrapRecord(fld, tag, s) }
-let wl s tag = { Kind = WrapList(tag, s) }//}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let ord s l = { Kind = ListReorder(s, l) } //CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let ed sel fn f = transformations.[fn] <- f; { Kind = PrimitiveEdit(sel, fn) } //}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let add sel f n = { Kind = RecordAdd(sel, f, n)}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let cp s1 s2 = { Kind = Copy(s1, s2)}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2)}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-let uid s id = { Kind = RecordRenameField(s, id)}//; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies=[] }
-
 (*
 let representSel sel = 
   Record("x-selectors", List, 
@@ -782,144 +831,3 @@ let represent op =
         "target", representSel target; "id", Primitive(String id)
       ]
      *) 
-     (*
-let opsBaseCounter = 
-  [ 
-    ap [] (nds "title" "h1" "Counter")
-    ap [] (rcd "counter" "p")
-    ap [Field "counter"] (nds "label" "strong" "Count: ")
-    ap [Field "counter"] (ndnp "value" 0)
-    ap [] (nds "inc" "button" "Increment")
-    ap [] (nds "dec" "button" "Decrement")
-  ]
-let opsCounterInc = 
-  [
-    wr [Field "counter"; Field "value"] Apply "value" "span"
-    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
-    ap [Field "counter"; Field "value"] (ndnp "left" 1)
-    uid [Field "counter"; Field "value"; Field "value"] "right"
-  ]
-let opsCounterDec = 
-  [
-    wr [Field "counter"; Field "value"] Apply "value" "span"
-    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
-    ap [Field "counter"; Field "value"] (ndnp "left" -1)
-    uid [Field "counter"; Field "value"; Field "value"] "right"
-  ]
-let opsCounterHndl = 
-  [ yield ap [Field "inc"] (lst "click" "x-event-handler")
-    for op in opsCounterInc ->
-      ap [Field "inc"; Field "click"] (represent op) 
-    yield ap [Field "dec"] (lst "click" "x-event-handler")
-    for op in opsCounterDec ->
-      ap [Field "dec"; Field "click"] (represent op) ]
-
-
-
-let addSpeakerOps = 
-  [ 
-    ap [Field "speakers"] (nds "" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ord [Field "speakers"] [3; 0; 1; 2] 
-  ]
-
-let fixSpeakerNameOps = 
-  [
-    ed [Field("speakers"); Index(2); Field("value")] "rename Jean" <| fun s -> 
-      s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@")
-  ]
-
-let refactorListOps = 
-  [
-    uid [Field "speakers"; All; Field "value"] "name"
-    wr [Field "speakers"; All; Field "name"] Object "contents" "td"
-    add [Field "speakers"; All] (nds "email" "td" "")
-    tag [Field "speakers"; All] "tr"
-    tag [Field "speakers"] "tbody"
-    
-    wr [Field "speakers"] Object "body" "table"
-    add [Field "speakers"] (rcd "head" "thead")
-    add [Field "speakers"; Field "head"] (nds "name" "td" "Name")
-    add [Field "speakers"; Field "head"] (nds "email" "td" "E-mail")
-
-    cp [Field "speakers"; Field "body"; All; Field "name"] [Field "speakers"; Field "body"; All; Field "email"]
-    ed [Field "speakers"; Field "body"; All; Field "name"; Field "contents"] "get name" <| fun s -> 
-      s.Substring(0, s.IndexOf(','))
-    ed [Field "speakers"; Field "body"; All; Field "email"; Field "contents"] "get email" <| fun s -> 
-      s.Substring(s.IndexOf(',')+1).Trim()
-  ]
-
-let addTransformOps = 
-  [
-    ap [] (nds "ttitle" "h2" "Transformers")
-    add [] (rcd "x-patterns" "x-patterns")
-    add [ Field "x-patterns"] (rcd "head" "thead")
-    add [ Field "x-patterns"; Field "head" ] (rcd "*" "td")
-    add [ Field "x-patterns"; Field "head"; Field "*" ] (rcd "*" "x-hole")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*" ] (rcd "mq" "marquee")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*"; Field "mq" ] (rcd "" "x-match")
-  ] 
-  *)
-let opsCore = 
-  [
-    add [] "" (nds "title" "h1" "Programming conference 2023")
-    add [] "" (nds "stitle" "h2" "Speakers")
-    add [] "speakers" (lst "ul")
-    ap [Field "speakers"] (nds "" "li" "Adele Goldberg, adele@xerox.com") 
-    ap [Field "speakers"] (nds "" "li" "Margaret Hamilton, hamilton@mit.com") 
-    ap [Field "speakers"] (nds "" "li" "Betty Jean Jennings, betty@rand.com") 
-  ]
-  (*
-let opsBudget = 
-  [
-    ap [] (nds "btitle" "h2" "Budgeting")
-    ap [] (nds "ntitle" "h3" "Number of people")
-    ap [] (rcd "counts" "ul")
-    ap [Field "counts"] (nds "attendees" "span" "Attendees: ") 
-    wr [Field "counts"; Field "attendees"] Object "" "li"
-    ap [Field "counts"; Field "attendees"] (ndn "count" "strong" 100)
-    ap [Field "counts"] (nds "speakers" "span" "Speakers: ") 
-    wr [Field "counts"; Field "speakers"] Object "" "li"
-    apnd [Field "counts"; Field "speakers"] (ref "count" [Field "speakers"; All])
-    wr [Field "counts"; Field "speakers"; Field "count"] Apply "arg" "span"
-    ap [Field "counts"; Field "speakers"; Field "count"] (ref "op" [Field "$builtins"; Field "count"])
-
-    ap [] (nds "ititle" "h3" "Item costs")
-    ap [] (rcd "costs" "ul")
-    ap [Field "costs"] (nds "travel" "span" "Travel per speaker: ") 
-    wr [Field "costs"; Field "travel"] Object "" "li"
-    ap [Field "costs"; Field "travel"] (ndn "cost" "strong" 1000)
-    ap [Field "costs"] (nds "coffee" "span" "Coffee break per person: ") 
-    wr [Field "costs"; Field "coffee"] Object "" "li"
-    ap [Field "costs"; Field "coffee"] (ndn "cost" "strong" 5)
-    ap [Field "costs"] (nds "lunch" "span" "Lunch per person: ") 
-    wr [Field "costs"; Field "lunch"] Object "" "li"
-    ap [Field "costs"; Field "lunch"] (ndn "cost" "strong" 20)
-    ap [Field "costs"] (nds "dinner" "span" "Dinner per person: ") 
-    wr [Field "costs"; Field "dinner"] Object "" "li"
-    ap [Field "costs"; Field "dinner"] (ndn "cost" "strong" 80)
-    
-    ap [] (nds "ttitle" "h3" "Total costs")
-    ap [] (lst "totals" "ul")
-
-    // NOTE: Construct things in a way where all structural edits (wrapping)
-    // are applied to the entire list using All (this should be required!)
-    // because otherwise we may end up with inconsistent structures
-    ap [Field "totals"] (nds "" "span" "Refreshments: ") 
-    ap [Field "totals"] (nds "" "span" "Speaker travel: ") 
-    wr [Field "totals"; All] Object "" "li"
-    ap [Field "totals"; Index 0] (ref "item" [Field "costs"; Field "coffee"; Field "cost"; Field "value"])
-    ap [Field "totals"; Index 1] (ref "item" [Field "costs"; Field "travel"; Field "cost"; Field "value"])
-    wr [Field "totals"; All; Field "item"] Apply "left" "span"
-    ap [Field "totals"; Index 0; Field "item"] (ref "right" [Field "counts"; Field "attendees"; Field "count"; Field "value"])
-    ap [Field "totals"; Index 1; Field "item"] (ref "right" [Field "counts"; Field "speakers"; Field "count"])
-    ap [Field "totals"; Index 0; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
-    ap [Field "totals"; Index 1; Field "item"] (ref "op" [Field "$builtins"; Field "*"])
-    wr [Field "totals"; All; Field "item"] Object "value" "strong"
-    
-    ap [] (nds "ultimate" "h3" "Total: ") 
-    wr [Field "ultimate" ] Object "" "span"
-    ap [Field "ultimate" ] (ref "item" [Field "totals"; All; Field "item"; Field "value"])
-    wr [Field "ultimate"; Field "item"] Apply "arg" "span"
-    ap [Field "ultimate"; Field "item"] (ref "op" [Field "$builtins"; Field "sum"])
-  ]
-  *)

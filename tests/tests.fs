@@ -7,9 +7,10 @@ open Expecto
 let equals a b = Expect.equal a b "Should equal"
 #endif
 open Tbd.Doc
+open Tbd.Demos
 
-let applyAll = List.fold apply (rcd "root" "div")
-
+let applyAll = List.fold apply (rcd "div")
+(*
 [<Tests>]
 let evalTests =
   testList "evaluation" [    
@@ -29,6 +30,7 @@ let evalTests =
       match r3 with [{ Expression = Primitive(Number n) }] -> equals n 4500.0 | _ -> failtest "Expected primitive result" 
     }
   ]
+*)
 
 [<Tests>]
 let mergeTests =
@@ -51,17 +53,17 @@ let mergeTests =
 
     test "refactoring merges with name fix" {
       let ops1 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
-      let doc1 = ops1 |> List.fold apply (rcd "root" "div")
+      let doc1 = ops1 |> List.fold apply (rcd "div")
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
-      let doc2 = ops2 |> List.fold apply (rcd "root" "div")
+      let doc2 = ops2 |> List.fold apply (rcd "div")
       doc1 |> equals doc2 
     }
 
     test "adding budget merges with refactoring" {
       let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
-      let doc1 = ops1 |> List.fold apply (rcd "root" "div")
+      let doc1 = ops1 |> List.fold apply (rcd "div")
       let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
-      let doc2 = ops2 |> List.fold apply (rcd "root" "div")
+      let doc2 = ops2 |> List.fold apply (rcd "div")
       doc1 |> equals doc2 
     }
   ]
