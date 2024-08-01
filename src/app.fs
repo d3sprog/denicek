@@ -170,14 +170,14 @@ let rec renderNode state trigger path pid nd =
   h?(tag) attrs body
     
 
-let renderEdit i state trigger ed = 
+let renderEdit trigger state i ed doc = 
   let recorded = match state.MacroRange with Some l, Some h -> i >= l && i <= h | _ -> false
   let render n fa sel args = 
     h?li ["class" => (if recorded then "recorded" else "") ] [             
       h?a [ 
         "class" => 
-          (if i = state.Location then "sel " else " ") + 
-          "" //(if ed.IsEvaluated then "eval " else "") 
+          (if i = state.Location then "sel " else " ") //+ 
+          //(if enabled doc ed then "" else "eval ") 
         "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(Show i) 
       ] [ 
         yield h?i [ "class" => "fa " + fa ] [] 
@@ -217,12 +217,16 @@ let render trigger (state:State) =
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
-      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addSpeakerOps)) ] [text "Add speaker"]
+      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget @ addSpeakerOps)) ] [text "Add speaker"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
       h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
       //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
       h?ol [] [
-        for i, ed in Seq.rev (Seq.indexed state.Edits) -> renderEdit i state trigger ed
+        if not (Seq.isEmpty state.Edits) then
+          let indexed = Seq.indexed state.Edits
+          let (_, headEd), tail = Seq.head indexed, Seq.tail indexed
+          let edits = tail |> Seq.scan (fun (_, ed, st) (i, nextEd) -> i, nextEd, apply st ed) (0, headEd, state.Initial)
+          for i, ed, doc in Seq.rev edits -> renderEdit trigger state i ed doc
       ]
     ]
     match state.Command with 
@@ -296,7 +300,7 @@ let rec update (state:State) = function
   | Evaluate all -> 
     let edits = 
       if all then state.FinalDocument |> evaluateAll |> List.ofSeq
-      else state.FinalDocument |> evaluate
+      else state.FinalDocument |> evaluateDoc
     let nedits = state.Edits @ edits
     { state with Edits = nedits; Location = nedits.Length-1 }
   | MergeEdits edits ->

@@ -120,11 +120,13 @@ type EditKind =                                             // =======|=========
 //  | Equals | NotEquals 
 
 //type EditCondition = 
-  //| TagCondition of Selectors * RelationalOperator * string
+  //| SelectorHashEquals of Selectors * int
+  //| Never
+//| TagCondition of Selectors * RelationalOperator * string
 
 type Edit = 
   { Kind : EditKind 
-    //Conditions : EditCondition list
+//    Conditions : EditCondition list
     //Dependencies : Selectors list
     //IsEvaluated : bool
     //CanDuplicate : bool 
@@ -158,15 +160,16 @@ let getSelectors ed =
   | ListAppend(s, nd) | Replace(s, nd) | RecordAdd(s, _, nd) -> s :: (getNodeSelectors nd)
   | Copy(s1, s2) -> [s1; s2]
 
-/// Not including 'Reference' selectors in expressions
 (*
+/// Not including 'Reference' selectors in expressions
 let getDependenciesSelectors ed = 
   match ed.Kind with 
   | PrimitiveEdit(s, _) | ListReorder(s, _) | RecordRenameField(s, _) 
-  | UpdateTag(s, _) | WrapRecord(_, _, s) | WrapList(_, s)
-  | ListAppend(s, _) | RecordAdd(s, _) | Replace(s, _) -> s::ed.Dependencies
-  | Copy(s1, s2) -> s1::s2::ed.Dependencies
+  | UpdateTag(s, _, _) | WrapRecord(_, _, s) | WrapList(_, s)
+  | ListAppend(s, _) | RecordAdd(s, _, _) | Replace(s, _) -> [s]
+  | Copy(s1, s2) -> s1::s2::[]
 *)
+
 let getTargetSelector ed = 
   match ed.Kind with 
   | PrimitiveEdit(s, _) | ListReorder(s, _) | RecordRenameField(s, _) 
@@ -340,17 +343,22 @@ let rec isStructuralSelector sel =
   | Index _::_ -> false
   | (All | Tag _ | Field _)::sel -> isStructuralSelector sel
 
+  (*
+let enabled doc edit = 
+  edit.Conditions |> List.forall (function 
+    | SelectorHashEquals(sel, h) -> hash (select sel doc) = h
+    | Never -> false
+  )
+  | TagCondition(sel, rel, t1) -> select sel doc |> List.forall (function
+      | { Expression = Record(t2, _, _) } ->
+          (rel = Equals && t1 = t2) || (rel = NotEquals && t1 <> t2)        
+      | _ -> rel = NotEquals )) // No tag - also passes != check
+      *)
+
 let apply doc edit =
-(*
-  let enabled = edit.Conditions |> List.forall (function 
-    | TagCondition(sel, rel, t1) -> select sel doc |> List.forall (function
-        | { Expression = Record(t2, _, _) } ->
-            (rel = Equals && t1 = t2) || (rel = NotEquals && t1 <> t2)        
-        | _ -> rel = NotEquals )) // No tag - also passes != check
-*)
   match edit.Kind with
-  //| _ when not enabled ->
-  //    doc
+  //| _ when not (enabled doc edit) ->
+    //  doc
 
   // We can always do this, but it may add new kinds of things to a list
   // This has no effect on any selectors 
@@ -385,20 +393,24 @@ let apply doc edit =
   // We need to wrap selectors in code refs 
   // (dtto.)
   | WrapRecord(id, tag, sel) ->
-      if not (isStructuralSelector sel) then failwith $"apply.WrapRecord - Maybe allow, but do not update refs? WrapRecord with non-structural selector {sel}"
+      //if not (isStructuralSelector sel) then failwith $"apply.WrapRecord - Maybe allow, but do not update refs? WrapRecord with non-structural selector {sel}"
       // Do the actual record wrapping
       let doc = replace (fun p el -> 
         if matches p sel then Some(Record(tag, [id, el]))
         else None ) doc
       // Replace all relevant selectors (in references in code)
       // if notupd then doc else
-      let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapRecordSelectors id s1 sel)
-      withNodeSelectors doc nsels
+      if isStructuralSelector sel then
+        let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapRecordSelectors id s1 sel)
+        withNodeSelectors doc nsels
+      else 
+        doc
 
   // Changes structure, so only do this if selector is not value-specific
   // We need to wrap selectors in code refs 
   // (dtto.)
   | WrapList(tag, sel) ->
+      // TODO: Do the same as with WrapRecord? 
       if not (isStructuralSelector sel) then failwith $"apply.WrapList - Maybe allow, but do not update refs? WrapList with non-structural selector {sel}"
       // Do the actual record wrapping
       let doc = replace (fun p el -> 
@@ -477,7 +489,6 @@ let apply doc edit =
         match select sel2 doc, select sel1 doc with         
         | tgs, srcs when tgs.Length = srcs.Length -> sel2, srcs
 
-        | [tgt], nds -> 
             // NOTE: This is a bit too clever (if there is one target, it 
             // implicitly creates list with all source nodes to be copied there)
             // NOTE: In the conf organizer, we had /$builtins/count(arg=/speakers/*)
@@ -491,6 +502,8 @@ let apply doc edit =
             // perhaps this is ok if the target to be copied into is a list???
             //
             // "splice" values into the parent list
+            
+            (*
             match List.rev sel2 with 
             | Index _::sel2par ->
                 let sel2mod = List.rev sel2par
@@ -500,7 +513,10 @@ let apply doc edit =
                 | tgt ->
                     failwith $"apply.Copy - Tried to be too clever, but no list here = {tgt}"
             | _ ->
-              failwith "apply.Copy - Be too clever and autowrap target??"; 
+              *)
+        | [List(t, _)], nds -> sel2, [List(t, nds)]
+        | [tgt], nds -> 
+            failwith $"apply.Copy - Be too clever and autowrap target?? sel2={sel2}"; 
 
         | _ -> failwith "apply.Copy - Mismatching number of source and target notes"
 
@@ -533,7 +549,7 @@ let copyEdit e1 srcSel tgtSel =
   // For cases when the edit 'e1' targets something inside the copied (from srcSel to tgtSel)
   let origSels = getSelectors e1 
   let newSels = origSels |> List.map (fun sel ->
-    printfn $"COPY EDIT {srcSel}, {sel}"
+    //printfn $"COPY EDIT {srcSel}, {sel}"
     match removeSelectorPrefix srcSel sel with 
     | Some(specPrefix, suffix) -> 
         tgtSel @ suffix |> substituteWithMoreSpecific specPrefix
@@ -595,8 +611,15 @@ let scopeEdit selBase edit =
   | UpdateTag(ScopeSelector selBase sel, t1, t2) -> Some(UpdateTag(sel, t1, t2))
   | RecordRenameField(ScopeSelector selBase sel, t) -> Some(RecordRenameField(sel, t))
   | Copy(ScopeSelector selBase s1, ScopeSelector selBase s2) -> Some(Copy(s1, s2))
-  | Copy _ -> // TODO: 
-      failwith "scopeEdit.Copy - non-local copy - need to think about this one"
+  | Copy(s1, s2) -> 
+      match removeSelectorPrefix selBase s1, removeSelectorPrefix selBase s2 with
+      | None, None -> 
+          // Both are source and target of the copy are outside of the location 
+          // where we are adding something, so we can happily skip the Copy edit
+          None
+      | _ ->
+        failwith $"scopeEdit.Copy - non-local copy - need to think about this one: BASE={selBase}, EDIT={edit}"
+  
   | _ -> None
 
 let applyToAdded e1 e2 = 
@@ -638,13 +661,13 @@ let merge e1s e2s =
         // Collect shared edits until the two histories diverge
         loop (e1::acc) e1s e2s
     | e1s, e2s ->
+    (*
         // We want to modify 'e2' edits so that they can be placed after 'e1'
         // If edits in 'e2' conflict with "evaluation" edits in 'e1', remove those
         //printfn $"MERGEING! Target selectors={e2s |> List.map getTargetSelector}"
-        (*
         let mutable tgtSels = e2s |> List.map getTargetSelector |> Set.ofSeq
-        let e1s = e1s |> List.filter (fun e1 ->
-          if not e1.IsEvaluated then true else
+        let e1s = e1s |> List.map (fun e1 ->
+          //if not e1.IsEvaluated then true else
             let sels = getDependenciesSelectors e1
             let affected = sels |> Seq.exists (fun sel -> 
               tgtSels |> Set.exists (fun tgtSel -> Option.isSome (removeSelectorPrefix tgtSel sel)))
@@ -652,12 +675,11 @@ let merge e1s e2s =
               //printfn $"AFFECTED - {e1}"
               //printfn $"AFFECTED - target selector {getTargetSelector e1}"
               tgtSels <- tgtSels.Add(getTargetSelector e1)
-              false
+              { e1 with Conditions = e1.Conditions @ [Never] }
             else 
               //printfn $"FINE - {e1}"
-              true )
-        *)
-
+              e1 )
+      *)  
         let e2sAfter = 
           e2s |> List.collect (fun e2 ->
               // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
@@ -712,19 +734,33 @@ let (|Args|) args =
   let args = Map.ofSeq args
   args.["op"], args
 
-let evaluateRaw nd =
-  match evalSite [] nd with
+let (|ListFind|_|) k = List.tryFind (fst >> (=) k)
+
+let evaluateRaw doc =
+  match evalSite [] doc with
   | None -> []
   | Some sels ->
-      let it = match select sels nd with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
+      let it = match select sels doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
       match it with 
       | Reference(p) -> 
           [ //Copy(p, sels), [TagCondition(p, NotEquals, "x-evaluated")], [p]
             //Copy(p @ [Field "result"], sels), [TagCondition(p, Equals, "x-evaluated")], [p @ [Field "result"]] 
-            Copy(p, sels)
+            WrapRecord("ref", "x-evaluated", sels)
+            RecordAdd(sels, "result", List("ul", []))
+            Copy(p, sels @ [Field "result"]) //, [SelectorHashEquals(p, hash (select p doc))]
+            
+
             ]
       | Record("x-formula", Args(Reference [ Field("$builtins"); Field op ], args)) ->
-          let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
+          // Used previously for dependencies - now not needed
+          // let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
+
+          let args = args |> Map.map (fun _ v ->
+            match v with 
+            | Record("x-evaluated", ListFind "result" r) -> snd r
+            | _ -> v
+          )
+
           let res = 
             match op with 
             | "count" | "sum" ->
@@ -745,7 +781,7 @@ let evaluateRaw nd =
             | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
             
           //printfn "wrap %A" sels
-          [ Replace(sels, res) ]  // Dependencies = ss
+          [ Replace(sels, res) ]//, [] ]  // Dependencies = ss
           (*
           [ WrapRecord("result", "x-evaluated", Object, sels, true), [], ss
             ListAppend(sels, { ID = "previous"; Expression = Primitive(String "na") }), [], ss
@@ -756,13 +792,13 @@ let evaluateRaw nd =
           failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
-let evaluate nd =
-  [ for ed(* conds, deps *) in evaluateRaw nd -> 
+let evaluateDoc doc =
+  [ for ed(*, conds, deps *) in evaluateRaw doc -> 
       //{ CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
       { Kind = ed } ]
 
 let rec evaluateAll doc = seq {
-  let edits = evaluate doc
+  let edits = evaluateDoc doc
   yield! edits
   let ndoc = edits |> List.fold apply doc
   if doc <> ndoc then yield! evaluateAll ndoc }
