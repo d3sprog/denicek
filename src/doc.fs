@@ -342,7 +342,7 @@ let renameFieldSelectors id selOther selReord =
   // the changed ID at location specified by 'selReord'
   let rec reidsels selOther selReord =
     match selOther, selReord with 
-    | Field(fo)::selOther, Field(fr)::[] when fo = id && fr = id -> Field(id)::(reidsels selOther []) // interesting case here
+    | Field(fo)::selOther, Field(fr)::[] when fo = fr -> Field(id)::(reidsels selOther []) // interesting case here
     | MatchingFirst(s, selOther, selWrap) -> s::(reidsels selOther selWrap)
     | TooSpecific(s) -> failwith $"renameFieldSelectors - Too specific selector {s} matched against Any"
     | IncompatibleFirst() -> selOther
@@ -427,15 +427,18 @@ let apply doc edit =
   // (dtto.)
   | WrapList(tag, sel) ->
       // TODO: Do the same as with WrapRecord? 
-      if not (isStructuralSelector sel) then failwith $"apply.WrapList - Maybe allow, but do not update refs? WrapList with non-structural selector {sel}"
+      //if not (isStructuralSelector sel) then failwith $"apply.WrapList - Maybe allow, but do not update refs? WrapList with non-structural selector {sel}"
       // Do the actual record wrapping
       let doc = replace (fun p el -> 
         if matches p sel then Some(List(tag, [el]))
         else None ) doc
       // Replace all relevant selectors (in references in code)
       // if notupd then doc else
-      let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapListSelectors s1 sel)
-      withNodeSelectors doc nsels
+      if isStructuralSelector sel then
+        let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapListSelectors s1 sel)
+        withNodeSelectors doc nsels
+      else 
+        doc
     
   // Changes structure, so only do this if selector is not value-specific
   // We need to update selectors in code refs  (but this is a bit experimental - changes only 'Tag' refs for lists...)
@@ -483,7 +486,9 @@ let apply doc edit =
       // if not (isStructuralSelector sel) then failwith $"apply.RecordAdd - Maybe allow, but do not update refs? RecordAdd  with non-structural selector {sel}"
       replace (fun p el -> 
         match el with 
-        | Record(tag, nds) when matches p sel -> Some(Record(tag, nds @ [fld, v]))
+        | Record(tag, nds) when matches p sel -> 
+            let nds = nds |> List.filter (fun (k, _) -> k <> fld)
+            Some(Record(tag, nds @ [fld, v]))
         | _ -> None ) doc
 
   // May change structure
@@ -594,6 +599,7 @@ let updateSelectors e1 e2 =
       let nsels = getSelectors e1 |> List.map (fun s1 -> updateTagSelectors t1 t2 s1 sel)
       [withSelectors nsels e1]
   | RecordRenameField(sel, id) ->
+      //printfn "======%A========" (getSelectors e1)
       let nsels = getSelectors e1 |> List.map (fun s1 -> renameFieldSelectors id s1 sel)
       [withSelectors nsels e1]
   | Copy(srcSel, tgtSel) -> 
@@ -882,4 +888,3 @@ let represent op =
       [ "target", representSel target; "id", ps id ]
       |> repr "x-edit-updateid"
   | _ -> failwith $"represent - Missing case for: {op.Kind}"
-     

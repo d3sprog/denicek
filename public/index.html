@@ -12,8 +12,9 @@
     * { font-family:'Merriweather'; line-height:1.5em; }
     html, body { padding:0px; margin:0px; }
     #main { }
-    #doc { position:absolute; width:50vw; }
-    #edits { position:absolute; width:50vw; left:50vw; }
+    #doc { position:absolute; width:45vw; padding:10px }
+    #edits { position:absolute; width:30vw; left:70vw; }
+    #ctx { position:absolute; width:20vw; left:50vw; }
     a.eval, a.eval a { color:#808080; }
     a.sel, a.sel a { color:#00AF40; }
     li.recorded { background:#e3f0ff;}
@@ -57,13 +58,11 @@
       display:none;
     }
 
-    #ctx pre { font-family:monospace;}
+    #ctx pre { font-family:monospace; margin:0px; }
     #ctx { 
+      text-align: left;
       box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3);
       border-radius: 10px;
-      width:20vw;
-      display:inline;
-      position: absolute; right:0px;
       padding:10px 0px 50px 0px; font:300 8pt 'merriweather sans';
     }
     #ctx-body { margin:0px 10px 0px 10px; }

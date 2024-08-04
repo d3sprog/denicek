@@ -1,5 +1,5 @@
 ﻿#if INTERACTIVE
-#load "../src/doc.fs"
+#load "../src/utils.fs" "../src/doc.fs" "../src/demos.fs"
 let equals a b = a = b
 #else
 module Tbd.Tests
@@ -31,6 +31,28 @@ let evalTests =
     }
   ]
 *)
+
+[<Tests>]
+let tests =
+  testList "interaction" [    
+    test "counter can increment state" {
+      let ops1 = opsBaseCounter 
+      let doc1 = applyAll ops1
+      select [Field "counter"; Field "value"] doc1 |> equals [ Primitive(Number 0.0) ]
+      
+      let ops2 = ops1 @ opsCounterInc
+      let doc2 = applyAll ops2
+      let ops3 = ops2 @ evaluateDoc doc2
+      let doc3 = applyAll ops3
+      select [Field "counter"; Field "value"] doc3 |> equals [ Primitive(Number 1.0) ]
+
+      let ops4 = ops3 @ opsCounterInc
+      let doc4 = applyAll ops4
+      let ops5 = ops4 @ evaluateDoc doc4
+      let doc5 = applyAll ops5
+      select [Field "counter"; Field "value"] doc5 |> equals [ Primitive(Number 2.0) ]
+    }
+  ]
 
 [<Tests>]
 let mergeTests =

@@ -1,4 +1,4 @@
-module Tbd.App
+module Tbd.App.Main
 
 open Tbd.Html
 open Tbd.Doc
@@ -6,10 +6,119 @@ open Tbd.Demos
 open System.Text.RegularExpressions
 
 let (|Regex|_|) reg s = 
-  let m = Regex.Match(s, reg)
+  let m = Regex.Match(s, "^" + reg + "$")
   if m.Success then Some [ for i in 1 .. m.Groups.Count-1 -> m.Groups.[i].Value ]
   else None
 
+
+// --------------------------------------------------------------------------------------
+// Command handling
+// --------------------------------------------------------------------------------------
+
+//type CommandState = 
+  //{ }
+
+module Commands = 
+  let isRecord = function Record _ -> true | _ -> false
+  let isList = function List _ -> true | _ -> false
+  let parseCommand doc cursorSel recordedEds cmd = 
+    let nd, trace = trace cursorSel doc |> Seq.head    
+    
+    let parseSel sel =
+      [ for s in sel -> 
+          match s, System.Int32.TryParse s with 
+          | _, (true, n) -> Index n
+          | "*", _ -> All
+          | s, _ -> Field s ]
+    let retEhEds eds = true, [ for ed in eds -> { Kind = ed } ]
+    let retEd ed = false, [ { Kind = ed } ] 
+    let ffld f = if f = "" then "=" + System.Convert.ToBase64String(System.Guid.NewGuid().ToByteArray()) else f
+
+    match cmd with 
+    | Regex "<([^ ]+) ([^ ]+)>" [tag; fld] ->
+        WrapRecord(fld, tag, cursorSel) |> retEd
+    | Regex "<([^ ]+)>" [tag] ->
+        WrapRecord(ffld "", tag, cursorSel) |> retEd
+    | Regex "\[([^ ]+)\]" [tag] ->
+        WrapList(tag, cursorSel) |> retEd
+    | Regex "@([^ ]+)" [fld] ->
+        RecordRenameField(cursorSel, fld) |> retEd
+
+    | Regex ":([^ ]+)=!" [evt] ->
+        [ yield RecordAdd(cursorSel, evt, Record("x-event-handler", [])) 
+          for op in recordedEds ->
+            ListAppend(cursorSel @ [Field evt], represent op) ]
+        |> retEhEds
+
+    | Regex ":([^ ]*)=<([^> ]+)>" [fld; tag] when isRecord nd ->
+        RecordAdd(cursorSel, ffld fld, Record(tag, [])) |> retEd
+    | Regex ":([^ ]*)=\[([^\] ]+)\]" [fld; tag] when isRecord nd ->
+        RecordAdd(cursorSel, ffld fld, List(tag, [])) |> retEd
+    | Regex ":([^ ]*)=([0-9]+)" [fld; num] when isRecord nd ->
+        RecordAdd(cursorSel, ffld fld, Primitive(Number (int num))) |> retEd
+    | Regex ":([^ ]*)=/(.+)" [fld; sel] when isRecord nd ->
+        RecordAdd(cursorSel, ffld fld, Reference(parseSel (sel.Split('/')))) |> retEd
+    | Regex ":([^ ]*)=(.+)" [fld; str] when isRecord nd ->
+        RecordAdd(cursorSel, ffld fld, Primitive(String str)) |> retEd
+
+    | Regex ":<([^> ]+)>" [tag] when isList nd ->
+        ListAppend(cursorSel, Record(tag, [])) |> retEd
+    | Regex ":\[([^\] ]+)\]" [tag] when isList nd ->
+        ListAppend(cursorSel, List(tag, [])) |> retEd
+    | Regex ":([0-9]+)" [num] when isList nd ->
+        ListAppend(cursorSel, Primitive(Number (int num))) |> retEd
+    | Regex ":/(.+)" [sel] when isList nd ->
+        ListAppend(cursorSel, Reference(parseSel (sel.Split('/')))) |> retEd
+    | Regex ":(.+)" [str] when isList nd ->
+        ListAppend(cursorSel, Primitive(String str)) |> retEd
+
+    | _ -> failwithf "EnterCommand: Unsupported command >>%A<<" cmd
+
+  let renderCommandHelp doc cursorSel (cmd:string) isRecording = 
+    let nd, trace = trace cursorSel doc |> Seq.head    
+    h?div [ "id" => "cmd" ] [
+      let cmdgroups = [
+        "Document edits", [
+          "<", "<tag fld>", "Wrap current element as field in a record", true
+          "<", "<tag>", "Wrap current element as field in a record", true
+          "[", "[tag]", "Wrap current element as item in a list", true
+          "@", "@fld", "Rename field holding the current element", 
+            (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
+
+          ":", ":fld=num", "Add numerical field to current record", isRecord nd
+          ":", ":fld=str", "Add string field to current record", isRecord nd
+          ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
+          ":", ":fld=<tag>", "Add record field to current record", isRecord nd
+          ":", ":fld=[tag]", "Add list field to current record", isRecord nd
+          ":", ":fld=!", "Append recorded edits as event handler", isRecord nd 
+
+          ":", ":num", "Add numerical value to current list", isList nd
+          ":", ":str", "Add string value to current list", isList nd
+          ":", ":/s1/s2/...", "Add reference value to current list", isList nd
+          ":", ":<tag>", "Add record value to current list", isList nd
+          ":", ":[tag]", "Add list value to current list", isList nd
+          ]
+        "Meta commands", [
+          "alt + m", "", (if isRecording then "End macro recording" else "Start macro recording"), true
+          "alt + e", "", "Evaluate all formulas", true
+          "alt + z", "", "Undo last edit", true]
+      ]
+      if cmd.Length > 0 then 
+        let current = cmdgroups |> List.collect snd |> List.filter (fun (k, _, _, b) -> b && cmd.StartsWith(k))
+        if not (Seq.isEmpty current) then 
+          yield h?h3 [] [text "Entering command..."]
+          for _, args, _, _ in current do
+            yield h?pre [] [text args]
+      for title, cmds in cmdgroups do
+        yield h?h3 [] [text title]
+        yield h?ul [] [
+          for k, _, doc, b in Seq.distinctBy (fun (k, _, doc, b) -> k, doc, b) cmds do
+            if b then yield h?li [] [ 
+              h?kbd [ "class" => if k.Contains "+" then "long" else "" ] [ text k ]
+              h?span [ "class" => "doc" ] [ text doc ]
+            ]
+        ]
+    ]
 // --------------------------------------------------------------------------------------
 // Navigation
 // --------------------------------------------------------------------------------------
@@ -92,6 +201,7 @@ type Event =
   | MoveCursor of CursorMove
 
   | SwitchMacro
+  | UndoLastEdit
   
   | StartCommand 
   | CancelCommand
@@ -170,39 +280,8 @@ let renderContext state trigger = [
         | Reference r -> text $"{pf} reference '{r}'"
       ]
     ]
-    let isRecord = function Record _ -> true | _ -> false
-    let nd, trace = trace state.CursorSelector state.CurrentDocument |> Seq.head
-    yield h?div [ "id" => "cmd" ] [
-      let cmdgroups = [
-        "Document edits", [
-          "<", "<tag fld>", "Wrap current element as field in a record", true
-          "[", "[tag]", "Wrap current element as item in a list", true
-          "@", "@fld", "Rename field holding the current element", 
-            (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
-          ":", ":fld=num", "Add numerical field to current record", isRecord nd
-          ":", ":fld=str", "Add string field to current record", isRecord nd
-          ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
-          ":", ":fld=!", "Append recorded edits as event handler", isRecord nd ]
-        "Meta commands", [
-          "alt + m", "", (match state.MacroRange with Some _, None -> "End macro recording" | _ -> "Start macro recording"), true
-          "alt + e", "", "Evaluate all formulas", true ]
-      ]
-      if state.Command.Length > 0 then 
-        let current = cmdgroups |> List.collect snd |> List.filter (fun (k, _, _, _) -> state.Command.StartsWith(k))
-        if not (Seq.isEmpty current) then 
-          yield h?h3 [] [text "Entering command..."]
-          for _, args, _, _ in current do
-            yield h?pre [] [text args]
-      for title, cmds in cmdgroups do
-        yield h?h3 [] [text title]
-        yield h?ul [] [
-          for k, args, doc, b in cmds do
-            if b then yield h?li [] [ 
-              h?kbd [ "class" => if k.Contains "+" then "long" else "" ] [ text k ]
-              h?span [ "class" => "doc" ] [ text doc ]
-            ]
-        ]
-    ]
+    let isRecording = match state.MacroRange with Some _, None -> true | _ -> false
+    yield Commands.renderCommandHelp state.CurrentDocument state.CursorSelector state.Command isRecording 
   ] ] ]
 
 (*
@@ -239,6 +318,20 @@ let rec renderNode state trigger path pid nd =
             )
         | _ -> None)
     | _ -> []
+  let handlers = 
+    if tag <> "input" then handlers else
+    [ "change" =!> fun el _ ->
+          let el = unbox<Browser.Types.HTMLInputElement> el
+          let ed = RecordAdd(path, "@value", Primitive(String el.value))
+          trigger(MergeEdits(state.Edits @ [ { Kind = ed } ]))
+    ] @ handlers
+
+  let rcdattrs = 
+    match nd with 
+    | Record(_, nds) -> nds |> List.choose (function 
+        | n, Primitive(String s) when n.StartsWith("@") -> Some(n.Substring(1) => s)
+        | _ -> None)
+    | _ -> []
   let attrs = [ 
     yield "id" => pid 
     yield "class" => 
@@ -249,6 +342,7 @@ let rec renderNode state trigger path pid nd =
           else "cursor cursor-after "
         else "")
     yield! handlers
+    yield! rcdattrs
     (*
     if List.forall (fun (k, _) -> k <> "click") handlers then
       yield "click" =!> fun h e ->
@@ -289,15 +383,18 @@ let rec renderNode state trigger path pid nd =
           yield! renderNode state trigger (path @ [Index i]) (pid ++ string i) a
     | Record(_, nds) -> 
         for f, a in nds do
-          yield! renderNode state trigger (path @ [Field f]) (pid ++ f) a
+          if not (f.StartsWith("@")) then
+            yield! renderNode state trigger (path @ [Field f]) (pid ++ f) a
     | Reference(sel) -> yield formatSelector state trigger sel
     | Primitive(String s) -> yield text s
     | Primitive(Number n) -> yield text (string n)        
   ]
 
-  [ if matches state.CursorSelector path && snd state.CursorLocation = Before then yield! renderContext state trigger
+  [ //if matches state.CursorSelector path && snd state.CursorLocation = Before then 
+      //yield! renderContext state trigger
     yield h?(tag) attrs body 
-    if matches state.CursorSelector path && snd state.CursorLocation = After then yield! renderContext state trigger
+    //if matches state.CursorSelector path && snd state.CursorLocation = After then 
+      //yield! renderContext state trigger
     ]
      
 
@@ -338,27 +435,36 @@ let renderEdit trigger state i ed doc =
   | UpdateTag(sel, t1, t2) -> render "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
   | RecordRenameField(sel, id) -> render "updid" "fa-font" sel ["id", text id]
 
+
+
 let render trigger (state:State) = 
-  h?div [ "id" => "main" ] [
-    yield h?div [ "id" => "doc" ] (
-      let doc = state.CurrentDocument // Matcher.applyMatchers state.CurrentDocument 
-      renderNode state trigger [] "" doc
-    )
-    yield h?div [ "id" => "edits" ] [
-      h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
-      h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
-      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
-      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget @ addSpeakerOps)) ] [text "Add speaker"]
-      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
-      h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
-      //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
-      h?ol [] [
-        if not (Seq.isEmpty state.Edits) then
-          let indexed = Seq.indexed state.Edits
-          let (_, headEd), tail = Seq.head indexed, Seq.tail indexed
-          let edits = tail |> Seq.scan (fun (_, ed, st) (i, nextEd) -> i, nextEd, apply st ed) (0, headEd, state.Initial)
-          for i, ed, doc in Seq.rev edits -> renderEdit trigger state i ed doc
+  printfn "%A" state.CurrentDocument
+  h?div [] [
+    h?div [ "id" => "main" ] [
+      yield h?div [ "id" => "doc" ] [
+        let doc = state.CurrentDocument // Matcher.applyMatchers state.CurrentDocument 
+        yield! renderContext state trigger
+        yield! renderNode state trigger [] "" doc
       ]
+      yield h?div [ "id" => "edits" ] [
+        h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
+        h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
+        h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget)) ] [text "Add budget"]
+        h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ opsBudget @ addSpeakerOps)) ] [text "Add speaker"]
+        h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ fixSpeakerNameOps)) ] [text "Fix name"]
+        h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ refactorListOps)) ] [text "Refacor list"]
+        //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
+        h?ol [] [
+          if not (Seq.isEmpty state.Edits) then
+            let indexed = Seq.indexed state.Edits
+            let (_, headEd), tail = Seq.head indexed, Seq.tail indexed
+            let edits = tail |> Seq.scan (fun (_, ed, st) (i, nextEd) -> i, nextEd, apply st ed) (0, headEd, state.Initial)
+            for i, ed, doc in Seq.rev edits -> renderEdit trigger state i ed doc
+        ]
+      ]
+    ]
+    h?script [ "type" => "application/json"; "id" => "serialized" ] [
+      text (Serializer.nodesToJsonString (List.map represent state.Edits))
     ]
   ]
 
@@ -370,10 +476,13 @@ let render trigger (state:State) =
 //let ops = merge (opsCore @ opsBudget) ops1
 
 //let ops = opsCore @ opsBudget
-//let ops = opsCore 
+//let ops = [] //opsCore 
+
+let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","=vsI7ZGu0ekafcavqvbN3Ww=="],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it","Todo list demo"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","=dX7kLxMX6U6MMViZT8DqmQ=="],["id","h1"],["target",{"kind":"list","tag":"x-selectors","nodes":["=vsI7ZGu0ekafcavqvbN3Ww=="]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","items"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0]}],["field","done"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0]}],["field","label"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it","Do some work"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0,"done"]}],["field","@type"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","input"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it",{"kind":"record","tag":"button","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","=p/fbupTXCkehmk6J9kKaeA=="],["node",{"kind":"record","tag":"x-node-wrapper","nodes":[["it","Add"]]}]]}]"""
+let ops = List.map unrepresent (Serializer.nodesFromJsonString json)
 
 //let ops = opsBaseCounter
-let ops = opsBaseCounter //@ opsCounterInc @ opsCounterHndl
+//let ops = opsBaseCounter //@ opsCounterInc @ opsCounterHndl
   
 let state = 
   { Initial = rcd "div"
@@ -402,6 +511,10 @@ let rec update (state:State) = function
   | SelectNode(Some(pid, pos)) ->
     { state with SelectedNode = Some(pid); ControlsLocation = pos }
   *)
+  | UndoLastEdit ->
+    let nedits = List.truncate (state.Edits.Length - 1) state.Edits
+    { state with Edits = nedits; Location = min state.Location (nedits.Length - 1) }
+    
   | HighlightSelector sel ->
     { state with HighlightedSelector = sel }
   | Evaluate all -> 
@@ -412,7 +525,7 @@ let rec update (state:State) = function
     { state with Edits = nedits; Location = nedits.Length-1 }
   | MergeEdits edits ->
     let state = { state with Edits = merge state.Edits edits } 
-    { state with Location = min (state.Edits.Length-1) state.Location }
+    { state with Location = state.Edits.Length-1 }
   | Move d ->
     { state with Location = max 0 (min (state.Edits.Length - 1) (state.Location + d)) }
   | Show i ->
@@ -421,7 +534,7 @@ let rec update (state:State) = function
 
   | MoveCursor dir ->
     let ncur, nsel = moveCursor state.CurrentDocument state.CursorLocation dir
-    printfn $"CURSOR {ncur}\nSEL {nsel}"
+    //printfn $"CURSOR {ncur}\nSEL {nsel}"
     { state with CursorLocation = ncur; CursorSelector = nsel }
 
   | StartCommand -> { state with Command = "" }
@@ -432,82 +545,37 @@ let rec update (state:State) = function
   | TypeCommand c -> 
       { state with Command = state.Command + c }
   | EnterCommand -> 
-      let cmd = state.Command 
-      let parseSel sel =
-        [ for s in sel -> 
-            match s, System.Int32.TryParse s with 
-            | _, (true, n) -> Index n
-            | "*", _ -> All
-            | s, _ -> Field s ]
-      let retEhEds eds = 
-        let eds = [ for ed in eds -> { Kind = ed } ]
-        { state with 
-            Edits = merge state.Edits (state.Edits @ eds) 
-            MacroRange = None, None
-            Location = state.Edits.Length + eds.Length - 1; Command = "" }
-      let retEd ed = 
-        let ed = { Kind = ed } 
-        { state with 
-            Edits = merge state.Edits (state.Edits @ [ed]) 
-            Location = state.Edits.Length; Command = "" }
-          
-      let retOp op = 
-        update { state with Command = "" } op
-
-      match cmd with 
-      | Regex "<([^ ]+) ([^ ]+)>" [tag; fld] ->
-          WrapRecord(fld, tag, state.CursorSelector) |> retEd
-      | Regex "\[([^ ]+)\]" [tag] ->
-          WrapList(tag, state.CursorSelector) |> retEd
-      | Regex "@([^ ]+)" [fld] ->
-          RecordRenameField(state.CursorSelector, fld) |> retEd
-      | Regex ":([^ ]+)=!" [evt] ->
-          let eds =
-            match state.MacroRange with 
-            | Some l, Some h -> state.Edits.[l .. h]
-            | _ -> []
-          [ yield RecordAdd(state.CursorSelector, evt, Record("x-event-handler", [])) 
-            for op in eds ->
-              ListAppend(state.CursorSelector @ [Field evt], represent op) ]
-          |> retEhEds
-      | Regex ":([^ ]+)=([0-9]+)" [fld; num] ->
-          RecordAdd(state.CursorSelector, fld, Primitive(Number (int num))) |> retEd
-      | Regex ":([^ ]+)=/(.+)" [fld; sel] ->
-          RecordAdd(state.CursorSelector, fld, Reference(parseSel (sel.Split('/')))) |> retEd
-      | Regex ":([^ ]+)=(.+)" [fld; str] ->
-          RecordAdd(state.CursorSelector, fld, Primitive(String str)) |> retEd
-      | _ -> failwithf "EnterCommand: Unsupported command >>%A<<" cmd
-      
+      let recordedEds =
+        match state.MacroRange with 
+        | Some l, Some h -> state.Edits.[l .. h]
+        | _ -> []
+      let resetMacro, eds = Commands.parseCommand state.CurrentDocument state.CursorSelector recordedEds state.Command
+      { state with 
+          Edits = state.Edits @ eds
+          MacroRange = if resetMacro then None, None else state.MacroRange
+          Location = state.Edits.Length + eds.Length - 1; Command = "" }      
     | SwitchMacro -> 
         match state.MacroRange with 
         | Some s, None -> 
             { state with MacroRange = Some s, Some (state.Edits.Length-1) }
         | _ -> 
             { state with MacroRange = Some (state.Edits.Length), None }
-(*
-              "@", "@fld", "Rename field holding the current element", 
-                (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
-              ":", ":fld=num", "Add numerical field to current record", isRecord nd
-              ":", ":fld=str", "Add string field to current record", isRecord nd
-              ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
-              ":", ":fld=!", "Append recorded edits as event handler", isRecord nd ]
-*)
-  
 
 let trigger, _ = createVirtualDomApp "out" state render update
 //Browser.Dom.window.onclick <- fun e -> 
 //  trigger(SelectNode None)
 
 Browser.Dom.window.onkeypress <- fun e -> 
-  e.preventDefault()
-  trigger(TypeCommand e.key)
+  if (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" then
+    e.preventDefault();
+    trigger(TypeCommand e.key)
   
 Browser.Dom.window.onkeydown <- fun e -> 
   if e.ctrlKey then
     if e.key = "ArrowUp" then e.preventDefault(); trigger(Move +1)
     if e.key = "ArrowDown" then e.preventDefault(); trigger(Move -1)
   else
-    Browser.Dom.console.log(e.ctrlKey, e.altKey, e.key)
+    //Browser.Dom.console.log(e.ctrlKey, e.altKey, e.key)
     if e.key = "Escape" then e.preventDefault(); trigger(CancelCommand)
     if e.key = "Backspace" then e.preventDefault(); trigger(BackspaceCommand)
     if e.key = "Enter" then e.preventDefault(); trigger(EnterCommand)
@@ -516,6 +584,7 @@ Browser.Dom.window.onkeydown <- fun e ->
 
     if e.altKey && e.key = "e" then e.preventDefault(); trigger(Evaluate(true))
     if e.altKey && e.key = "m" then e.preventDefault(); trigger(SwitchMacro)
+    if e.altKey && e.key = "z" then e.preventDefault(); trigger(UndoLastEdit)
 
 
 //trigger (MergeEdits(opsCore @ opsBudget))
