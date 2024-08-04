@@ -3,6 +3,67 @@ module Tbd.App
 open Tbd.Html
 open Tbd.Doc
 open Tbd.Demos
+open System.Text.RegularExpressions
+
+let (|Regex|_|) reg s = 
+  let m = Regex.Match(s, reg)
+  if m.Success then Some [ for i in 1 .. m.Groups.Count-1 -> m.Groups.[i].Value ]
+  else None
+
+// --------------------------------------------------------------------------------------
+// Navigation
+// --------------------------------------------------------------------------------------
+
+type LocationModifier = Before | After
+type Cursor = int list * LocationModifier
+
+type CursorMove = Backward | Forward
+
+let locations nd : seq<Cursor * Selectors> = 
+  let rec loop loc sel nd = seq {
+    match nd with 
+    | Primitive(String s) -> 
+        yield (loc, Before), sel
+        yield (loc, After), sel
+    | Primitive(Number n) ->
+        yield (loc, Before), sel
+        yield (loc, After), sel
+    | Record(tag, nds) ->
+        yield (loc, Before), sel
+        for i, (k, v) in Seq.indexed nds do 
+          yield! loop (i::loc) (Field k::sel) v
+        yield (loc, After), sel
+    | List(tag, nds) ->
+        yield (loc, Before), sel
+        for i, v in Seq.indexed nds do 
+          yield! loop (i::loc) (Index i::sel) v
+        yield (loc, After), sel
+    | Reference _ ->
+        yield (loc, Before), sel
+        yield (loc, After), sel
+    }
+  loop [] [] nd
+  |> Seq.map (fun ((loc, md), sel) -> (List.rev loc, md), List.rev sel)
+
+let moveCursor doc cur dir = 
+  let locs = (locations doc).GetEnumerator()
+  let rec back prev =
+    if locs.MoveNext() then
+      if fst locs.Current = cur then prev
+      else back (Some locs.Current)
+    else None
+  let rec forw () = 
+    if locs.MoveNext() then
+      if fst locs.Current = cur then 
+        if locs.MoveNext() then Some locs.Current else None
+      else forw ()
+    else None
+  match dir with
+  | Backward -> back None |> Option.defaultWith (fun _ -> Seq.head (locations doc))
+  | Forward -> forw () |> Option.defaultWith (fun _ -> Seq.last (locations doc))
+
+
+// --------------------------------------------------------------------------------------
 
 type State = 
   { Initial : Node 
@@ -13,8 +74,10 @@ type State =
     //HistoryIndex : Map<string, int>
     Location : int 
 
-    Cursor : Selectors
-    Command : string option
+    CursorLocation : Cursor
+    CursorSelector : Selectors
+
+    Command : string 
 
     MacroRange : int option * int option
     }
@@ -25,15 +88,11 @@ type State =
     x.Edits
     |> List.fold apply x.Initial
 
-type CursorMove =
-  | Up | Down | Previous | Next
-
 type Event = 
   | MoveCursor of CursorMove
 
-  | StartMacro
-  | EndMacro
-
+  | SwitchMacro
+  
   | StartCommand 
   | CancelCommand
   | BackspaceCommand
@@ -82,6 +141,70 @@ let rec formatNode state trigger (nd:Node) =
         yield text "}"
       ]
 
+let renderContext state trigger = [
+  if state.Command <> "" then
+    yield h?span [ "class" => "input" ] [ text state.Command ]
+  yield h?div [ "id" => "ctx" ] [ h?div [ "id" => "ctx-body" ] [
+    yield h?div [ "class" => "loc" ] [
+      let nd, trc = trace state.CursorSelector state.CurrentDocument |> Seq.head
+      for nd, s in trc do h?span [] [
+        yield text "<"
+        match nd with 
+        | Record(t, _) | List(t, _) -> yield h?strong [] [ text t ]
+        | _ -> ()
+        match s with 
+        | Index i -> yield text $"[{i}]"
+        | Tag t -> yield text $"[#{t}]"
+        | All -> yield text $"[*]"
+        | Field f when f.[0] = '=' -> yield text ""
+        | Field f -> yield text ("." + f)
+        yield text ">"
+      ]
+      h?span [] [ 
+        let pf = if snd state.CursorLocation = After then "(after)" else "(before)" 
+        match nd with 
+        | Record(t, _) -> text $"{pf} record {t}"
+        | List(t, _) -> text $"{pf} list {t}"
+        | Primitive(String s) -> text $"{pf} string '{s}'"
+        | Primitive(Number n) -> text $"{pf} number '{n}'"
+        | Reference r -> text $"{pf} reference '{r}'"
+      ]
+    ]
+    let isRecord = function Record _ -> true | _ -> false
+    let nd, trace = trace state.CursorSelector state.CurrentDocument |> Seq.head
+    yield h?div [ "id" => "cmd" ] [
+      let cmdgroups = [
+        "Document edits", [
+          "<", "<tag fld>", "Wrap current element as field in a record", true
+          "[", "[tag]", "Wrap current element as item in a list", true
+          "@", "@fld", "Rename field holding the current element", 
+            (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
+          ":", ":fld=num", "Add numerical field to current record", isRecord nd
+          ":", ":fld=str", "Add string field to current record", isRecord nd
+          ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
+          ":", ":fld=!", "Append recorded edits as event handler", isRecord nd ]
+        "Meta commands", [
+          "alt + m", "", (match state.MacroRange with Some _, None -> "End macro recording" | _ -> "Start macro recording"), true
+          "alt + e", "", "Evaluate all formulas", true ]
+      ]
+      if state.Command.Length > 0 then 
+        let current = cmdgroups |> List.collect snd |> List.filter (fun (k, _, _, _) -> state.Command.StartsWith(k))
+        if not (Seq.isEmpty current) then 
+          yield h?h3 [] [text "Entering command..."]
+          for _, args, _, _ in current do
+            yield h?pre [] [text args]
+      for title, cmds in cmdgroups do
+        yield h?h3 [] [text title]
+        yield h?ul [] [
+          for k, args, doc, b in cmds do
+            if b then yield h?li [] [ 
+              h?kbd [ "class" => if k.Contains "+" then "long" else "" ] [ text k ]
+              h?span [ "class" => "doc" ] [ text doc ]
+            ]
+        ]
+    ]
+  ] ] ]
+
 (*
 let rec getPreviousNode nd i = 
   match nd.Previous with 
@@ -103,10 +226,10 @@ let rec renderNode state trigger path pid nd =
     | Primitive(Number _) -> "x-prim-num"
     | Primitive(String _) -> "x-prim-str"
     | Reference _ -> "x-ref"
-  (*let handlers = 
+  let handlers = 
     match nd with 
     | Record(_, nds) -> nds |> List.choose (function
-        | id, Record("x-event-handler", edits) ->
+        | id, List("x-event-handler", edits) ->
             Some(id =!> fun _ _ ->
               let handler = [ for e in edits -> unrepresent e ]
               trigger(Evaluate(true))
@@ -115,14 +238,17 @@ let rec renderNode state trigger path pid nd =
               trigger(Move(System.Int32.MaxValue))
             )
         | _ -> None)
-    | _ -> []*)
+    | _ -> []
   let attrs = [ 
     yield "id" => pid 
     yield "class" => 
       ( match state.HighlightedSelector with Some s when matches s path -> "hidoc " | _ -> "") + 
       //( if historyIndex > 0 then "historical " else "") +
-      ( if matches state.Cursor path then "cursor " else "")
-    //yield! handlers
+      ( if matches state.CursorSelector path then 
+          if snd state.CursorLocation = Before then "cursor cursor-before "
+          else "cursor cursor-after "
+        else "")
+    yield! handlers
     (*
     if List.forall (fun (k, _) -> k <> "click") handlers then
       yield "click" =!> fun h e ->
@@ -150,25 +276,30 @@ let rec renderNode state trigger path pid nd =
     | Record("x-formula", nds) -> 
         let op = nds |> List.tryFind (fun (f,_) -> f = "op") |> Option.map snd
         let args = nds |> List.filter (fun (f,_)-> f <> "op")
-        if op.IsSome then yield renderNode state trigger (path @ [Field "op"]) (pid ++ "op") op.Value
+        if op.IsSome then yield! renderNode state trigger (path @ [Field "op"]) (pid ++ "op") op.Value
         else yield text "@"
         yield text "("
         for i, (f, a) in Seq.indexed args do
           if i <> 0 then yield text ", "
           yield text $"{f}="
-          yield renderNode state trigger (path @ [Field f]) (pid ++ f) a
+          yield! renderNode state trigger (path @ [Field f]) (pid ++ f) a
         yield text ")"
     | List(_, nds) -> 
-        for i, a in Seq.indexed nds -> renderNode state trigger (path @ [Index i]) (pid ++ string i) a
+        for i, a in Seq.indexed nds do
+          yield! renderNode state trigger (path @ [Index i]) (pid ++ string i) a
     | Record(_, nds) -> 
-        for f, a in nds -> renderNode state trigger (path @ [Field f]) (pid ++ f) a
+        for f, a in nds do
+          yield! renderNode state trigger (path @ [Field f]) (pid ++ f) a
     | Reference(sel) -> yield formatSelector state trigger sel
     | Primitive(String s) -> yield text s
     | Primitive(Number n) -> yield text (string n)        
   ]
 
-  h?(tag) attrs body
-    
+  [ if matches state.CursorSelector path && snd state.CursorLocation = Before then yield! renderContext state trigger
+    yield h?(tag) attrs body 
+    if matches state.CursorSelector path && snd state.CursorLocation = After then yield! renderContext state trigger
+    ]
+     
 
 let renderEdit trigger state i ed doc = 
   let recorded = match state.MacroRange with Some l, Some h -> i >= l && i <= h | _ -> false
@@ -209,10 +340,10 @@ let renderEdit trigger state i ed doc =
 
 let render trigger (state:State) = 
   h?div [ "id" => "main" ] [
-    yield h?div [ "id" => "doc" ] [
+    yield h?div [ "id" => "doc" ] (
       let doc = state.CurrentDocument // Matcher.applyMatchers state.CurrentDocument 
       renderNode state trigger [] "" doc
-    ]
+    )
     yield h?div [ "id" => "edits" ] [
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(false)) ] [text "Eval step!"]
       h?button ["click" =!> fun _ _ -> trigger (Evaluate(true)) ] [text "Eval all!"]
@@ -229,31 +360,6 @@ let render trigger (state:State) =
           for i, ed, doc in Seq.rev edits -> renderEdit trigger state i ed doc
       ]
     ]
-    match state.Command with 
-    | Some cmd -> 
-        yield h?div [ "id" => "cmd" ] [
-          h?p [ "class" => "input" ] [ text (if cmd = "" then "?" else cmd) ]
-          let commands = [
-            "wr", " [tag] [id] [list|object|apply]", "Wrap current element in a record" 
-            "id", " [id]", "Change id of current element to 'id'"
-            "an", " [fld] [num]", "Append number 'num' as a field 'fld' to the current list"
-            "as", " [fld] [str]", "Append string 'str' as a field 'fld' to the current list"
-            "ar", " [fld] [num|str]*", "Append reference (selector) as a field 'fld' to the currnet list"
-            "ah", " [evt]", "Append recorded edits as handler for event 'evt'"
-            "ms", "", "Start macro recording"
-            "me", "", "End macro recording"
-            "ev", "", "Evaluate all formulas"
-          ]
-
-          h?ul [] [
-            for k, args, doc in commands ->
-              h?li [] [ 
-                h?span [ "class" => "sample"] [ h?kbd [] [ text k ]; text args ] 
-                h?span [ "class" => "doc" ] [ text doc ]
-              ]
-          ]
-        ]
-    | _ -> ()
   ]
 
 //let ops = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
@@ -264,10 +370,10 @@ let render trigger (state:State) =
 //let ops = merge (opsCore @ opsBudget) ops1
 
 //let ops = opsCore @ opsBudget
-let ops = opsCore 
+//let ops = opsCore 
 
 //let ops = opsBaseCounter
-//let ops = opsBaseCounter @ opsCounterInc @ opsCounterHndl
+let ops = opsBaseCounter //@ opsCounterInc @ opsCounterHndl
   
 let state = 
   { Initial = rcd "div"
@@ -277,8 +383,9 @@ let state =
     //ControlsLocation = 0.0, 0.0
     //SelectedNode = None
     Location = ops.Length - 1 
-    Cursor = []
-    Command = None
+    CursorLocation = [], Before
+    CursorSelector = []
+    Command = ""
     MacroRange = None, None
     }
 
@@ -313,110 +420,77 @@ let rec update (state:State) = function
 
 
   | MoveCursor dir ->
-    state (*
-    let self = selectSingle state.Cursor state.CurrentDocument 
-    let parentCur = List.truncate (state.Cursor.Length - 1) state.Cursor
-    let parentNd () = selectSingle parentCur state.CurrentDocument
-    let ret c = printfn "Cursor: %A" c; { state with Cursor = c } 
-    match dir with 
-    | Down -> 
-        match self.Expression with 
-        | Record(_, List, _::_) -> state.Cursor @ [Index 0] |> ret
-        | Record(_, _, nd::_) -> state.Cursor @ [Field nd.ID] |> ret
-        | _ -> state
-    | _ when state.Cursor.Length = 0 -> state        
-    | Up -> parentCur |> ret
-    | Previous | Next -> 
-        match parentNd().Expression, List.last state.Cursor with 
-        | Record(_, List, ls), Index n ->
-            if dir = Previous && n > 0 then parentCur @ [Index (n-1)] |> ret
-            elif dir = Next && n < ls.Length-1 then parentCur @ [Index (n+1)] |> ret
-            else state
-        | Record(_, _, nds), Field f ->
-            let n = nds |> List.findIndex (fun nd -> nd.ID = f)
-            if dir = Previous && n > 0 then parentCur @ [Field (nds.[n-1].ID)] |> ret
-            elif dir = Next && n < nds.Length-1 then parentCur @ [Field (nds.[n+1].ID)] |> ret
-            else state
-        | _ -> state
-        *)
-  | StartCommand -> { state with Command = Some "" }
-  | CancelCommand -> { state with Command = None }
-  | BackspaceCommand  -> 
-      match state.Command with 
-      | Some cmd -> { state with Command = Some cmd.[0 .. cmd.Length-2] }
-      | _ -> state 
-  | TypeCommand c -> 
-      match state.Command with 
-      | Some cmd -> { state with Command = Some(cmd + c) }
-      | _ -> { state with Command = Some(c) }
-  | EnterCommand -> 
-      state
-      (*
-      match state.Command with 
-      | Some cmd -> 
-          let parseSel sel =
-            [ for s in sel -> 
-                match s, System.Int32.TryParse s with 
-                | _, (true, n) -> Index n
-                | "*", _ -> All
-                | s, _ -> Field s ]
-          let retEhEds eds = 
-            let eds = [ for ed in eds -> { Kind = ed; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies = [] } ]
-            { state with 
-                Edits = merge state.Edits (state.Edits @ eds) 
-                MacroRange = None, None
-                Location = state.Edits.Length + eds.Length - 1; Command = None }
-          let retEd ed = 
-            let ed = { Kind = ed; CanDuplicate = true; IsEvaluated = false; Conditions = []; Dependencies = [] } 
-            let mr = match state.MacroRange with Some s, _ -> Some s, Some (state.Edits.Length) | _ -> state.MacroRange
-            { state with 
-                Edits = merge state.Edits (state.Edits @ [ed]) 
-                MacroRange = mr
-                Location = state.Edits.Length; Command = None }
+    let ncur, nsel = moveCursor state.CurrentDocument state.CursorLocation dir
+    printfn $"CURSOR {ncur}\nSEL {nsel}"
+    { state with CursorLocation = ncur; CursorSelector = nsel }
 
-          let retOp op = 
-            update { state with Command = None } op
-          match List.ofSeq (cmd.Split(' ')) with 
-          | "wr"::tag::id::(kind & ("list" | "object" | "apply"))::[] ->
-              let kind = match kind with "list" -> List | "object" -> Object | "apply" -> Apply | _ -> failwith "impossible"
-              WrapRecord(id, tag, kind, state.Cursor, false) |> retEd
-          | "id"::id::[] ->
-              RecordRenameField(state.Cursor, id) |> retEd
-          | "an"::fld::num::[] ->
-              ListAppend(state.Cursor, { ID = fld; Expression = Primitive(Number (int num)) }) |> retEd
-          | "as"::fld::strs ->
-              ListAppend(state.Cursor, { ID = fld; Expression = Primitive(String (String.concat " " strs)) }) |> retEd
-          | "ar"::fld::sel ->
-              ListAppend(state.Cursor, { ID = fld; Expression = Reference (parseSel sel) }) |> retEd
-          | "ah"::evt::[] -> 
-              let eds =
-                match state.MacroRange with 
-                | Some l, Some h -> state.Edits.[l .. h]
-                | _ -> []
-              [ yield ListAppend(state.Cursor, { ID = evt; Expression = Record("x-event-handler", List, []) }) 
-                for op in eds ->
-                  ListAppend(state.Cursor @ [Field evt], represent op) ]
-              |> retEhEds
-          | "ev"::[] ->
-              Evaluate(true) |> retOp
-          | "ms"::[] ->
-              StartMacro |> retOp
-          | "me"::[] ->
-              EndMacro |> retOp
-          | _ -> failwithf "EnterCommand: Unsupported command >>%A<<" cmd
+  | StartCommand -> { state with Command = "" }
+  | CancelCommand -> { state with Command = "" }
+  | BackspaceCommand -> 
+      if state.Command.Length <= 1 then { state with Command = "" }
+      else { state with Command = state.Command.[0 .. state.Command.Length-2] }
+  | TypeCommand c -> 
+      { state with Command = state.Command + c }
+  | EnterCommand -> 
+      let cmd = state.Command 
+      let parseSel sel =
+        [ for s in sel -> 
+            match s, System.Int32.TryParse s with 
+            | _, (true, n) -> Index n
+            | "*", _ -> All
+            | s, _ -> Field s ]
+      let retEhEds eds = 
+        let eds = [ for ed in eds -> { Kind = ed } ]
+        { state with 
+            Edits = merge state.Edits (state.Edits @ eds) 
+            MacroRange = None, None
+            Location = state.Edits.Length + eds.Length - 1; Command = "" }
+      let retEd ed = 
+        let ed = { Kind = ed } 
+        { state with 
+            Edits = merge state.Edits (state.Edits @ [ed]) 
+            Location = state.Edits.Length; Command = "" }
           
-      | _ -> state
-      *)
-    | EndMacro -> 
+      let retOp op = 
+        update { state with Command = "" } op
+
+      match cmd with 
+      | Regex "<([^ ]+) ([^ ]+)>" [tag; fld] ->
+          WrapRecord(fld, tag, state.CursorSelector) |> retEd
+      | Regex "\[([^ ]+)\]" [tag] ->
+          WrapList(tag, state.CursorSelector) |> retEd
+      | Regex "@([^ ]+)" [fld] ->
+          RecordRenameField(state.CursorSelector, fld) |> retEd
+      | Regex ":([^ ]+)=!" [evt] ->
+          let eds =
+            match state.MacroRange with 
+            | Some l, Some h -> state.Edits.[l .. h]
+            | _ -> []
+          [ yield RecordAdd(state.CursorSelector, evt, Record("x-event-handler", [])) 
+            for op in eds ->
+              ListAppend(state.CursorSelector @ [Field evt], represent op) ]
+          |> retEhEds
+      | Regex ":([^ ]+)=([0-9]+)" [fld; num] ->
+          RecordAdd(state.CursorSelector, fld, Primitive(Number (int num))) |> retEd
+      | Regex ":([^ ]+)=/(.+)" [fld; sel] ->
+          RecordAdd(state.CursorSelector, fld, Reference(parseSel (sel.Split('/')))) |> retEd
+      | Regex ":([^ ]+)=(.+)" [fld; str] ->
+          RecordAdd(state.CursorSelector, fld, Primitive(String str)) |> retEd
+      | _ -> failwithf "EnterCommand: Unsupported command >>%A<<" cmd
+      
+    | SwitchMacro -> 
         match state.MacroRange with 
-        | Some s, _ -> { state with MacroRange = Some s, Some (state.Edits.Length-1) }
-        | _ -> state
-    | StartMacro -> { state with MacroRange = Some (state.Edits.Length), Some (state.Edits.Length) }
+        | Some s, None -> 
+            { state with MacroRange = Some s, Some (state.Edits.Length-1) }
+        | _ -> 
+            { state with MacroRange = Some (state.Edits.Length), None }
 (*
-    "wr", " [tag] [id] [list|object|apply]", "Wrap current element in a record" 
-    "id", " [id]", "Change id of current element to 'id'"
-    "an", " [fld] [num]", "Append number 'num' as a field 'fld' to the current record"
-    "ar", " [fld] [num|str|'*']+", "Append reference (selector) as a field 'fld' to the currnet record"
+              "@", "@fld", "Rename field holding the current element", 
+                (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
+              ":", ":fld=num", "Add numerical field to current record", isRecord nd
+              ":", ":fld=str", "Add string field to current record", isRecord nd
+              ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
+              ":", ":fld=!", "Append recorded edits as event handler", isRecord nd ]
 *)
   
 
@@ -425,22 +499,23 @@ let trigger, _ = createVirtualDomApp "out" state render update
 //  trigger(SelectNode None)
 
 Browser.Dom.window.onkeypress <- fun e -> 
-  if e.key = "!" then e.preventDefault(); trigger(StartCommand)
-  else trigger(TypeCommand e.key)
+  e.preventDefault()
+  trigger(TypeCommand e.key)
   
 Browser.Dom.window.onkeydown <- fun e -> 
   if e.ctrlKey then
     if e.key = "ArrowUp" then e.preventDefault(); trigger(Move +1)
     if e.key = "ArrowDown" then e.preventDefault(); trigger(Move -1)
   else
-    Browser.Dom.console.log(e.key)
+    Browser.Dom.console.log(e.ctrlKey, e.altKey, e.key)
     if e.key = "Escape" then e.preventDefault(); trigger(CancelCommand)
     if e.key = "Backspace" then e.preventDefault(); trigger(BackspaceCommand)
     if e.key = "Enter" then e.preventDefault(); trigger(EnterCommand)
-    if e.key = "ArrowUp" then e.preventDefault(); trigger(MoveCursor Previous)
-    if e.key = "ArrowDown" then e.preventDefault(); trigger(MoveCursor Next)
-    if e.key = "ArrowRight" then e.preventDefault(); trigger(MoveCursor Down)
-    if e.key = "ArrowLeft" then e.preventDefault(); trigger(MoveCursor Up)
+    if e.key = "ArrowRight" then e.preventDefault(); trigger(MoveCursor Forward)
+    if e.key = "ArrowLeft" then e.preventDefault(); trigger(MoveCursor Backward)
+
+    if e.altKey && e.key = "e" then e.preventDefault(); trigger(Evaluate(true))
+    if e.altKey && e.key = "m" then e.preventDefault(); trigger(SwitchMacro)
 
 
 //trigger (MergeEdits(opsCore @ opsBudget))

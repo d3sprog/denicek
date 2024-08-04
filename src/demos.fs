@@ -2,61 +2,64 @@
 open Tbd
 open Tbd.Doc
 
+let ffld f = 
+  if f = "" then "=" + System.Convert.ToBase64String(System.Guid.NewGuid().ToByteArray())
+  else f
 
 let rcd tag = Record(tag, [])
 let lst tag = List(tag, [])
 let ref sel = Reference(sel)
 let ps s = Primitive(String s)
 let pn n = Primitive(Number n)
-let nds fld tag s = Record(tag, [fld, Primitive(String s)])
-let ndn fld tag n = Record(tag, [fld, Primitive(Number n)])
-let ndr fld tag sel = Record(tag, [fld, Reference(sel)])
+let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
+let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
+let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
 let ap s n = { Kind = ListAppend(s, n) } 
-let wr s fld tag = { Kind = WrapRecord(fld, tag, s) }
+let wr s fld tag = { Kind = WrapRecord(ffld fld, tag, s) }
 let wl s tag = { Kind = WrapList(tag, s) }
 let ord s l = { Kind = ListReorder(s, l) } 
 let ed sel fn f = transformations.[fn] <- f; { Kind = PrimitiveEdit(sel, fn) } 
-let add sel f n = { Kind = RecordAdd(sel, f, n) }
+let add sel f n = { Kind = RecordAdd(sel, ffld f, n) }
 let cp s1 s2 = { Kind = Copy(s1, s2) }
 let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
-let uid s id = { Kind = RecordRenameField(s, id) }
+let uid s id = { Kind = RecordRenameField(s, ffld id) }
 
 
-     (*
 let opsBaseCounter = 
   [ 
-    ap [] (nds "title" "h1" "Counter")
-    ap [] (rcd "counter" "p")
-    ap [Field "counter"] (nds "label" "strong" "Count: ")
-    ap [Field "counter"] (ndnp "value" 0)
-    ap [] (nds "inc" "button" "Increment")
-    ap [] (nds "dec" "button" "Decrement")
+    add [] "" (nds "title" "h1" "Counter")
+    add [] "counter" (rcd "p")
+    add [Field "counter"] "" (nds "" "strong" "Count: ")
+    add [Field "counter"] "value" (pn 0)
+    add [] "inc" (nds "" "button" "Increment")
+    add [] "dec" (nds "" "button" "Decrement")
   ]
+
 let opsCounterInc = 
   [
-    wr [Field "counter"; Field "value"] Apply "value" "span"
-    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
-    ap [Field "counter"; Field "value"] (ndnp "left" 1)
+    wr [Field "counter"; Field "value"] "value" "x-formula"
     uid [Field "counter"; Field "value"; Field "value"] "right"
+    add [Field "counter"; Field "value"] "left" (pn 1)
+    add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
   ]
+
 let opsCounterDec = 
   [
-    wr [Field "counter"; Field "value"] Apply "value" "span"
-    ap [Field "counter"; Field "value"] (ref "op" [Field "$builtins"; Field "+"])
-    ap [Field "counter"; Field "value"] (ndnp "left" -1)
+    wr [Field "counter"; Field "value"] "value" "x-formula"
     uid [Field "counter"; Field "value"; Field "value"] "right"
+    add [Field "counter"; Field "value"] "left" (pn -1)
+    add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
   ]
+
 let opsCounterHndl = 
-  [ yield ap [Field "inc"] (lst "click" "x-event-handler")
+  [ yield add [Field "inc"] "click" (lst "x-event-handler")
     for op in opsCounterInc ->
       ap [Field "inc"; Field "click"] (represent op) 
-    yield ap [Field "dec"] (lst "click" "x-event-handler")
+    yield add [Field "dec"] "click" (lst "x-event-handler")
     for op in opsCounterDec ->
       ap [Field "dec"; Field "click"] (represent op) ]
 
-
-*)
 let addSpeakerOps = 
   [ 
     ap [Field "speakers"] (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")

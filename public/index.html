@@ -11,9 +11,9 @@
   <style type="text/css">
     * { font-family:'Merriweather'; line-height:1.5em; }
     html, body { padding:0px; margin:0px; }
-    #main { display:flex; }
-    #doc { flex:10; }
-    #edits { flex:10; }
+    #main { }
+    #doc { position:absolute; width:50vw; }
+    #edits { position:absolute; width:50vw; left:50vw; }
     a.eval, a.eval a { color:#808080; }
     a.sel, a.sel a { color:#00AF40; }
     li.recorded { background:#e3f0ff;}
@@ -26,14 +26,14 @@
     .hisel { background-color:#C0E58B; }
     .hidoc { background-color:#C9E1FF; }
     .historical { background-color:#F7F291; }
-
+/*
     #hcontrols, #hcontrols span { font:300 10pt 'merriweather sans' }
     #hcontrols { position:absolute; margin-top:30px; }
     #hcontrols { background:#e0e0e0; padding:4px 10px 4px 10px; border-radius:10px; }
     #hcontrols .histindex { display:inline-block; text-align:center; width:20px; }
     #hcontrols .disabled { color:#808080; }
     #hcontrols .details { margin:0px 0px -4px 10px; letter-spacing:-0.5px; text-overflow:ellipsis; max-width:400px; white-space:nowrap; overflow:hidden; display:inline-block; }
-
+*/
     x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
     x-match {  display:inline-block; }
     x-match::before { content:"(matched content)" }
@@ -42,18 +42,33 @@
     x-event-handler > * { display:list-item; }
     x-event-handler { display:none; }
 
-    .cursor { border:4px solid #82f7ad; }
+    .cursor { border:4px solid #e3ffed; }
+    .cursor-after { border-right:4px solid #6dffa2; }
+    .cursor-before { border-left:4px solid #6dffa2; }
 
-    #cmd { padding-bottom:50px; position:absolute; bottom:0px; width:100%; font:300 9pt 'merriweather sans'}
-    #cmd kbd { width:15px; text-align:center; display: inline-block; padding: 2px 6px; color: #333; background-color: #eee; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-    #cmd .input { margin-left:40px; display: inline-block; padding: 2px 6px; color: #333; background-color: #f8f8f8; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-    #cmd li .sample { min-width:260px; display:inline-block; }
-    #cmd li .doc { font-style:italic; }
+    #ctx kbd { margin-right:10px; width:10px; text-align:center; display: inline-block; padding: 2px 6px; color: #333; background-color: #eee; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    #ctx kbd.long { width:40px; }
+    #ctx .input { margin-left:40px; display: inline-block; padding: 2px 6px; color: #333; background-color: #f8f8f8; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    #ctx ul { margin:0px; padding:0px; }
+    #ctx li { list-style-type:none; }
+    #ctx li .doc { font-style:italic; }
 
     xx-evaluated > *:nth-child(2) {
       display:none;
     }
-  </style>
+
+    #ctx pre { font-family:monospace;}
+    #ctx { 
+      box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3);
+      border-radius: 10px;
+      width:20vw;
+      display:inline;
+      position: absolute; right:0px;
+      padding:10px 0px 50px 0px; font:300 8pt 'merriweather sans';
+    }
+    #ctx-body { margin:0px 10px 0px 10px; }
+    #ctx .loc span { margin-right:10px;}
+</style>
 </head>
 <body>
     <div id="out"></div>

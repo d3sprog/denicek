@@ -1,5 +1,46 @@
-#load "doc.fs" "matcher.fs"
+#load "utils.fs" "doc.fs" "demos.fs"
 open Tbd.Doc
+open Tbd.Demos
+
+let sample = 
+  //opsBaseCounter 
+  opsCore
+  |> Seq.fold apply (rcd "div")
+
+let fmt loc = (String.concat "." (List.map string (List.rev loc))).PadRight(10)
+
+type LocationModifier = Before | After
+
+let rec loop loc sel nd = seq {
+  match nd with 
+  | Primitive(String s) -> 
+      yield (loc, Before), sel
+      yield (loc, After), sel
+  | Primitive(Number n) ->
+      yield (loc, Before), sel
+      yield (loc, After), sel
+  | Record(tag, nds) ->
+      yield (loc, Before), sel
+      for i, (k, v) in Seq.indexed nds do 
+        yield! loop (i::loc) (Field k::sel) v
+      yield (loc, After), sel
+  | List(tag, nds) ->
+      yield (loc, Before), sel
+      for i, v in Seq.indexed nds do 
+        yield! loop (i::loc) (Index i::sel) v
+      yield (loc, After), sel
+  | Reference _ ->
+      yield (loc, Before), sel
+      yield (loc, After), sel
+  }
+  //| Reference of Selectors
+    
+loop [] [] sample
+|> Seq.map (fun ((loc, md), sel) -> (List.rev loc, md), List.rev sel)
+|> Seq.iter (printfn "%A")
+
+(*
+#load "doc.fs" "matcher.fs"
 open Tbd.Matcher
 
 let init =  rcd "root" "div"
@@ -22,3 +63,4 @@ let pat =
 
 let tbl = select [Field "speakers"] rendered |> List.exactlyOne
 matches tbl pat
+*)

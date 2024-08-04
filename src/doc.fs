@@ -94,6 +94,22 @@ let select sel doc =
   doc |> fold (fun p value st -> 
     if matches sel p then value::st else st) [] |> List.rev
 
+let trace sel doc = 
+  let rec loop trace sel nd = seq {
+    match nd, sel with 
+    | nd, [] -> yield nd, List.rev trace
+    | List(_, els), (Index(i) as s)::sel -> 
+        yield! loop ((nd, s)::trace) sel els.[i]
+    | List(_, els), (Tag(t) as s)::sel -> 
+        let els = els |> List.filter (function Record(t2, _) | List(t2, _) -> t2 = t | _ -> false)
+        for el in els do yield! loop ((nd, s)::trace) sel el
+    | List(_, els), (All as s)::sel -> 
+        for el in els do yield! loop ((nd, s)::trace) sel el
+    | Record(_, els), (Field(f) as s)::sel -> 
+        yield! loop ((nd, s)::trace) sel (snd (List.find (fst >> (=) f) els)) 
+    | _ -> ()  }
+  loop [] sel doc 
+
 let selectSingle sel doc = 
   match select sel doc with
   | [it] -> it
@@ -326,7 +342,7 @@ let renameFieldSelectors id selOther selReord =
   // the changed ID at location specified by 'selReord'
   let rec reidsels selOther selReord =
     match selOther, selReord with 
-    | Field(fo)::selOther, Field(fr)::[] when fo = fr -> Field(id)::(reidsels selOther []) // interesting case here
+    | Field(fo)::selOther, Field(fr)::[] when fo = id && fr = id -> Field(id)::(reidsels selOther []) // interesting case here
     | MatchingFirst(s, selOther, selWrap) -> s::(reidsels selOther selWrap)
     | TooSpecific(s) -> failwith $"renameFieldSelectors - Too specific selector {s} matched against Any"
     | IncompatibleFirst() -> selOther
@@ -804,66 +820,66 @@ let rec evaluateAll doc = seq {
   if doc <> ndoc then yield! evaluateAll ndoc }
 
 // --------------------------------------------------------------------------------------
-// Evaluation
+// Representing edits as nodes
 // --------------------------------------------------------------------------------------
-(*
+
 let representSel sel = 
-  Record("x-selectors", List, 
+  List("x-selectors", 
     [ for s in sel ->
         match s with 
-        | All -> { ID = ""; Expression = Primitive(String "*") }
-        | Index n -> { ID = ""; Expression = Primitive(Number n) }
-        | Field f -> { ID = ""; Expression = Primitive(String f) } ])
+        | All -> Primitive(String "*")
+        | Tag t -> Primitive(String("#" + t))
+        | Index n -> Primitive(Number n)
+        | Field f -> Primitive(String f) ])
+
 
 let unrepresentSel expr =
   match expr with 
-  | Record("x-selectors", List, sels) ->
+  | List("x-selectors", sels) ->
       sels |> List.map (function 
-        | { Expression = Primitive(String "*") } -> All 
-        | { Expression = Primitive(String s) } -> Field s
-        | { Expression = Primitive(Number n) } -> Index (int n)
+        | Primitive(String "*") -> All 
+        | Primitive(String s) when s.Length <> 0 && s.[0] = '#' -> Field (s.Substring(1))
+        | Primitive(String s) -> Field s
+        | Primitive(Number n) -> Index (int n)
         | _ -> failwith "unrepresentSel: Invalid selector")
   | _ -> failwith "unrepresentSel: Not a selector"
   
 
 let unrepresent nd = 
-  let (|Lookup|) args = dict [ for a in args -> a.ID, a ]
+  let (|Lookup|) args = dict args
   let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
-    if d.ContainsKey k then Some(d.[k].Expression) else None
+    if d.ContainsKey k then Some(d.[k]) else None
+  let (|Finds|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
+    match d.TryGetValue(k) with true, Primitive(String s) -> Some s | _ -> None
   let editKind =
-    match nd.ID, nd.Expression with
-    | "x-edit-wrap", Record(_, _, Lookup args) ->
-        let (|ParseKind|_|) = function "object" -> Some Object | "apply" -> Some Apply | "list" -> Some List | _ -> None
-        match args with 
-        | Find "tag" (Primitive(String tag)) &
-          Find "id" (Primitive(String id)) &
-          Find "kind" (Primitive(String(ParseKind kind))) &
-          Find "target" sel ->
-            EditKind.WrapRecord(tag, id, kind, unrepresentSel sel, false)
-        | _ -> failwith "unrepresent - invalid arguments of x-edit-wrap"
-    | "x-edit-append", Record(_, _, Lookup (Find "target" sel & Find "node" (Record(_, _, [nd])))) ->
+    match nd with
+    | Record("x-edit-wraprec", Lookup(Finds "tag" tag & Finds "id" id & Find "target" target)) ->
+        EditKind.WrapRecord(tag, id, unrepresentSel target)
+    | Record("x-edit-append", Lookup (Find "target" sel & Find "node" (Record(_, [_, nd])))) ->
         EditKind.ListAppend(unrepresentSel sel, nd)
-    | "x-edit-updateid", Record(_, _, Lookup (Find "target" sel & Find "id" (Primitive(String id)))) ->
+    | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" (Record(_, [_, nd])))) ->
+        EditKind.RecordAdd(unrepresentSel sel, f, nd)
+    | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
         EditKind.RecordRenameField(unrepresentSel sel, id) 
-  { Kind = editKind}//; CanDuplicate = false; IsEvaluated = false; Conditions = []; Dependencies=[] }
+    | _ -> failwith $"unrepresent - Missing case for: {nd}"
+  { Kind = editKind }
+
 
 let represent op = 
-  let repr id kvp = 
-    let args = [ for k,v in kvp -> { ID=k; Expression=v } ]
-    { ID = id; Expression = Record(id, Object, args) }
+  let repr id kvp = Record(id, kvp)
+  let ps v = Primitive(String v)
   match op.Kind with 
-  | EditKind.WrapRecord(tag, id, kind, target, _) ->
-      let ty = match kind with Object -> "object" | Apply -> "apply" | List -> "list"
-      repr "x-edit-wrap" [ 
-        "tag", Primitive(String tag); "id", Primitive(String id)
-        "kind", Primitive(String ty); "target", representSel target 
-      ]
+  | EditKind.WrapRecord(tag, id, target) ->
+      [ "tag", ps tag; "id", ps id; "target", representSel target ] 
+      |> repr "x-edit-wraprec"
   | EditKind.ListAppend(target, nd) ->
-      repr "x-edit-append" [
-        "target", representSel target; "node", Record("x-node-wrapper", Object, [nd])
-      ]
+      [ "target", representSel target; "node", Record("x-node-wrapper", ["it", nd]) ]
+      |> repr "x-edit-append"
+  | EditKind.RecordAdd(target, f, nd) ->
+      [ "target", representSel target; "field", ps f; "node", Record("x-node-wrapper", ["it", nd]) ]
+      |> repr "x-edit-add"
   | EditKind.RecordRenameField(target, id) ->
-      repr "x-edit-updateid" [
-        "target", representSel target; "id", Primitive(String id)
-      ]
-     *) 
+      [ "target", representSel target; "id", ps id ]
+      |> repr "x-edit-updateid"
+  | _ -> failwith $"represent - Missing case for: {op.Kind}"
+     
