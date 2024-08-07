@@ -15,13 +15,13 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
-let ap s n = { Kind = ListAppend(s, n) } 
+let ap s n = { Kind = ListAppend(s, ConstSource n) } 
 let wr s fld tag = { Kind = WrapRecord(ffld fld, tag, s) }
 let wl s tag = { Kind = WrapList(tag, s) }
 let ord s l = { Kind = ListReorder(s, l) } 
 let ed sel fn f = transformations.[fn] <- f; { Kind = PrimitiveEdit(sel, fn) } 
-let add sel f n = { Kind = RecordAdd(sel, ffld f, n) }
-let cp s1 s2 = { Kind = Copy(s1, s2) }
+let add sel f n = { Kind = RecordAdd(sel, ffld f, ConstSource n) }
+let cp s1 s2 = { Kind = Copy(s2, RefSource s1) }
 let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
 let uid s id = { Kind = RecordRenameField(s, ffld id) }
 

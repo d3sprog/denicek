@@ -7,26 +7,27 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Merriweather+Sans:wght@300;400&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Merriweather+Sans:wght@300;400&family=Roboto+Mono:ital@0;1&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
   <style type="text/css">
     * { font-family:'Merriweather'; line-height:1.5em; }
     html, body { padding:0px; margin:0px; }
-    #main { }
-    #doc { position:absolute; width:45vw; padding:10px }
-    #edits { position:absolute; width:30vw; left:70vw; }
-    #ctx { position:absolute; width:20vw; left:50vw; }
+    #main { display:flex; flex-direction:row; align-items: flex-start; }
+    #doc { flex:20; padding:10px }
+    #ctx { flex:0 0 300px; margin:10px 20px 0px 20px; }
+    #edits { flex:0 0 450px; }
+    
+    #edits { font:300 8pt 'merriweather sans'; height:100vh; left:70vw; background:#f0f0f0; overflow:scroll; padding:0px 0px 0px 10px }
+    #edits ol li { margin:0px; padding:0px; }
+    #edits ol { margin:0px; padding:0px 0px 0px 18px; }
+    #edits ol a { text-decoration: none; }
+    #edits kbd { text-align:center; margin:0px 3px 0px 3px; display: inline-block; padding: 2px 6px; color: #333; background-color: #eee; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+    #edits button { margin:5px; padding:2px; font:300 8pt 'merriweather sans';}
+
+
     a.eval, a.eval a { color:#808080; }
     a.sel, a.sel a { color:#00AF40; }
-    li.recorded { background:#e3f0ff;}
-    button { margin:5px; padding:5px; font:300 9pt 'merriweather sans';}
     td { border:1px solid black; padding:2px; }
     thead td { font-weight: bold; }
-    #edits p { font-size:9pt; }
-    #edits li { font-size:9pt; }
-    #edits ol a { text-decoration: none; }
-    .hisel { background-color:#C0E58B; }
-    .hidoc { background-color:#C9E1FF; }
-    .historical { background-color:#F7F291; }
 /*
     #hcontrols, #hcontrols span { font:300 10pt 'merriweather sans' }
     #hcontrols { position:absolute; margin-top:30px; }
@@ -43,30 +44,47 @@
     x-event-handler > * { display:list-item; }
     x-event-handler { display:none; }
 
+    #doc .docinput { display:inline-block; margin:2px 5px; padding: 2px 6px 2px 4px; color: #333; 
+      font:8pt 'roboto mono'; position: absolute; background-color: #ffffff; 
+      border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+
+    .hselnode { border:4px solid #e8d0b2; }
+    .hselhist { background:#e8d0b2; }
+    .hseltree { background:#e8d0b2; }
+
     .cursor { border:4px solid #e3ffed; }
     .cursor-after { border-right:4px solid #6dffa2; }
     .cursor-before { border-left:4px solid #6dffa2; }
 
     #ctx kbd { margin-right:10px; width:10px; text-align:center; display: inline-block; padding: 2px 6px; color: #333; background-color: #eee; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
     #ctx kbd.long { width:40px; }
-    #ctx .input { margin-left:40px; display: inline-block; padding: 2px 6px; color: #333; background-color: #f8f8f8; border: 1px solid #ccc; border-radius: 3px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
     #ctx ul { margin:0px; padding:0px; }
     #ctx li { list-style-type:none; }
-    #ctx li .doc { font-style:italic; }
+    #ctx li .doc { color:#404040; }
 
     xx-evaluated > *:nth-child(2) {
       display:none;
     }
 
-    #ctx pre { font-family:monospace; margin:0px; }
+    #ctx pre { font-family:'roboto mono'; margin:0px; }
     #ctx { 
       text-align: left;
       box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3);
       border-radius: 10px;
-      padding:10px 0px 50px 0px; font:300 8pt 'merriweather sans';
+      padding:10px 0px 15px 0px; font:300 8pt 'merriweather sans';
     }
     #ctx-body { margin:0px 10px 0px 10px; }
     #ctx .loc span { margin-right:10px;}
+
+    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .treeinput { background:#0074E8; color:white; border-radius:2px; padding:2px 5px 2px 5px;}
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
+    .treedoc .inline .treeinput { display:block; padding-left: 5px; }
 </style>
 </head>
 <body>
