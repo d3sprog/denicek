@@ -750,39 +750,42 @@ let merge e1s e2s =
 // Evaluation
 // --------------------------------------------------------------------------------------
 
-let rec evalSiteRecordChildren sels nds =
+let rec evalSiteRecordChildren inFormula sels nds =
   let rec loop i = function 
     | (f, nd)::nds -> 
-        match evalSite (Field f::sels) nd with 
+        match evalSite inFormula (Field f::sels) nd with 
         | Some res -> Some res
         | None -> loop (i + 1) nds
     | _ -> None
   loop 0 nds 
 
-and evalSiteListChildren sels nds =
+and evalSiteListChildren inFormula sels nds =
   let rec loop i = function 
     | nd::nds -> 
-        match evalSite (Index i::sels) nd with 
+        match evalSite inFormula (Index i::sels) nd with 
         | Some res -> Some res
         | None -> loop (i + 1) nds
     | _ -> None
   loop 0 nds 
 
-and (|EvalSiteRecordChildren|_|) sels nds = 
-  evalSiteRecordChildren sels nds
+and (|EvalSiteRecordChildren|_|) inFormula sels nds = 
+  evalSiteRecordChildren inFormula sels nds
 
-and (|EvalSiteListChildren|_|) sels nds = 
-  evalSiteListChildren sels nds
+and (|EvalSiteListChildren|_|) inFormula sels nds = 
+  evalSiteListChildren inFormula sels nds
 
-and evalSite sels nd : option<Selectors> =
+/// Evaluate references only if they are inside formula
+/// (they may be used for other things in the document, e.g. event handlers)
+and evalSite inFormula sels nd : option<Selectors> =
   match nd with 
   | Primitive _ | Reference(Field "$builtins"::_) -> None
-  | Reference(p) -> Some (List.rev sels)
+  | Reference(p) when inFormula -> Some (List.rev sels)
+  | Reference _ -> None
   | Record("x-evaluated", _) -> None
-  | Record("x-formula", EvalSiteRecordChildren sels res) -> Some res // Call by value - evaluate children first
+  | Record("x-formula", EvalSiteRecordChildren true sels res) -> Some res // Call by value - evaluate children first
   | Record("x-formula", _) -> Some(List.rev sels)
-  | Record(_, EvalSiteRecordChildren sels res) -> Some res
-  | List(_, EvalSiteListChildren sels res) -> Some res
+  | Record(_, EvalSiteRecordChildren false sels res) -> Some res
+  | List(_, EvalSiteListChildren false sels res) -> Some res
   | List _ | Record _ -> None
 
 let (|Args|) args = 
@@ -792,7 +795,7 @@ let (|Args|) args =
 let (|ListFind|_|) k = List.tryFind (fst >> (=) k)
 
 let evaluateRaw doc =
-  match evalSite [] doc with
+  match evalSite false [] doc with
   | None -> []
   | Some sels ->
       let it = match select sels doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
