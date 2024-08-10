@@ -612,10 +612,10 @@ let rec renderNode state trigger path pid nd =
   let handlers = 
     match nd with 
     | Record(_, nds) -> nds |> List.choose (function
-        | id, Reference(Select state.DocumentState.CurrentDocument 
-            [List("x-event-handler", edits)]) when id.StartsWith "@" ->
         // To allow inline event handlers, we can do the following:
         // | id, List("x-event-handler", edits) ->
+        | id, Reference(Select state.DocumentState.CurrentDocument 
+            [List("x-event-handler", edits)]) when id.StartsWith "@" ->
             Some(id.Substring(1) =!> fun _ _ ->
               let handler = [ for e in edits -> unrepresent e ]
               trigger(DocumentEvent(Evaluate(true)))
@@ -729,16 +729,32 @@ let render trigger (state:GlobalState) =
 // Update operation
 // --------------------------------------------------------------------------------------
 
-let update (state:GlobalState) e = 
+let rec update (state:GlobalState) e = 
   match e with 
   | ToggleViewSource ->
       match state.ViewSourceSelector with 
       | None -> { state with ViewSourceSelector = Some state.CursorSelector }
       | Some _ -> { state with ViewSourceSelector = None }
   
-  | MoveCursor dir ->
+  | MoveCursor dir ->      
       let ncur, nsel = moveCursor state.DocumentState.CurrentDocument state.CursorLocation dir
-      { state with CursorLocation = ncur; CursorSelector = nsel }
+      let state = { state with CursorLocation = ncur; CursorSelector = nsel }
+      // Make sure the cursor is pointing to a visible thing
+      let _, tr = trace nsel state.DocumentState.CurrentDocument |> Seq.exactlyOne
+      match state.ViewSourceSelector with 
+      | Some srcSel when includes srcSel nsel -> 
+          // The current location is inside view source region
+          state 
+      | _ ->
+          // If it is pointing to a hidden thing, move further
+          let hidden = tr |> List.exists (function 
+            | _, Field(s) when s.StartsWith("@") -> true
+            | _, Field("saved-interactions") -> true
+            | Record("input", _), _ -> true
+            | Record("button", _), _ -> true
+            | _ -> false)
+          if hidden then update state (MoveCursor dir)
+          else state
   
 
   | CommandEvent(CopyNode) ->

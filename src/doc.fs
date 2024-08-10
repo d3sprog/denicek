@@ -83,11 +83,11 @@ let rec includes p1 p2 =
   match p1, p2 with 
   | [], _ -> true
   | _, [] -> false
-  | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && matches p1 p2
-  | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && matches p1 p2
-  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && matches p1 p2
-  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> matches p1 p2
-  | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> matches p1 p2
+  | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includes p1 p2
+  | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includes p1 p2
+  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && includes p1 p2
+  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> includes p1 p2
+  | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> includes p1 p2
   | _ -> false
 
 let select sel doc = 
