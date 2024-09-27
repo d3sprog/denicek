@@ -22,6 +22,10 @@ type Node =
   | Reference of Selectors
 
 let transformations = System.Collections.Generic.Dictionary<string, Primitive -> Primitive>()
+transformations.Add("take-first",function String s -> String(s.Substring(0, 1)) | p -> p)
+transformations.Add("skip-first",function String s -> String(s.Substring(1)) | p -> p)
+transformations.Add("upper",function String s -> String(s.ToUpper()) | p -> p)
+transformations.Add("lower",function String s -> String(s.ToLower()) | p -> p)
 
 // --------------------------------------------------------------------------------------
 // Elements, Selectors, Paths
@@ -110,6 +114,30 @@ let trace sel doc =
     | _ -> ()  }
   loop [] sel doc 
 
+/// Generates a list of selectors where each 'All' or 'Tag'
+/// is replaced with all possible 'Index' values.
+let expandWildcards sel doc = 
+  let rec loop acc sel nd = 
+    match nd, sel with 
+    | nd, [] -> List.map List.rev acc
+    | Record(_, els), (Field(f) as s)::sel -> 
+        loop (List.map (fun acc -> s::acc) acc) sel (snd (List.find (fst >> (=) f) els))
+    | List(_, els), (Index(i) as s)::sel -> 
+        loop (List.map (fun acc -> s::acc) acc) sel els.[i]
+    | List(_, els), (Tag(t) as s)::sel -> 
+        List.concat [
+          for i, nd in Seq.indexed els do
+            match nd with 
+            | Record(t2, _) | List(t2, _) when t2 = t ->
+                loop (List.map (fun acc -> (Index i)::acc) acc) sel nd
+            | _ -> () ]
+    | List(_, els), (All as s)::sel -> 
+        List.concat [
+          for i, nd in Seq.indexed els do
+            loop (List.map (fun acc -> (Index i)::acc) acc) sel nd ]
+    | _ -> failwith "expandWildcards: No matching element"
+  loop [[]] sel doc 
+
 let selectSingle sel doc = 
   match select sel doc with
   | [it] -> it
@@ -118,7 +146,9 @@ let selectSingle sel doc =
 // --------------------------------------------------------------------------------------
 // Edits
 // --------------------------------------------------------------------------------------
-                                             
+       
+type Condition = EqualsTo of Primitive | NonEmpty 
+
 type Source = ConstSource of Node | RefSource of Selectors
                                                             // Kind   | Effect on selectors
 type EditKind =                                             // =======|====================
@@ -132,6 +162,7 @@ type EditKind =                                             // =======|=========
   | WrapList of tag:string * target:Selectors               // Struct | Add 'All'
   | UpdateTag of Selectors * string * string                // Struct | Change 'Tag'
   | Delete of Selectors
+  | Check of Selectors * Condition
 
 //type RelationalOperator = 
 //  | Equals | NotEquals 
@@ -173,11 +204,12 @@ let withNodeSelectors nd sels =
 let getSelectors ed = 
   match ed.Kind with 
   | PrimitiveEdit(s, _) | ListReorder(s, _) | RecordRenameField(s, _) 
-  | UpdateTag(s, _, _) | WrapRecord(_, _, s) | WrapList(_, s) | Delete(s) -> [s]
+  | UpdateTag(s, _, _) | WrapRecord(_, _, s) | WrapList(_, s) | Delete(s) | Check(s, _) -> [s]
   | ListAppend(s, ConstSource nd) | RecordAdd(s, _, ConstSource nd) 
   | Copy(s, ConstSource nd) -> s :: (getNodeSelectors nd)
   | ListAppend(s1, RefSource s2) | RecordAdd(s1, _, RefSource s2) 
   | Copy(s1, RefSource s2) -> [s1; s2]
+
 
 (*
 /// Not including 'Reference' selectors in expressions
@@ -192,9 +224,16 @@ let getDependenciesSelectors ed =
 let getTargetSelector ed = 
   match ed.Kind with 
   | PrimitiveEdit(s, _) | ListReorder(s, _) | RecordRenameField(s, _) 
-  | UpdateTag(s, _, _) | Copy(s, _) | Delete(s) -> s
+  | UpdateTag(s, _, _) | Copy(s, _) | Delete(s) | Check(s, _) -> s
   | WrapRecord(_, id, s) | RecordAdd(s, id, _) -> s @ [Field id]
   | ListAppend(s, _) | WrapList(_, s) -> s @ [All]
+
+let getTargetSelectorPrefixes eds = 
+  let sels = System.Collections.Generic.HashSet<_>()
+  for ed in eds do
+    let sel = getTargetSelector ed
+    for prefix in List.prefixes sel do ignore(sels.Add(prefix))
+  List.sort (List.ofSeq sels)
 
 let withTargetSelector tgt ed = 
   let dropLast (tgt:_ list) = tgt.[0 .. tgt.Length - 2] // Remove the last, added in 'getTargetSelector'
@@ -210,6 +249,7 @@ let withTargetSelector tgt ed =
     | UpdateTag(_, t1, t2) -> UpdateTag(tgt, t1, t2) 
     | RecordRenameField(_, s) -> RecordRenameField(tgt, s) 
     | Copy(_, s) -> Copy(tgt, s)
+    | Check(_, cond) -> Check(tgt, cond)
   { ed with Kind = nkind }
 
 let withSelectors sels ed =
@@ -228,6 +268,7 @@ let withSelectors sels ed =
     | Copy(_, RefSource _) -> Copy(List.head sels, RefSource (List.exactlyOne (List.tail sels)))
     | ListAppend(_, RefSource _) -> ListAppend(List.head sels, RefSource (List.exactlyOne (List.tail sels)))
     | RecordAdd(_, f, RefSource _) -> RecordAdd(List.head sels, f, RefSource (List.exactlyOne (List.tail sels)))
+    | Check(_, cond) -> Check(List.exactlyOne sels, cond)
   { ed with Kind = nkind }
 
 /// If 'p1' is prefix of 'p2', return the rest of 'p2'.
@@ -377,10 +418,21 @@ let enabled doc edit =
       | _ -> rel = NotEquals )) // No tag - also passes != check
       *)
 
+exception ConditionCheckFailed of string
+
 let apply doc edit =
+  //(fun f -> try f() with e -> printfn "update: Failed for edit '%A'" edit; reraise()) <| fun () -> 
   match edit.Kind with
   //| _ when not (enabled doc edit) ->
     //  doc
+  | Check(sel, cond) ->
+      match cond, select sel doc with 
+      | EqualsTo(String s1), [Primitive(String s2)] -> if s1 <> s2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({s1}<>{s2})")
+      | EqualsTo(Number n1), [Primitive(Number n2)] -> if n1 <> n2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({n1}<>{n2})")
+      | NonEmpty, [Primitive(Number _)] -> ()
+      | NonEmpty, [Primitive(String s)] -> if System.String.IsNullOrWhiteSpace(s) then raise(ConditionCheckFailed $"apply.Check: NonEmpty failed ({s})")
+      | cond, nd -> raise (ConditionCheckFailed $"apply.Check Condition ({cond}) failed ({nd})")
+      doc
 
   // This may invalidate some selectors, but there is not much we can do
   // (just do this...)
@@ -645,6 +697,7 @@ let updateSelectors e1 e2 =
           else [e1]
     
   | Copy(_, ConstSource _) // TODO: Think about this
+  | Check _
   // TODO: EVALUATION?
   | Delete _
   | UpdateTag _
@@ -899,6 +952,12 @@ let unrepresentSrc nd =
   | Record("x-src-ref", Lookup(Find "selector" nd)) -> RefSource(unrepresentSel nd)
   | _ -> failwith $"unrepresentSrc - Invalid node {nd}"
 
+let unrepresentCond nd = 
+  match nd with 
+  | Record("x-cond-equals", Lookup(Find "node" (Primitive v))) -> EqualsTo(v)
+  | Record("x-cond-nonempty", []) -> NonEmpty
+  | _ -> failwith $"unrepresentCond - Invalid node {nd}"
+
 let unrepresent nd = 
   let editKind =
     match nd with
@@ -914,14 +973,24 @@ let unrepresent nd =
         EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
     | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
         EditKind.Delete(unrepresentSel tgt) 
+    | Record("x-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
+        EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
+    | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
+        EditKind.WrapList(tag, unrepresentSel tgt) 
+    | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
+        EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
     | _ -> failwith $"unrepresent - Missing case for: {nd}"
   { Kind = editKind }
-
 
 let representSrc src = 
   match src with 
   | ConstSource(nd) -> [ "const", nd ] |> rcd "x-src-node"
   | RefSource(sel) -> [ "selector", representSel sel ] |> rcd "x-src-ref"
+
+let representCond cond = 
+  match cond with 
+  | EqualsTo(nd) -> [ "node", Primitive nd ] |> rcd "x-cond-equals"
+  | NonEmpty -> [] |> rcd "x-cond-nonempty"
 
 let represent op = 
   let ps v = Primitive(String v)
@@ -944,4 +1013,13 @@ let represent op =
   | EditKind.Delete(target) ->
       [ "target", representSel target ]
       |> rcd "x-edit-delete"
+  | EditKind.Check(target, cond) -> 
+      [ "target", representSel target; "cond", representCond cond ]
+      |> rcd "x-check"
+  | EditKind.WrapList(tag, target) ->
+      [ "target", representSel target; "tag", ps tag ]
+      |> rcd "x-wrap-list"
+  | EditKind.PrimitiveEdit(target, op) ->
+      [ "target", representSel target; "op", ps op ]
+      |> rcd "x-primitive-edit"
   | _ -> failwith $"represent - Missing case for: {op.Kind}"

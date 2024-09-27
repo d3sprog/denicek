@@ -1,6 +1,32 @@
 #load "utils.fs" "doc.fs" "demos.fs"
+open Tbd
 open Tbd.Doc
 open Tbd.Demos
+
+let eds = opsCore @ opsBudget
+
+let rec generalizeSelectors sels = 
+  let allEmpty = List.forall List.isEmpty sels
+  let allCons = List.forall (List.isEmpty >> not) sels
+  if allEmpty then Some [] else
+  if not allCons then None else
+  let heads = List.map List.head sels
+  let tails = List.map List.tail sels
+  generalizeSelectors tails |> Option.bind (fun tail ->
+    heads 
+    |> List.tryReduce (fun s1 s2 ->
+        match s1, s2 with 
+        | _ when s1 = s2 -> Some s1
+        | (Index _ | Tag _ | All), (Index _ | Tag _ | All) -> Some All
+        | _ -> None)
+    |> Option.map (fun head -> head :: tail))
+
+[ [Field "greetings"; Index 1; Field "greeting"]
+  [Field "greetings"; Index 0; Field "greeting"] ]
+|> generalizeSelectors
+
+select
+//getTargetSelectorPrefixes eds
 
 let sample = 
   //opsBaseCounter 

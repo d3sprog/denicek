@@ -1,3 +1,4 @@
+.vscode
 output/
 tests/obj/
 tests/bin/
