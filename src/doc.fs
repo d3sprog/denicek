@@ -762,6 +762,7 @@ let moveBefore e1 e2 =
   let e1 = updateSelectors e1 e2
   e1
   
+(*
 let merge e1s e2s = 
   let rec loop acc e1s e2s =
     match e1s, e2s with 
@@ -798,6 +799,43 @@ let merge e1s e2s =
         (List.rev acc) @ e1s @ e2sAfter
 
   loop [] e1s e2s 
+*)
+
+// --------------------------------------------------------------------------------------
+// Edit groups
+// --------------------------------------------------------------------------------------
+
+type EditList = 
+  { Groups : Edit list list }
+  member x.GetSlice(start, finish) =
+    let start = start |> Option.defaultValue 0
+    let finish = finish |> Option.defaultWith (fun () -> x.Length - 1)
+    { Groups = List.sliceNested  start finish x.Groups }
+  member x.Length = 
+    List.sumBy List.length x.Groups
+  member x.Truncate n =
+    { Groups = List.truncateNested n x.Groups }
+  member x.Append eds = 
+    { Groups = x.Groups @ eds.Groups }
+
+let applyHistory initial hist =
+  hist.Groups |> List.fold (fun state group -> 
+    try group |> List.fold apply state
+    with ConditionCheckFailed msg -> 
+      printfn $"applyHistory: Skipping group with check ({msg})"
+      state) initial
+  
+let mergeHistories h1 h2 =
+  let shared, (e1s, e2s) = List.sharedPrefixNested h1.Groups h2.Groups
+  let e2sAfter = 
+    e2s |> List.collectNested (fun e2 ->
+        // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
+        // (caveat is that the operation can turn it into multiple edits)
+        List.foldNested (fun e2 e1 -> 
+          e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s )         
+
+  { Groups = shared @ e1s @ e2sAfter }
+
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -904,15 +942,19 @@ let evaluateRaw doc =
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
 let evaluateDoc doc =
-  [ for ed(*, conds, deps *) in evaluateRaw doc -> 
-      //{ CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
-      { Kind = ed } ]
+  let eds = 
+    [ for ed(*, conds, deps *) in evaluateRaw doc -> 
+        //{ CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
+        { Kind = ed } ]
+  { Groups = [eds] }
 
-let rec evaluateAll doc = seq {
-  let edits = evaluateDoc doc
-  yield! edits
-  let ndoc = edits |> List.fold apply doc
-  if doc <> ndoc then yield! evaluateAll ndoc }
+let evaluateAll doc = 
+  let rec loop doc = seq {
+    let edits = evaluateDoc doc
+    yield! edits.Groups
+    let ndoc = applyHistory doc edits 
+    if doc <> ndoc then yield! loop ndoc }
+  { Groups = List.ofSeq (loop doc) }
 
 // --------------------------------------------------------------------------------------
 // Representing edits as nodes

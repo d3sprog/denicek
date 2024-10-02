@@ -50,8 +50,8 @@ let rec nodeFromJson o =
   elif o?kind = "reference" then Reference [ for o in unbox<obj[]> o?selectors -> selFromJson o ]
   else failwith $"nodeFromJson - unexpected object: {o}"
 
-let nodesToJson nds = box [| for nd in nds -> nodeToJson nd |]
-let nodesFromJson obj = [ for o in unbox<obj[]> obj -> nodeFromJson o ]
+let nodesToJson ndss = box [| for nds in ndss -> box [| for nd in nds -> nodeToJson nd |] |]
+let nodesFromJson obj = [ for os in unbox<obj[][]> obj -> [ for o in os -> nodeFromJson o ] ]
 let nodesToJsonString nds = JS.JSON.stringify(nodesToJson nds)
 let nodesFromJsonString s = nodesFromJson(JS.JSON.parse(s))
   
