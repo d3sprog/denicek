@@ -1,5 +1,8 @@
 ﻿namespace Tbd
 
+module Patterns =
+  let (|As|) v i = (v, i)
+
 module List = 
   let foldi f st lst = List.indexed lst |> List.fold f st
 
