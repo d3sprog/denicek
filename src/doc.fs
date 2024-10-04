@@ -21,11 +21,21 @@ type Node =
   | Primitive of Primitive
   | Reference of Selectors
 
-let transformations = System.Collections.Generic.Dictionary<string, Primitive -> Primitive>()
-transformations.Add("take-first",function String s -> String(s.Substring(0, 1)) | p -> p)
-transformations.Add("skip-first",function String s -> String(s.Substring(1)) | p -> p)
-transformations.Add("upper",function String s -> String(s.ToUpper()) | p -> p)
-transformations.Add("lower",function String s -> String(s.ToLower()) | p -> p)
+type Transformation = { Key : string; Label : string; Function : Primitive -> Primitive }
+
+let transformations = 
+  [ { Key = "take-first"; Label = "Take first letter of a string"
+      Function = function String s -> String(s.Substring(0, 1)) | p -> p }
+    { Key = "skip-first"; Label = "Skip first letter of a string"
+      Function = function String s -> String(s.Substring(1)) | p -> p }
+    { Key = "upper"; Label = "Turn string into uppercase"
+      Function = function String s -> String(s.ToUpper()) | p -> p }
+    { Key = "lower"; Label = "Turn string into lowercase"
+      Function = function String s -> String(s.ToLower()) | p -> p }
+  ]
+
+let transformationsLookup = System.Collections.Generic.Dictionary<_, _>() 
+for t in transformations do transformationsLookup.[t.Key] <- t.Function
 
 // --------------------------------------------------------------------------------------
 // Elements, Selectors, Paths
@@ -110,7 +120,10 @@ let trace sel doc =
     | List(_, els), (All as s)::sel -> 
         for el in els do yield! loop ((nd, s)::trace) sel el
     | Record(_, els), (Field(f) as s)::sel -> 
-        yield! loop ((nd, s)::trace) sel (snd (List.find (fst >> (=) f) els)) 
+        let chOpt = List.tryFind (fst >> (=) f) els
+        match chOpt with 
+        | Some ch -> yield! loop ((nd, s)::trace) sel (snd ch)
+        | _ -> ()
     | _ -> ()  }
   loop [] sel doc 
 
@@ -469,7 +482,7 @@ let apply doc edit =
   | PrimitiveEdit(sel, f) ->
       replace (fun p el -> 
         match el with 
-        | Primitive(v) when matches p sel -> Some(Primitive(transformations.[f] v))
+        | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] v))
         | _ -> None ) doc
 
   // We can always do this.
@@ -807,6 +820,7 @@ let merge e1s e2s =
 
 type EditList = 
   { Groups : Edit list list }
+  member x.Item(i) = x.[i .. i].Groups |> Seq.head |> Seq.head
   member x.GetSlice(start, finish) =
     let start = start |> Option.defaultValue 0
     let finish = finish |> Option.defaultWith (fun () -> x.Length - 1)

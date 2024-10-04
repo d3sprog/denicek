@@ -19,7 +19,7 @@ let ap s n = { Kind = ListAppend(s, ConstSource n) }
 let wr s fld tag = { Kind = WrapRecord(ffld fld, tag, s) }
 let wl s tag = { Kind = WrapList(tag, s) }
 let ord s l = { Kind = ListReorder(s, l) } 
-let ed sel fn f = transformations.["_" + fn] <- f; { Kind = PrimitiveEdit(sel, "_" + fn) } 
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = PrimitiveEdit(sel, "_" + fn) } 
 let add sel f n = { Kind = RecordAdd(sel, ffld f, ConstSource n) }
 let cp s1 s2 = { Kind = Copy(s2, RefSource s1) }
 let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }

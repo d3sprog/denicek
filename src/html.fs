@@ -33,6 +33,14 @@ type DomNode =
   | Element of ns:string * tag:string * attributes:(string * DomAttribute)[] * 
       children : DomNode[] * onRender : (HTMLElement -> unit) option
   
+let innerText nd = 
+  let sb = System.Text.StringBuilder()
+  let rec loop = function
+    | Text s -> sb.Append(s) |> ignore
+    | Element(_, _, _, cs, _) -> for c in cs do loop c
+  loop nd
+  sb.ToString()
+
 let createTree ns tag args children =
     let attrs = ResizeArray<_>()
     let props = ResizeArray<_>()
@@ -86,7 +94,7 @@ let createVirtualDomApp id initial r u =
     state
   
   setState initial
-  event.Publish.Add(fun e -> setState (u state e))
+  event.Publish.Add(fun e -> setState (u state trigger e))
   trigger, setState, getState
   
 let text s = Text(s)

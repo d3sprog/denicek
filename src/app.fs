@@ -25,21 +25,7 @@ type HistoryState =
     SelectedEdits : Set<int>
     Display : bool }
 
-// (3) Command toolbox - state
-
-type CommandRecommendation = 
-  { Icon : string
-    Label : string 
-    Parser : Parsec.Parser<EditKind> }
-
-type CommandState =
-  { Command : string 
-    KnownRecommendations : CommandRecommendation list
-    Recommendations : (CommandRecommendation * Parsec.Template) list
-    SelectedRecommendation : int
-    CopySource : Selectors option }
-
-// (4) View and navigation - state
+// (3) View and navigation - state
 
 type LocationModifier = Before | After
 type Cursor = int list * LocationModifier
@@ -51,9 +37,29 @@ type ViewState =
     Markers : Selectors list
     GeneralizedMarkersSelector : Selectors option }
 
+// (4) Command toolbox - state
+
+type CommandRecommendationResult = 
+  | EditRecommendation of EditList
+  | NestedRecommendation of CommandRecommendation list
+  | CompleteCommand of string
+  
+and CommandRecommendation = 
+  { Icon : string
+    Label : ApplicationState -> DomNode
+    Parser : Parsec.Parser<CommandRecommendationResult> }
+
+and CommandState =
+  { AltMenuDisplay : bool
+    Command : string 
+    KnownRecommendations : CommandRecommendation list
+    Recommendations : (CommandRecommendation * Parsec.Template) list
+    SelectedRecommendation : int
+    CopySource : Selectors option }
+
 // All the states grouped together
 
-type ApplicationState = 
+and ApplicationState = 
   { ViewState : ViewState  
     CommandState : CommandState
     DocumentState : DocumentState
@@ -82,19 +88,7 @@ type HistoryEvent =
   | SelectNone
   | ToggleEditHistory
 
-// (3) Command toolbox - events
-
-type CommandEvent = 
-  | CancelCommand
-  | BackspaceCommand
-  | TypeCommand of string
-  | PreviousRecommendation
-  | NextRecommendation
-  | SetRecommendation of int
-  | ChooseRecommendation 
-  | CopyNode  
-
-// (4) View and navigation - events
+// (3) View and navigation - events
 
 type CursorMove = 
   Backward | Forward | Previous | Next
@@ -105,17 +99,29 @@ type ViewEvent =
   | AddMarker
   | ClearMarkers
 
-// All the events grouped together
+// (4) Command toolbox - events
 
-type Event =  
+type CommandEvent = 
+  | CancelCommand
+  | BackspaceCommand
+  | TypeCommand of string
+  | PreviousRecommendation
+  | NextRecommendation
+  | SetRecommendation of int
+  | CopyNode  
+  | ToggleAltMenu of bool
+
+// All the events grouped together
+// (EnterCommand is here because entering a command affects global application 
+// state in too complex ways - it updates document, view, history, etc.)
+
+type ApplicationEvent =  
   | ViewEvent of ViewEvent
   | HistoryEvent of HistoryEvent
   | CommandEvent of CommandEvent
   | DocumentEvent of DocumentEvent
   | ResetState of ApplicationState
-
-  | EnterCommand
-  
+  | EnterCommand  
 
 // --------------------------------------------------------------------------------------
 // General purpose helpers
@@ -140,9 +146,10 @@ module Helpers =
     >> String.concat ""
 
   let renderSelector state trigger sel = 
+    let selected = state.HistoryState.HighlightedSelector = Some sel
     h?a [ 
       "href" => "javascript:;"
-      "class" => if state.HistoryState.HighlightedSelector = Some sel then "hselhist" else ""
+      "class" => "selector" +? (selected, "selsel")
       "mouseover" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector(Some sel)))
       "mouseout" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector None))
     ] [ 
@@ -207,7 +214,7 @@ module Document =
         "class" => 
           "treenode" 
           +? (isPlainTextNode nd, "inline") 
-          +? (highlightedSel state path, "hseltree")
+          +? (highlightedSel state path, "selsel")
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
           +? (marked state path, "marked")
@@ -300,7 +307,7 @@ module Document =
         yield "id" => pid 
         yield "class" => 
           ""
-          +? (highlightedSel state path, "hselnode")
+          +? (highlightedSel state path, "selsel")
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
           +? (marked state path, "marked")
@@ -334,6 +341,7 @@ module Document =
 
     loop [] ""
     
+
   let update appstate state = function
     | UndoLastEdit ->
         let nedits = state.Edits.Truncate(state.Edits.Length - 1)
@@ -458,6 +466,7 @@ module History =
         yield h?div [] [
           h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(false))) ] [text "Eval step!"]
           h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(true))) ] [text "Eval all!"]
+          // TODO: This needs to move into demos (and does not belong here anyway)
           //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget))) ] [text "Add budget"]
           //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget @ addSpeakerOps))) ] [text "Add speaker"]
           //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ fixSpeakerNameOps))) ] [text "Fix name"]
@@ -503,110 +512,72 @@ module History =
     ]
 
 // --------------------------------------------------------------------------------------
+// Keyboard shortcuts
+// --------------------------------------------------------------------------------------
+
+type Shortcut = 
+  { Key : string 
+    IconCode : string
+    Header : string 
+    Events : ApplicationEvent list }
+
+module Shortcuts =
+  let shortcuts = [
+    { Key = "d"
+      Header = "Delete current document node"
+      IconCode = "las la-trash"
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!d"); EnterCommand ] }
+    { Key = "c"
+      Header = "Copy current document node"
+      IconCode = "las la-copy"
+      Events = [ CommandEvent(CopyNode) ] }
+    { Key = "v"
+      Header = "Paste current document node here"
+      IconCode = "las la-paste"
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v"); EnterCommand ] }
+    { Key = "m"
+      Header = "Mark current node"
+      IconCode = "las la-bookmark"
+      Events = [ ViewEvent(AddMarker) ] }
+    { Key = "n"
+      Header = "Clear all marked nodes"
+      IconCode = "las la-backspace"
+      Events = [ ViewEvent(ClearMarkers) ] }
+    { Key = "e"
+      Header = "Evaluate all formulas"
+      IconCode = "las la-play"
+      Events = [ DocumentEvent(Evaluate(true)) ] }
+    { Key = "z"
+      Header = "Undo last edit"
+      IconCode = "las la-undo-alt"
+      Events = [ DocumentEvent(UndoLastEdit) ] }
+    { Key = "u"
+      Header = "Toggle source code view"
+      IconCode = "las la-code"
+      Events = [ ViewEvent(ToggleViewSource) ] }
+    { Key = "h"
+      Header = "Toggle edit history view"
+      IconCode = "las la-history"
+      Events = [ HistoryEvent(ToggleEditHistory) ] }
+  ]
+
+// --------------------------------------------------------------------------------------
 // Command toolbox
 // --------------------------------------------------------------------------------------
 
 module Commands = 
+  open Tbd.Parsec
+  open Tbd.Parsec.Operators
+
   let isRecord = function Record _ -> true | _ -> false
   let isList = function List _ -> true | _ -> false
   let isString = function Primitive (String _) -> true | _ -> false
-  let isNonEmptyString = function Primitive (String s) when not (System.String.IsNullOrWhiteSpace(s)) -> true | _ -> false
   let isNumber = function Primitive (Number _) -> true | _ -> false
 
+  let (|NonEmpty|_|) (s:string) = 
+    if System.String.IsNullOrEmpty(s) then None else Some s
   let (|StartsWith|_|) prefix (s:string) = 
     if s.StartsWith(prefix) then Some(s.Substring(prefix.Length)) else None
-  (*
-  let parseCommand doc cursorSel markerSel recordedEds state = 
-    let cmd = state.Command
-    let nd, _ = trace cursorSel doc |> Seq.head
-    
-    let parseSel sel =
-      [ for s in sel -> 
-          match s, System.Int32.TryParse s with 
-          | _, (true, n) -> Index n
-          | "*", _ -> All
-          | s, _ -> Field s ]
-    let retEhEds eds = true, [ [ for ed in eds -> { Kind = ed } ] ]
-    let retEds eds = false, [ [ for ed in eds -> { Kind = ed } ] ]
-    let retEd ed = false, [ [ { Kind = ed } ] ]
-    let ffld f = if f = "" then "=" + System.Convert.ToBase64String(System.Guid.NewGuid().ToByteArray()) else f
-
-    match cmd with 
-    | "!v" ->        
-        match state.CopySource with
-        | Some src -> Copy(cursorSel, RefSource src) |> retEd
-        | _ -> failwith "parseCommand - no source specified for !v"
-    | "!d" ->
-        Delete(cursorSel) |> retEd
-    | Regex "<([^ ]+) ([^ ]+)>" [tag; fld] ->
-        WrapRecord(fld, tag, cursorSel) |> retEd
-    | Regex "<([^ ]+)>" [tag] ->
-        WrapRecord(ffld "", tag, cursorSel) |> retEd
-    | Regex "\[([^ ]+)\]" [tag] ->
-        WrapList(tag, cursorSel) |> retEd
-    | Regex "@([^ ]+)" [fld] ->
-        RecordRenameField(cursorSel, fld) |> retEd
-
-    | Regex "&([^ ]+)=!m" [id] ->
-        [ if select [Field "saved-interactions"] doc = [] then
-            yield RecordAdd([], "saved-interactions", ConstSource(Record("x-saved-interactions", [])))
-          yield RecordAdd([Field "saved-interactions"], id, ConstSource(List("x-event-handler", [])))
-          for op in recordedEds ->
-            ListAppend([Field "saved-interactions"; Field id], ConstSource(represent op)) ]
-        |> retEhEds
-    (*
-    | Regex ":([^ ]+)=!m" [evt] ->
-        [ yield RecordAdd(cursorSel, evt, ConstSource(List("x-event-handler", [])))
-          for op in recordedEds ->
-            ListAppend(cursorSel @ [Field evt], ConstSource(represent op)) ]
-        |> retEhEds
-    *)
-
-
-    | ":!v" when isList nd ->
-        match state.CopySource with
-        | Some src -> ListAppend(cursorSel, RefSource(src)) |> retEd
-        | _ -> failwith "parseCommand - no source specified for !v"        
-    | Regex ":<([^> ]+)>" [tag] when isList nd ->
-        ListAppend(cursorSel, ConstSource(Record(tag, []))) |> retEd
-    | Regex ":\[([^\] ]+)\]" [tag] when isList nd ->
-        ListAppend(cursorSel, ConstSource(List(tag, []))) |> retEd
-    | Regex ":([0-9]+)" [num] when isList nd ->
-        ListAppend(cursorSel, ConstSource(Primitive(Number (int num)))) |> retEd
-    | Regex ":/(.+)" [sel] when isList nd ->
-        ListAppend(cursorSel, ConstSource(Reference(parseSel (sel.Split('/'))))) |> retEd
-    | Regex ":(.+)" [str] when isList nd ->
-        ListAppend(cursorSel, ConstSource(Primitive(String str))) |> retEd
-
-    | "?=?" when isNonEmptyString nd || isNumber nd ->
-        Check(cursorSel, NonEmpty) |> retEd
-    | "?=." when isString nd || isNumber nd ->
-        Check(cursorSel, EqualsTo(match nd with Primitive v -> v | _ -> failwith "parseCommand: impossible")) |> retEd
-        
-    | StartsWith "*" op when transformations.ContainsKey(op) ->
-        PrimitiveEdit(cursorSel, op) |> retEd
-
-    | StartsWith "*" (Regex "([^ ]+) ([0-9]+)" [op; variant]) ->
-        let _, ops = Helpers.getSavedInteractions doc |> List.find (fun (k, _) -> k = op)
-        let prefix = (getTargetSelectorPrefixes ops).[int variant]
-        false, [ Helpers.replacePrefixInEdits prefix cursorSel ops  ] 
-
-    | StartsWith "*" (Regex "([^ ]+) ([a-z])" [op; variant]) -> 
-        let _, ops = Helpers.getSavedInteractions doc |> List.find (fun (k, _) -> k = op)
-        let prefix = (getTargetSelectorPrefixes ops).[int variant.[0] - int 'a']
-        match markerSel with 
-        | Some markerSel -> 
-            let ops = [ 
-              for markerSel in expandWildcards markerSel doc ->
-                Helpers.replacePrefixInEdits prefix markerSel ops ]
-            false, ops
-        | _ -> failwith "parseCommand: No markers specified"
-        
-    | _ -> failwithf "parseCommand: Unsupported or disabled command >>%A<<" cmd
-    *)
-
-  open Tbd.Parsec
-  open Tbd.Parsec.Operators
 
   let rec getFixedTemplatePrefix t = 
     match t with 
@@ -630,7 +601,8 @@ module Commands =
     | Empty -> text ""
     | Repeat(t, r) -> h?span [] [ text "("; formatTemplate t; text (")" + r) ]
 
-  let command i l p = { Icon = i; Label = l; Parser = p }
+  let command i l p = { Icon = i; Label = (fun _ -> text l); Parser = p }
+  let commandh i l p = { Icon = i; Label = (fun s -> h?span [] (l s)); Parser = p }
 
   let tagHole = P.hole "tag" P.ident
   let fieldHole = P.hole "field" (P.ident <|> P.atIdent)
@@ -640,81 +612,156 @@ module Commands =
   let recordTag = P.char '<' <*>> tagHole <<*> P.char '>'
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
   let fieldAssignment = P.char ':' <*>> fieldHole <<*> P.char '='
+  let anonAssignment = P.char ':'
+  let mapEd f = P.map (fun x -> EditRecommendation { Groups = [[{ Kind = f x }]] })
+  let mapEds f = P.map (fun x -> EditRecommendation { Groups = f x })
+  let mapEdg f = P.map (fun x -> EditRecommendation { Groups = [[ for k in f x -> { Kind = k } ]] })
 
-  let getCommands (doc:Node) (cursorSel:Selectors) = [
-    let nd, _ = trace cursorSel doc |> Seq.head
-    yield command "las la-code" "Wrap current element as a field in a record"
-      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.char '>' |> P.map (fun (tag, fld) -> 
+  // TODO: Missing stuff with references
+  // e.g. https://github.com/tpetricek/conf/blob/85ba506a56e299a6e2d8e63b8f5a13c687b1610e/src/app.fs#L372
+
+  let getCommands state trigger = [
+    let doc = state.DocumentState.CurrentDocument 
+    let cursorSel = state.ViewState.CursorSelector
+    let nd, trace = trace cursorSel doc |> Seq.head
+
+    // Wrapping curent element in some ways
+    yield command "las la-id-card" "Wrap element as a record field"
+      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.char '>' |> mapEd (fun (tag, fld) -> 
         WrapRecord(fld, tag, cursorSel) )) 
+    yield command "las la-id-card" "Wrap element as an anonymous record field"
+      ( P.char '<' <*>> tagHole <<*> P.char '>' |> mapEd (fun (tag) -> 
+        WrapRecord(ffld "", tag, cursorSel) )) 
+    yield command "las la-list" "Wrap element as a list item"
+      ( P.char '[' <*>> tagHole <<*> P.char ']' |> mapEd (fun (tag) -> 
+        WrapList(tag, cursorSel) )) 
 
+    // Copy, paste, rename & save edits actions
+    yield command "las la-trash" "Delete node at current location"
+      ( P.keyword "!d" |> mapEd (fun (_) -> 
+        Delete(cursorSel) ))
+    match state.CommandState.CopySource with 
+    | None -> ()
+    | Some src ->
+        yield command "las la-paste" "Paste copied node at current location"
+          ( P.keyword "!v" |> mapEd (fun (_) -> 
+            Copy(cursorSel, RefSource src) ))
+    if not (List.isEmpty trace) && isRecord (fst (List.last trace)) then
+        yield command "las la-i-cursor" "Rename field containing the current element"
+          ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
+            RecordRenameField(cursorSel, fld) ))
+    if not (state.HistoryState.SelectedEdits.IsEmpty) then 
+        let recordedEds = 
+          [ for i in Seq.sort state.HistoryState.SelectedEdits ->
+              state.DocumentState.Edits.[i] ]
+        yield command "las la-save" "Save selected edits in the document"
+          ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
+            [ if select [Field "saved-interactions"] doc = [] then
+                yield RecordAdd([], "saved-interactions", ConstSource(Record("x-saved-interactions", [])))
+              yield RecordAdd([Field "saved-interactions"], fld, ConstSource(List("x-event-handler", [])))
+              for op in recordedEds ->
+                ListAppend([Field "saved-interactions"; Field fld], ConstSource(represent op)) ] ))
+
+    // Add field of some kind to a record
     if isRecord nd then 
-      yield command "las la-table" "Add record field to current record"
-        ( fieldAssignment <*> recordTag |> P.map (fun (fld, tag) ->
+      match state.CommandState.CopySource with
+      | None -> ()
+      | Some src ->
+          yield command "las la-paste" "Add copied node to current record"
+            ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun (fld) ->
+              RecordAdd(cursorSel, ffld fld, RefSource(src)) ))
+      yield command "las la-id-card" "Add record field to current record"
+        ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
           RecordAdd(cursorSel, ffld fld, ConstSource(Record(tag, []))) ))
       yield command "las la-list" "Add list field to current record"
-        ( fieldAssignment <*> listTag |> P.map (fun (fld, tag) ->
+        ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
           RecordAdd(cursorSel, ffld fld, ConstSource(List(tag, []))) ))
       yield command "las la-hashtag" "Add numerical field to current record"
-        ( fieldAssignment <*> numHole |> P.map (fun (fld, num) ->
+        ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
           RecordAdd(cursorSel, ffld fld, ConstSource(Primitive(Number (int num)))) ))
       yield command "las la-font" "Add string field to current record"
-        ( fieldAssignment <*> strHole |> P.map (fun (fld, str) ->
+        ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
           RecordAdd(cursorSel, ffld fld, ConstSource(Primitive(String str))) ))
 
-  ]
-
-(*
-ignore
-
-
-          ":", ":fld=num/str", "Add numerical/string field to current record", isRecord nd
-          ":", ":fld=/s1/s2/...", "Add reference field to current record", isRecord nd
-          ":", ":fld=<tag>", "Add record field to current record", isRecord nd
-          ":", ":fld=[tag]", "Add list field to current record", isRecord nd
-          ":", ":fld=!v", "Add copied node to current record", isRecord nd 
-
-    | Regex ":([^ ]*)=!v" [fld] when isRecord nd ->
-        match state.CopySource with
-        | Some src -> RecordAdd(cursorSel, ffld fld, RefSource(src)) |> retEd
-        | _ -> failwith "parseCommand - no source specified for !v"        
-    | Regex ":([^ ]*)=<([^> ]+)>" [fld; tag] when isRecord nd ->
-        RecordAdd(cursorSel, ffld fld, ConstSource(Record(tag, []))) |> retEd
-    | Regex ":([^ ]*)=\[([^\] ]+)\]" [fld; tag] when isRecord nd ->
-        RecordAdd(cursorSel, ffld fld, ConstSource(List(tag, []))) |> retEd
-    | Regex ":([^ ]*)=/(.+)" [fld; sel] when isRecord nd ->
-        RecordAdd(cursorSel, ffld fld, ConstSource(Reference(parseSel (sel.Split('/'))))) |> retEd
-
-  ]
-  *)
-  let parseCommand state = 
-  //doc cursorSel cmdState markerSel recordedEds  = 
-  
-  //[ for i in Seq.sort state.HistoryState.SelectedEdits ->
-          //  state.DocumentState.Edits.[i] ]
-
-    (* 
-    let cmd = state.Command
-    let nd, _ = trace cursorSel doc |> Seq.head
+    // Add item of some kind to a list
+    if isList nd then 
+      match state.CommandState.CopySource with
+      | None -> ()
+      | Some src ->
+          yield command "las la-paste" "Add copied node to current list"
+            ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
+              ListAppend(cursorSel, RefSource(src)) ))
+      yield command "las la-id-card" "Add record item to current list"
+        ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
+          ListAppend(cursorSel, ConstSource(Record(tag, []))) ))
+      yield command "las la-list" "Add list item to current list"
+        ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
+          ListAppend(cursorSel, ConstSource(List(tag, []))) ))
+      yield command "las la-hashtag" "Add numerical item to current list"
+        ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
+          ListAppend(cursorSel, ConstSource(Primitive(Number (int num)))) ))
+      yield command "las la-font" "Add string item to current list"
+        ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
+          ListAppend(cursorSel, ConstSource(Primitive(String str))) ))
     
-    let parseSel sel =
-      [ for s in sel -> 
-          match s, System.Int32.TryParse s with 
-          | _, (true, n) -> Index n
-          | "*", _ -> All
-          | s, _ -> Field s ]
-    let retEhEds eds = true, [ [ for ed in eds -> { Kind = ed } ] ]
-    let retEds eds = false, [ [ for ed in eds -> { Kind = ed } ] ]
-    *)
-    let retEd ed = Some(false, { Groups = [ [ { Kind = ed } ] ] })
-    let cmdState = state.CommandState
-    let cmd = cmdState.KnownRecommendations |> List.tryPick (fun cmd -> 
-        match P.run cmd.Parser cmdState.Command with 
-        | Parsed(f, []) -> Some f
-        | _ -> None )
-    match cmd with 
-    | Some ed -> retEd ed 
-    | None -> None
+    // Checks that current node has value / is non-empty
+    match nd with 
+    | Primitive(p) ->
+        yield command "las la-spell-check" "Check node has the current value"
+          ( P.keyword "*eq" |> mapEd (fun (str) ->
+            Check(cursorSel, EqualsTo p) ))
+    | _ -> ()
+    match nd with 
+    | Primitive(String(NonEmpty _) | Number _) ->
+        yield command "las la-check-square" "Check node value is not empty"
+          ( P.keyword "*ne" |> mapEd (fun (str) ->
+            Check(cursorSel, NonEmpty) ))
+    | _ -> ()
 
+    // Built-in transformations of primitive values
+    if isString nd || isNumber nd then
+      for t in transformations do
+        yield command "las la-at" (t.Label + " (built-in)")
+          ( P.char '@' <*> P.keyword t.Key |> mapEd (fun _ ->
+            PrimitiveEdit(cursorSel, t.Key) ))
+
+    // Saved interactions - generate nested completions
+    // (one for applying to cursor, one for applying to all marked)
+    for t, ops in Helpers.getSavedInteractions doc do
+      yield command "las la-at" ("Apply " + t + " to current (user)")
+        ( P.keyword $"@{t}" |> P.map (fun _ -> 
+            NestedRecommendation [
+              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                yield commandh "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                  ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
+                    [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
+        ))
+      match state.ViewState.GeneralizedMarkersSelector with 
+      | None -> ()
+      | Some markerSel ->
+          yield command "las la-at" ("Apply " + t + " to marked (user)")
+            ( P.keyword $"@{t}*" |> P.map (fun _ -> 
+                NestedRecommendation [
+                  for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                    yield command "las la-at" ("Using current as " + Helpers.formatSelector prefix)
+                      ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
+                        [ for markerSel in expandWildcards markerSel doc ->
+                            Helpers.replacePrefixInEdits prefix markerSel ops ] )) ]
+            ))
+  ]
+
+  let parseCommand state = 
+    let cmdState = state.CommandState
+    let recm = cmdState.KnownRecommendations |> List.tryPick (fun cmd -> 
+        match P.run cmd.Parser cmdState.Command with 
+        | Parsed(ed, []) -> Some(ed)
+        | _ -> None )
+    match recm with 
+    | None -> 
+        let cmd, _ = cmdState.Recommendations.[cmdState.SelectedRecommendation]
+        CompleteCommand(defaultArg (getFixedTemplatePrefix (P.getTemplate cmd.Parser)) "")
+    | Some(r) -> r
+    
   let scrollIntoView = function
     | Element(ns, tag, attr, c, _) -> 
         Element(ns, tag, attr, c, Some(fun el -> el.scrollIntoView(false)))
@@ -726,11 +773,11 @@ ignore
       h?li [ 
         "class" => "" +? (selected, "selected") 
         "mouseover" =!> fun _ _ -> trigger(CommandEvent(SetRecommendation i))
-        "click" =!> fun _ _ -> trigger(CommandEvent(ChooseRecommendation))
+        "click" =!> fun _ _ -> trigger(EnterCommand)
       ] [
         h?div [ "class" => "icon" ] [ h?i [ "class" => c.Icon ] [] ]
         h?div [ "class" => "details" ] [
-          h?h4 [] [ text c.Label ]         
+          h?h4 [] [ c.Label state ]
           h?kbd [ ] [ 
             h?span ["class" => "entered"] [ text entered ]
             formatTemplate t ]
@@ -749,86 +796,40 @@ ignore
       ] 
     ]
 
-    (*
-  let renderCommandHelp doc cursorSel histState cmdState = 
-    //let isRecording = match state.MacroRange with Some _, None -> true | _ -> false
-    let nd, trace = trace cursorSel doc |> Seq.head    
-    h?div [ "id" => "cmd" ] [
-      let cmdgroups = [
-        "Document edits", [
-          "<", "<tag fld>", "Wrap current element as field in a record", true
-          "<", "<tag>", "Wrap current element as field in a record", true
-          "[", "[tag]", "Wrap current element as item in a list", true
-          "@", "@fld", "Rename field holding the current element", 
-            (not (List.isEmpty trace) && isRecord (fst (List.last trace)))
-
-
-          ":", ":num/str", "Add numerical/string value to current list", isList nd
-          ":", ":/s1/s2/...", "Add reference value to current list", isList nd
-          ":", ":<tag>", "Add record value to current list", isList nd
-          ":", ":[tag]", "Add list value to current list", isList nd
-          ":", ":!v", "Add copied node to current list", isList nd 
-          
-          "!", "!v", "Paste currnet document node here", cmdState.CopySource.IsSome
-          "!", "!d", "Delete currnet document node", true
-          "&", "&id=!m", "Save selected edits in the current document", 
-            not histState.SelectedEdits.IsEmpty
-
-          "?", "?=.", "Check selected node has the current", isString nd || isNumber nd
-          "?", "?=?", "Check selected node is non empty", isNonEmptyString nd || isNumber nd
-          ] @ [
-            for t in transformations do
-              if not(t.Key.StartsWith("_")) then 
-                yield "*", "*" + t.Key, "Apply primitive transformation", isString nd || isNumber nd
-            for t, ops in Helpers.getSavedInteractions doc do
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield "*", $"*{t} {i} (use current as {Helpers.formatSelector prefix})", "Apply saved interactions", true
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield "*", $"*{t} {'a' + char i} (use marker as {Helpers.formatSelector prefix})", "Apply saved interactions", true
-          ]
-        "Document commands", [
-          "alt + d", "", "Delete current document node", true
-          "alt + c", "", "Copy current document node", true
-          "alt + v", "", "Paste currnet document node here", cmdState.CopySource.IsSome
-        ]
-        "Meta commands", [
-          "alt + m", "", "Mark current node", true
-          "alt + n", "", "Clear all marked nodes", true
-          "alt + e", "", "Evaluate all formulas", true
-          "alt + z", "", "Undo last edit", true
-          "alt + u", "", "Toggle source code view", true
-          "alt + h", "", "Toggle edit history view", true]
-      ]
-      if cmdState.Command.Length > 0 then 
-        let current = cmdgroups |> List.collect snd |> List.filter (fun (k, _, _, b) -> b && cmdState.Command.StartsWith(k))
-        if not (Seq.isEmpty current) then 
-          yield h?h3 [] [text "Entering command..."]
-          for _, args, _, _ in current do
-            yield h?pre [] [text args]
-      for title, cmds in cmdgroups do
-        yield h?h3 [] [text title]
-        yield h?ul [] [
-          for k, _, doc, b in Seq.distinctBy (fun (k, _, doc, b) -> k, doc, b) cmds do
-            if b then yield h?li [] [ 
-              h?kbd [ "class" => if k.Contains "+" then "long" else "" ] [ text k ]
-              h?span [ "class" => "doc" ] [ text doc ]
+  let renderAltHelp trigger = 
+    h?div [ ] [
+      h?ul [] [ 
+        for sc in Shortcuts.shortcuts ->
+          h?li [ 
+            "click" =!> fun _ _ -> for evt in sc.Events do trigger(evt)
+          ] [
+            h?div [ "class" => "icon" ] [ h?i [ "class" => sc.IconCode ] [] ]
+            h?div [ "class" => "details" ] [
+              h?h4 [] [ text $"Alt + {sc.Key.ToUpper()}" ]
+              h?kbd [] [ text sc.Header ]
             ]
-        ]
+          ] 
+        ] 
     ]
-    *)
+
   let renderContext state trigger =
-    if state.CommandState.Command = "" then [] else
+    if state.CommandState.Command = "" && not state.CommandState.AltMenuDisplay then [] else
     let cur = Browser.Dom.document.getElementsByClassName("cursor")
     if cur.length = 0 then [] else
     let cursorRect = cur.[0].getBoundingClientRect()
     let left, top = cursorRect.left, cursorRect.bottom+20.0  
-    [ h?div [ "id" => "ctx"; "style" => $"left:{left}px;top:{top}px" ] [ 
-        h?div [ "id" => "ctx-body" ] [ renderCommandHelp trigger state ] ] ]
+    let altMenu = state.CommandState.AltMenuDisplay
+    [ h?div [ "id" => "ctx"; "class" => "" +? (altMenu, "altmenu"); "style" => $"left:{left}px;top:{top}px" ] [ 
+        h?div [ "id" => "ctx-body" ] [ 
+          if altMenu then renderAltHelp trigger
+          else renderCommandHelp trigger state 
+        ] 
+    ] ]
 
-  let updateRecommendations reset appstate state = 
+  let updateRecommendations reset appstate trigger state = 
     let state = 
       if reset then 
-        let cmds = getCommands appstate.DocumentState.CurrentDocument appstate.ViewState.CursorSelector
+        let cmds = getCommands appstate trigger
         { state with KnownRecommendations = cmds }
       else state
     match state.Command with
@@ -837,7 +838,8 @@ ignore
     | StartsWith "?" query ->
         let query = query.ToLower()
         let recs = state.KnownRecommendations |> List.choose (fun c -> 
-          if c.Label.ToLower().Contains(query) then Some(c, P.getTemplate c.Parser)
+          if (innerText (c.Label appstate)).ToLower().Contains(query) then 
+            Some(c, P.getTemplate c.Parser)
           else None )  
         { state with SelectedRecommendation = 0; Recommendations = recs }
     | cmd ->
@@ -848,16 +850,26 @@ ignore
           | _ -> None )
         { state with SelectedRecommendation = 0; Recommendations = recs }
 
-  let update appstate state = function
+  let chooseRecommendation state =
+    let rcm, tmpl = state.Recommendations.[state.SelectedRecommendation]
+    let cmd = getFixedTemplatePrefix tmpl |> Option.get
+    let tmpl = match P.run rcm.Parser cmd with Partial t -> t | _ -> Empty
+    { state with 
+        SelectedRecommendation = 0; Recommendations = [ rcm, tmpl ]; 
+          KnownRecommendations = [ rcm ]; Command = cmd }
+    
+  let update appstate trigger state = function
+    | ToggleAltMenu alt ->
+        { state with AltMenuDisplay = alt }
     | CancelCommand -> 
         { state with Command = "" }
     | BackspaceCommand -> 
         ( if state.Command.Length <= 1 then { state with Command = "" }
           else { state with Command = state.Command.[0 .. state.Command.Length-2] } )
-        |> updateRecommendations false appstate
+        |> updateRecommendations false appstate trigger
     | TypeCommand c -> 
         { state with Command = state.Command + c } 
-        |> updateRecommendations (state.Command = "") appstate
+        |> updateRecommendations (state.Command = "") appstate trigger
     | NextRecommendation ->
         let idx = (state.SelectedRecommendation + 1) % state.Recommendations.Length
         { state with SelectedRecommendation = idx }
@@ -866,13 +878,6 @@ ignore
         { state with SelectedRecommendation = idx }
     | SetRecommendation idx -> 
         { state with SelectedRecommendation = idx }    
-    | ChooseRecommendation -> 
-        let rcm, tmpl = state.Recommendations.[state.SelectedRecommendation]
-        let cmd = getFixedTemplatePrefix tmpl |> Option.get
-        let tmpl = match P.run rcm.Parser cmd with Partial t -> t | _ -> Empty
-        { state with 
-            SelectedRecommendation = 0; Recommendations = [ rcm, tmpl ]; 
-              KnownRecommendations = [ rcm ]; Command = cmd }
     | CopyNode ->
         { state with CopySource = Some appstate.ViewState.CursorSelector } 
     
@@ -939,30 +944,33 @@ module View =
     { state with CursorSelector = cursorSel; CursorLocation = cursorLoc }
 
   let renderLocationInfo state = [
-    let nd, trc = trace state.ViewState.CursorSelector state.DocumentState.CurrentDocument |> Seq.head
-    for nd, s in trc do
-      yield h?span [] [
+    let traces = trace state.ViewState.CursorSelector state.DocumentState.CurrentDocument |> List.ofSeq
+    match traces with 
+    | []-> yield h?span [] [ text "(invalid location)" ]
+    | (nd, trc)::_ ->
+      for nd, s in trc do
+        yield h?span [] [
+          match nd with 
+          | Record(t, _) | List(t, _) -> yield h?strong [] [ text t ]
+          | _ -> ()
+          match s with 
+          | Index i -> yield text $"[{i}]"
+          | Tag t -> yield text $"[#{t}]"
+          | All -> yield text $"[*]"
+          | Field f when f.[0] = '=' -> yield text ""
+          | Field f -> yield text ("." + f)
+        ]
+        yield h?i [ "class" => "la la-long-arrow-alt-right" ] []
+      yield h?span [] [ 
+        let pf = if snd state.ViewState.CursorLocation = After then "(after)" else "(before)" 
         match nd with 
-        | Record(t, _) | List(t, _) -> yield h?strong [] [ text t ]
-        | _ -> ()
-        match s with 
-        | Index i -> yield text $"[{i}]"
-        | Tag t -> yield text $"[#{t}]"
-        | All -> yield text $"[*]"
-        | Field f when f.[0] = '=' -> yield text ""
-        | Field f -> yield text ("." + f)
+        | Record(t, _) -> text $"{pf} record {t}"
+        | List(t, _) -> text $"{pf} list {t}"
+        | Primitive(String s) -> text $"{pf} string '{s}'"
+        | Primitive(Number n) -> text $"{pf} number '{n}'"
+        | Reference r -> text $"{pf} reference '{r}'"
       ]
-      yield h?i [ "class" => "la la-long-arrow-alt-right" ] []
-    yield h?span [] [ 
-      let pf = if snd state.ViewState.CursorLocation = After then "(after)" else "(before)" 
-      match nd with 
-      | Record(t, _) -> text $"{pf} record {t}"
-      | List(t, _) -> text $"{pf} list {t}"
-      | Primitive(String s) -> text $"{pf} string '{s}'"
-      | Primitive(Number n) -> text $"{pf} number '{n}'"
-      | Reference r -> text $"{pf} reference '{r}'"
     ]
-  ]
 
   let rec update appstate state = function
     | AddMarker ->
@@ -1008,36 +1016,52 @@ let updateDocument docState =
       FinalDocument = 
         docState.Edits |> applyHistory docState.Initial }
 
-let rec update state e = 
+
+let rec tryEnterCommand trigger state = 
+  match Commands.parseCommand state with
+  | EditRecommendation(eds) -> 
+      let doc = 
+        { state.DocumentState with 
+            EditIndex = state.DocumentState.Edits.Length + eds.Length - 1;
+            Edits = state.DocumentState.Edits.Append eds }
+      let viewState = View.fixCursor state.DocumentState.CurrentDocument state.ViewState
+      { state with 
+          ViewState = viewState
+          DocumentState = doc |> updateDocument
+          CommandState = { state.CommandState with Command = "" } } 
+  | NestedRecommendation(opts) ->
+      let cmdState = 
+        { state.CommandState with KnownRecommendations = opts }
+        |> Commands.updateRecommendations false state trigger
+      { state with CommandState = cmdState } 
+  | CompleteCommand prefix -> 
+      if prefix.StartsWith(state.CommandState.Command) && prefix.Length > state.CommandState.Command.Length then 
+        let complete = prefix.Substring(state.CommandState.Command.Length)
+        { state with CommandState = Commands.update state trigger state.CommandState (TypeCommand complete) }
+        |> tryEnterCommand trigger
+      else state
+
+
+let rec update state trigger e = 
   match e with 
   | ResetState s -> s
   | ViewEvent e -> { state with ViewState = View.update state state.ViewState e }
-  | CommandEvent e -> { state with CommandState = Commands.update state state.CommandState e }
+  | CommandEvent e -> { state with CommandState = Commands.update state trigger state.CommandState e }
   | HistoryEvent e -> { state with HistoryState = History.update state state.HistoryState e }
+
   | DocumentEvent e ->
       // Undo operation can break cursor location, so we fix it here
       // (this is a bit ugly, but it cannot be done in Doc.update)
-      let docState = Document.update state state.DocumentState e
+      let docState = Document.update state state.DocumentState e |> updateDocument
       let viewState = View.fixCursor docState.CurrentDocument state.ViewState
       { state with DocumentState = docState; ViewState = viewState }
 
   | EnterCommand when state.CommandState.Command.StartsWith("?") ->
-      { state with CommandState = Commands.update state state.CommandState ChooseRecommendation }
-
+      { state with CommandState = Commands.chooseRecommendation state.CommandState } 
+      |> tryEnterCommand trigger
   | EnterCommand -> 
-      match Commands.parseCommand state with
-      | None -> state
-      | Some(resetSel, eds) ->
-          let doc = 
-            { state.DocumentState with 
-                EditIndex = state.DocumentState.Edits.Length + eds.Length - 1;
-                Edits = state.DocumentState.Edits.Append eds }
-          let viewState = View.fixCursor state.DocumentState.CurrentDocument state.ViewState
-          { state with 
-              ViewState = viewState
-              DocumentState = doc |> updateDocument
-              HistoryState = { state.HistoryState with SelectedEdits = if resetSel then set [] else state.HistoryState.SelectedEdits }
-              CommandState = { state.CommandState with Command = "" } }
+      state |> tryEnterCommand trigger
+
 
 let render demos trigger state = 
   h?div [] [
@@ -1048,7 +1072,7 @@ let render demos trigger state =
     h?div [ "id" => "loc" ] (View.renderLocationInfo state)    
     h?div [ "id" => "main" ] [
       yield h?div [ "id" => "doc" ] [
-        let doc = state.DocumentState.CurrentDocument // Matcher.applyMatchers state.CurrentDocument 
+        let doc = state.DocumentState.CurrentDocument // TODO: Restore... Matcher.applyMatchers state.CurrentDocument 
         yield Document.renderDocument state trigger doc
       ]
       yield! Commands.renderContext state trigger
@@ -1085,7 +1109,7 @@ let readJson json =
   let init = rcd "div"
   { DocumentState = { Initial = init; Edits = ops; EditIndex = ops.Length - 1; CurrentDocument = applyHistory init ops; FinalDocument = applyHistory init ops }
     ViewState = { CursorLocation = [], Before; CursorSelector = []; Markers = []; GeneralizedMarkersSelector = None; ViewSourceSelector = None }
-    CommandState = { Command = ""; CopySource = None; SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
+    CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None; SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
     HistoryState = { HighlightedSelector = None; SelectedEdits = Set.empty; Display = false }
   }
 
@@ -1103,7 +1127,12 @@ Browser.Dom.window.onkeypress <- fun e ->
   if (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" then
     e.preventDefault();
     trigger(CommandEvent(TypeCommand e.key))
-  
+
+Browser.Dom.window.onkeyup <- fun e -> 
+  let state = getState()
+  if e.key = "Alt" && state.CommandState.AltMenuDisplay then
+    e.preventDefault(); trigger(CommandEvent(ToggleAltMenu false))
+
 Browser.Dom.window.onkeydown <- fun e -> 
   let state = getState()
   if (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" then
@@ -1113,7 +1142,6 @@ Browser.Dom.window.onkeydown <- fun e ->
       if e.key = "ArrowUp" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex +1))
       if e.key = "ArrowDown" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex -1))
     else
-      //Browser.Dom.console.log(e.ctrlKey, e.altKey, e.key)
       if e.key = "Escape" then e.preventDefault(); trigger(CommandEvent(CancelCommand))
       if e.key = "Backspace" then e.preventDefault(); trigger(CommandEvent(BackspaceCommand))
       if e.key = "Enter" then e.preventDefault(); trigger(EnterCommand)
@@ -1126,19 +1154,10 @@ Browser.Dom.window.onkeydown <- fun e ->
         if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
         else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
 
-      if e.altKey && e.key = "m" then e.preventDefault(); trigger(ViewEvent(AddMarker))
-      if e.altKey && e.key = "n" then e.preventDefault(); trigger(ViewEvent(ClearMarkers))
+      if e.key = "Alt" && not state.CommandState.AltMenuDisplay then
+        e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
 
-      if e.altKey && e.key = "e" then e.preventDefault(); trigger(DocumentEvent(Evaluate(true)))
-      //if e.altKey && e.key = "m" then e.preventDefault(); trigger(CommandEvent(SwitchMacro))
-      if e.altKey && e.key = "z" then e.preventDefault(); trigger(DocumentEvent(UndoLastEdit))
-      if e.altKey && e.key = "u" then e.preventDefault(); trigger(ViewEvent(ToggleViewSource))
-      if e.altKey && e.key = "h" then e.preventDefault(); trigger(HistoryEvent(ToggleEditHistory))
-      if e.altKey && e.key = "c" then e.preventDefault(); trigger(CommandEvent(CopyNode))
-      if e.altKey && e.key = "v" then e.preventDefault(); trigger(CommandEvent(CancelCommand)); trigger(CommandEvent(TypeCommand "!v")); trigger(EnterCommand)
-      if e.altKey && e.key = "d" then e.preventDefault(); trigger(CommandEvent(CancelCommand)); trigger(CommandEvent(TypeCommand "!d")); trigger(EnterCommand)
-
-
-//trigger (MergeEdits(opsCore @ opsBudget))
-//trigger (Evaluate true)
-//trigger (Move 100000)
+      for sc in Shortcuts.shortcuts do
+        if e.altKey && e.key = sc.Key then 
+          e.preventDefault()
+          for evt in sc.Events do trigger(evt)

@@ -92,3 +92,4 @@ module List =
     List.rev (List.map List.rev l)
 
   // indexedNested [[0;0;0];[0;0]]
+  // sliceNested 3 3 [[1;2];[];[3;4];[];[5;6]]

@@ -109,7 +109,7 @@ module P =
       match cs with 
       | [] -> unit []
       | c::cs -> andThen (char c) (loop cs) |> map (fun (v, vs) -> v::vs)
-    loop (List.ofSeq s)    
+    loop (List.ofSeq s) |> map (fun _ -> s)
 
   let hole t (Parser p) = Parser(fun cs ->
     match p cs with 
@@ -151,5 +151,6 @@ module Operators =
   f (Some (List.ofSeq "hi"))
   f (Some (List.ofSeq "h"))
   f None
-  *)
 
+
+  *)
