@@ -1124,7 +1124,10 @@ let _, state = List.head demos
 let trigger, _, getState = createVirtualDomApp "out" state (render demos) update
 
 Browser.Dom.window.onkeypress <- fun e -> 
-  if (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" then
+  let targetNotText = 
+    (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
+    (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
+  if targetNotText then
     e.preventDefault();
     trigger(CommandEvent(TypeCommand e.key))
 
@@ -1135,29 +1138,32 @@ Browser.Dom.window.onkeyup <- fun e ->
 
 Browser.Dom.window.onkeydown <- fun e -> 
   let state = getState()
-  if (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" then
-    if e.ctrlKey then
-      if e.key = "ArrowUp" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection +1))
-      if e.key = "ArrowDown" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection -1))
-      if e.key = "ArrowUp" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex +1))
-      if e.key = "ArrowDown" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex -1))
-    else
-      if e.key = "Escape" then e.preventDefault(); trigger(CommandEvent(CancelCommand))
-      if e.key = "Backspace" then e.preventDefault(); trigger(CommandEvent(BackspaceCommand))
-      if e.key = "Enter" then e.preventDefault(); trigger(EnterCommand)
-      if e.key = "ArrowRight" then e.preventDefault(); trigger(ViewEvent(MoveCursor Forward))
-      if e.key = "ArrowLeft" then e.preventDefault(); trigger(ViewEvent(MoveCursor Backward))
-      if e.key = "ArrowUp" then 
-        if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Previous))
-        else e.preventDefault(); trigger(CommandEvent(PreviousRecommendation))
-      if e.key = "ArrowDown" then 
-        if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
-        else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
+  let targetNotText = 
+    (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
+    (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
 
-      if e.key = "Alt" && not state.CommandState.AltMenuDisplay then
-        e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
+  if e.ctrlKey then
+    if e.key = "ArrowUp" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection +1))
+    if e.key = "ArrowDown" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection -1))
+    if e.key = "ArrowUp" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex +1))
+    if e.key = "ArrowDown" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex -1))
+  else
+    if e.key = "Escape" then e.preventDefault(); trigger(CommandEvent(CancelCommand))
+    if e.key = "Backspace" && targetNotText then e.preventDefault(); trigger(CommandEvent(BackspaceCommand))
+    if e.key = "Enter" && targetNotText  then e.preventDefault(); trigger(EnterCommand)
+    if e.key = "ArrowRight" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Forward))
+    if e.key = "ArrowLeft" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Backward))
+    if e.key = "ArrowUp" then 
+      if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Previous))
+      else e.preventDefault(); trigger(CommandEvent(PreviousRecommendation))
+    if e.key = "ArrowDown" then 
+      if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
+      else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
 
-      for sc in Shortcuts.shortcuts do
-        if e.altKey && e.key = sc.Key then 
-          e.preventDefault()
-          for evt in sc.Events do trigger(evt)
+    if e.key = "Alt" && not state.CommandState.AltMenuDisplay then
+      e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
+
+    for sc in Shortcuts.shortcuts do
+      if e.altKey && e.key = sc.Key then 
+        e.preventDefault()
+        for evt in sc.Events do trigger(evt)
