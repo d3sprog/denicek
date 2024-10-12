@@ -13,7 +13,8 @@
     <Compile Include="app.fs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="Fable.Browser.Dom" Version="2.2.0" />
-    <PackageReference Include="Fable.Core" Version="3.2.3" />
+    <PackageReference Include="Fable.Browser.XMLHttpRequest" Version="1.4.0" />
+		<PackageReference Include="Fable.Browser.Dom" Version="2.2.0" />
+		<PackageReference Include="Fable.Core" Version="3.2.8" />
   </ItemGroup>
 </Project>
