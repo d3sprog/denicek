@@ -15,7 +15,9 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
+let del sel = { Kind = Delete(sel) }
 let ap s n = { Kind = ListAppend(s, ConstSource n) } 
+let apr s sel = { Kind = ListAppend(s, RefSource sel) } 
 let wr s fld tag = { Kind = WrapRecord(ffld fld, tag, s) }
 let wl s tag = { Kind = WrapList(tag, s) }
 let ord s l = { Kind = ListReorder(s, l) } 
@@ -55,15 +57,36 @@ let opsCounterDec() =
 let opsCounterHndl() = 
   [ yield add [Field "inc"] "click" (lst "x-event-handler")
     for op in opsCounterInc() ->
-      ap [Field "inc"; Field "click"] (Serializer.represent op) 
+      ap [Field "inc"; Field "click"] (represent op) 
     yield add [Field "dec"] "click" (lst "x-event-handler")
     for op in opsCounterDec() ->
-      ap [Field "dec"; Field "click"] (Serializer.represent op) ]
+      ap [Field "dec"; Field "click"] (represent op) ]
 
 let addSpeakerOps = 
   [ 
     ap [Field "speakers"] (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
     ord [Field "speakers"] [3; 0; 1; 2] 
+  ]
+
+let addSpeakerPbdOps = 
+  [
+    add [] "temp" (rcd "li")
+    add [Field "temp"] "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    apr [Field "speakers"] [Field "temp"]
+    del [Field "temp"]
+    ord [Field "speakers"] [3; 0; 1; 2] 
+  ]
+
+let addTwoSpeakersPbdOps = 
+  [
+    add [] "temp" (rcd "li")
+    add [Field "temp"] "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    apr [Field "speakers"] [Field "temp"]
+    del [Field "temp"]
+    add [] "temp" (rcd "li")
+    add [Field "temp"] "value" (ps "Barbara Liskov, liskov@mit.edu")
+    apr [Field "speakers"] [Field "temp"]
+    del [Field "temp"]
   ]
   
 let fixSpeakerNameOps = 
@@ -116,6 +139,7 @@ let opsCore =
     ap [Field "speakers"] (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
     ap [Field "speakers"] (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
+
 let opsBudget() = 
   [
     add [] "" (nds "" "h2" "Budgeting")

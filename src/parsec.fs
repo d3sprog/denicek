@@ -88,12 +88,27 @@ module P =
     | None -> Partial(Repeat(getTemplateRaw p, "*"))
     | Some cs -> loop [] cs )
 
-  let oneOrMore p = 
+  let oneOrMore ((Parser pf) as p) = 
     zeroOrMore p |> mapRaw (fun r cs ->
       match r, cs with 
       | [], [] -> Partial(Repeat(getTemplate p, "+"))
-      | [], _::_ -> Failed
+      | [], cs -> 
+          match pf (Some cs) with 
+          | Parsed _ -> failwith "oneOrMore - should not happen"
+          | Partial t -> Partial t
+          | Failed -> Failed
       | _ -> Parsed(r, cs))
+
+  let oneOrMoreEnd ((Parser pf) as p) = 
+    zeroOrMore p |> mapRaw (fun r cs ->
+      match r, cs with 
+      | [], [] -> Partial(Repeat(getTemplate p, "+"))
+      | r, [] -> Parsed(r, [])
+      | _, cs -> 
+          match pf (Some cs) with 
+          | Parsed _ -> failwith "oneOrMore - should not happen"
+          | Partial t -> Partial t
+          | Failed -> Failed )
 
   let alphaNumeric =
     pred (Fixed "a") (fun c -> System.Char.IsLetterOrDigit(c))
@@ -116,11 +131,12 @@ module P =
     | Partial _ -> Partial(Hole t)
     | r -> r)
 
+  let identChar = 
+    orElse (orElse alphaNumeric (char '-')) (char '_')
   let ident = 
-    andThen letter (zeroOrMore alphaNumeric) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
-
+    andThen letter (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
   let atIdent = 
-    andThen (char '@') (zeroOrMore alphaNumeric) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
+    andThen (char '@') (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
 
   let num = 
     oneOrMore number |> map (fun cs -> int(System.String(Array.ofSeq cs)))

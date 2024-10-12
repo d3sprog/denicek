@@ -203,7 +203,7 @@ type Edit =
 // --------------------------------------------------------------------------------------
 
 let formatSelector = 
-  List.map (function All -> "*" | Tag t -> ":" + t | Index i -> string i | Field f -> f)
+  List.map (function All -> "*" | Tag t -> $"<{t}>" | Index i -> string i | Field f -> f)
   >> List.map (fun s -> "/" + s)
   >> String.concat ""
 
@@ -354,8 +354,8 @@ let removeSelectorPrefix p1 p2 =
     | _ -> None
   loop [] p1 p2
   
-let (|ScopeSelector|_|) selbase sel = 
-  removeSelectorPrefix selbase sel |> Option.map snd
+//let (|ScopeSelector|_|) selbase sel = 
+//  removeSelectorPrefix selbase sel |> Option.map snd
 
 let (|MatchingFirst|_|) = function 
   | All::selOther, All::selWrap -> Some(All, selOther, selWrap)
@@ -684,7 +684,7 @@ let apply doc edit =
               *)
         | [List(t, _)] -> [List(t, srcNodes)]
         | [tgt] -> 
-            failwith $"apply.Copy - Be too clever and autowrap target?? sel={sel}"; 
+            failwith $"apply.Copy - Be too clever and autowrap target?? target={formatSelector sel}, source={src}"; 
         | _ -> failwith "apply.Copy - Mismatching number of source and target notes"
 
       let mutable exprs = exprs
@@ -776,17 +776,35 @@ let updateSelectors e1 e2 =
 
 /// If the 'edit' is to something with a prefix specified by the selector 'selbase',
 /// returns new edit that is relatively to the subtree specified by selbase 
-let scopeEdit selBase edit = 
-  match edit with 
-  | ListAppend(ScopeSelector selBase sel, src) -> Some(ListAppend(sel, src))
-  | PrimitiveEdit(ScopeSelector selBase sel, f) -> Some(PrimitiveEdit(sel, f))
-  | ListReorder(ScopeSelector selBase sel, p) -> Some(ListReorder(sel, p))
-  | WrapRecord(id, tag, ScopeSelector selBase sel) -> Some(WrapRecord(id, tag, sel))
-  | RecordAdd(ScopeSelector selBase sel, fld, src) -> Some(RecordAdd(sel, fld, src))
-  | UpdateTag(ScopeSelector selBase sel, t1, t2) -> Some(UpdateTag(sel, t1, t2))
-  | RecordRenameField(ScopeSelector selBase sel, t) -> Some(RecordRenameField(sel, t))
-  | Copy(ScopeSelector selBase sel, ConstSource nd) -> Some(Copy(sel, ConstSource nd)) 
-  | Copy(ScopeSelector selBase s1, RefSource(ScopeSelector selBase s2)) -> Some(Copy(s1, RefSource s2))
+let tryMapSelectors f edit = 
+  let sels = getSelectors edit 
+  let nsels = sels |> List.choose f
+  if nsels.Length = 0 then None
+  elif nsels.Length = sels.Length then Some(withSelectors nsels edit)
+  else failwith $"tryMapSelectors - some selectors scoped, but some not. Think about this. Edit: {formatEdit edit}"
+
+let scopeEdit oldBase newBase edit = 
+  edit |> tryMapSelectors (fun s -> 
+    match removeSelectorPrefix oldBase s with 
+    | Some(_, sel) -> Some(newBase @ sel)
+    | _ -> None)
+
+  // The above should be the same as the original implementation below
+  // with the difference that it also looks at selectors inside added nodes
+  // (getDependenciesSelectors does not do this, but it's commented out)
+
+(*
+  let ret ed = Some { Kind = ed }
+  match edit.Kind with 
+  | ListAppend(ScopeSelector selBase sel, src) -> ret (ListAppend(sel, src))
+  | PrimitiveEdit(ScopeSelector selBase sel, f) -> ret (PrimitiveEdit(sel, f))
+  | ListReorder(ScopeSelector selBase sel, p) -> ret (ListReorder(sel, p))
+  | WrapRecord(id, tag, ScopeSelector selBase sel) -> ret (WrapRecord(id, tag, sel))
+  | RecordAdd(ScopeSelector selBase sel, fld, src) -> ret (RecordAdd(sel, fld, src))
+  | UpdateTag(ScopeSelector selBase sel, t1, t2) -> ret (UpdateTag(sel, t1, t2))
+  | RecordRenameField(ScopeSelector selBase sel, t) -> ret (RecordRenameField(sel, t))
+  | Copy(ScopeSelector selBase sel, ConstSource nd) -> ret (Copy(sel, ConstSource nd)) 
+  | Copy(ScopeSelector selBase s1, RefSource(ScopeSelector selBase s2)) -> ret (Copy(s1, RefSource s2))
   | Copy(s1, RefSource s2) -> 
       match removeSelectorPrefix selBase s1, removeSelectorPrefix selBase s2 with
       | None, None -> 
@@ -797,28 +815,39 @@ let scopeEdit selBase edit =
         failwith $"scopeEdit.Copy - non-local copy - need to think about this one: BASE={selBase}, EDIT={edit}"
   
   | _ -> None
-
+  *)
 let applyToAdded e1 e2 = 
   match e1.Kind with 
+  | ListAppend(sel, RefSource src) -> 
+      
+      match scopeEdit (sel @ [All]) src e2 with
+      | Some e2scoped ->
+          printfn "append %s from %s" (formatSelector sel) (formatSelector src)
+          printfn "apply %A" (formatEdit e2)
+          printfn " *** scoped %s" (formatEdit e2scoped)
+          [e2scoped; e1]
+          //e1
+      | _ -> [e1]
+
   | ListAppend(sel, ConstSource nd) -> 
       // We are appending under 'sel', so the selector for 
       // the node 'nd' itself will be 'sel; All' (for added field, this needs the field name)
-      match scopeEdit (sel @ [All]) e2.Kind with
+      match scopeEdit (sel @ [All]) [] e2 with
       | Some e2scoped ->
           //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
-          { e1 with Kind = ListAppend(sel, ConstSource (apply nd { e2 with Kind = e2scoped })) }
-      | None -> e1
+          [ { e1 with Kind = ListAppend(sel, ConstSource (apply nd e2scoped)) } ]
+      | None -> [ e1 ]
 
   | RecordAdd(sel, fld, ConstSource nd) -> 
       // TODO: Untested. Also maybe this assumes nd.ID <> ""
-      match scopeEdit (sel @ [Field fld]) e2.Kind with
+      match scopeEdit (sel @ [Field fld]) [] e2 with
       | Some e2scoped ->
           //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
-          { e1 with Kind = RecordAdd(sel, fld, ConstSource(apply nd { e2 with Kind = e2scoped })) }
-      | None -> e1
+          [ { e1 with Kind = RecordAdd(sel, fld, ConstSource(apply nd e2scoped)) } ]
+      | None -> [ e1 ]
 
   | Copy(_, ConstSource _) -> failwith "applyToAdded - Replace TODO"
-  | _ -> e1
+  | _ -> [ e1 ]
 
 // Assuming 'e1' and 'e2' happened independently,
 // modify 'e1' so that it can be placed after 'e2'.
@@ -827,7 +856,7 @@ let moveBefore e1 e2 =
   //printfn "move => %A" e1.Kind
   //printfn "beore => %A" e2.Kind
   let e1 = applyToAdded e1 e2
-  let e1 = updateSelectors e1 e2
+  let e1 = e1 |> List.collect (fun e1 -> updateSelectors e1 e2)
   e1
   
 (*
@@ -886,6 +915,15 @@ type EditList =
     { Groups = List.truncateNested n x.Groups }
   member x.Append eds = 
     { Groups = x.Groups @ eds.Groups }
+  member x.Hash = 
+    x.Groups |> List.collect id |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) 0
+  member x.EditsByHash(hashToFind) = 
+    let mutable hashSoFar = 0
+    let res = x.Groups |> List.takeWhileNested (fun edit -> 
+      if hashSoFar = hashToFind then false else
+      hashSoFar <- hash (hashSoFar, edit) 
+      true )
+    if hashSoFar = hashToFind then Some { Groups = res } else None
 
 let applyHistory initial hist =
   hist.Groups |> List.fold (List.fold apply) initial
@@ -902,12 +940,131 @@ let mergeHistories h1 h2 =
         // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
         // (caveat is that the operation can turn it into multiple edits)
         List.foldNested (fun e2 e1 -> 
+          //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
           e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s )         
   //printfn "MERGE HISTORIES"
   //printfn "Before transform: %A" (List.mapNested formatEdit e2s)
   //printfn "After transform: %A" (List.mapNested formatEdit e2sAfter)
   { Groups = shared @ e1s @ e2sAfter }
 
+
+
+// --------------------------------------------------------------------------------------
+// Representing edits as nodes
+// --------------------------------------------------------------------------------------
+
+let representSel sel = 
+  List("x-selectors", 
+    [ for s in sel ->
+        match s with 
+        | All -> Primitive(String "*")
+        | Tag t -> Primitive(String("#" + t))
+        | Index n -> Primitive(Number n)
+        | Field f -> Primitive(String f) ])
+
+
+let unrepresentSel expr =
+  match expr with 
+  | List("x-selectors", sels) ->
+      sels |> List.map (function 
+        | Primitive(String "*") -> All 
+        | Primitive(String s) when s.Length <> 0 && s.[0] = '#' -> Field (s.Substring(1))
+        | Primitive(String s) -> Field s
+        | Primitive(Number n) -> Index (int n)
+        | _ -> failwith "unrepresentSel: Invalid selector")
+  | _ -> failwith $"unrepresentSel: Not a selector: {expr}"
+  
+let (|Lookup|) args = dict args
+let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
+  if d.ContainsKey k then Some(d.[k]) else None
+let (|Finds|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
+  match d.TryGetValue(k) with true, Primitive(String s) -> Some s | _ -> None
+let rcd id kvp = Record(id, kvp)
+
+let unrepresentIntList nd =
+  match nd with 
+  | List("x-int-list", nds) ->
+      List.map (function Primitive(Number n) -> int n | _ -> failwith "unrepresentIntList - Not a number") nds
+  | _ -> failwith $"unrepresentIntList - Invalid node {nd}"
+
+let unrepresentSrc nd = 
+  match nd with 
+  | Record("x-src-node", Lookup(Find "const" nd)) -> ConstSource(nd)
+  | Record("x-src-ref", Lookup(Find "selector" nd)) -> RefSource(unrepresentSel nd)
+  | _ -> failwith $"unrepresentSrc - Invalid node {nd}"
+
+let unrepresentCond nd = 
+  match nd with 
+  | Record("x-cond-equals", Lookup(Find "node" (Primitive v))) -> EqualsTo(v)
+  | Record("x-cond-nonempty", []) -> NonEmpty
+  | _ -> failwith $"unrepresentCond - Invalid node {nd}"
+
+let unrepresent nd = 
+  let editKind =
+    match nd with
+    | Record("x-edit-wraprec", Lookup(Finds "tag" tag & Finds "id" id & Find "target" target)) ->
+        EditKind.WrapRecord(tag, id, unrepresentSel target)
+    | Record("x-edit-append", Lookup (Find "target" sel & Find "src" src)) ->
+        EditKind.ListAppend(unrepresentSel sel, unrepresentSrc src)
+    | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
+        EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
+    | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
+        EditKind.RecordRenameField(unrepresentSel sel, id) 
+    | Record("x-edit-copy", Lookup (Find "target" tgt & Find "src" src)) ->
+        EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
+    | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
+        EditKind.Delete(unrepresentSel tgt) 
+    | Record("x-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
+        EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
+    | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
+        EditKind.WrapList(tag, unrepresentSel tgt) 
+    | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
+        EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
+    | Record("x-list-reorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
+        EditKind.ListReorder(unrepresentSel tgt, unrepresentIntList perm) 
+    | Record("x-update-tag", Lookup (Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
+        EditKind.UpdateTag(unrepresentSel tgt, otag, ntag) 
+    | _ -> failwith $"unrepresent - Missing case for: {nd}"  
+  { Kind = editKind }
+
+let representIntList ns =
+  List("x-int-list", [for n in ns -> Primitive(Number(float n)) ])
+
+let representSrc src = 
+  match src with 
+  | ConstSource(nd) -> [ "const", nd ] |> rcd "x-src-node"
+  | RefSource(sel) -> [ "selector", representSel sel ] |> rcd "x-src-ref"
+
+let representCond cond = 
+  match cond with 
+  | EqualsTo(nd) -> [ "node", Primitive nd ] |> rcd "x-cond-equals"
+  | NonEmpty -> [] |> rcd "x-cond-nonempty"
+
+let represent op = 
+  let ps v = Primitive(String v)
+  match op.Kind with 
+  | EditKind.WrapRecord(tag, id, target) ->
+      rcd "x-edit-wraprec" [ "tag", ps tag; "id", ps id; "target", representSel target ] 
+  | EditKind.ListAppend(target, src) ->
+      rcd "x-edit-append" [ "target", representSel target; "src", representSrc src ]
+  | EditKind.RecordAdd(target, f, src) ->
+      rcd "x-edit-add" [ "target", representSel target; "field", ps f; "src", representSrc src ]
+  | EditKind.RecordRenameField(target, id) ->
+      rcd "x-edit-updateid" [ "target", representSel target; "id", ps id ]
+  | EditKind.Copy(target, source) ->
+      rcd "x-edit-copy" [ "target", representSel target; "src", representSrc source ]
+  | EditKind.Delete(target) ->
+      rcd "x-edit-delete" [ "target", representSel target ]
+  | EditKind.Check(target, cond) -> 
+      rcd "x-check" [ "target", representSel target; "cond", representCond cond ]
+  | EditKind.WrapList(tag, target) ->
+      rcd "x-wrap-list" [ "target", representSel target; "tag", ps tag ]
+  | EditKind.PrimitiveEdit(target, op) ->
+      rcd "x-primitive-edit" [ "target", representSel target; "op", ps op ]
+  | EditKind.ListReorder(target, perm) ->
+      rcd "x-list-reorder" [ "target", representSel target; "perm", representIntList perm ]
+  | EditKind.UpdateTag(target, otag, ntag) ->
+      rcd "x-update-tag" [ "target", representSel target; "old", ps otag; "new", ps ntag ]
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -955,7 +1112,7 @@ let (|Args|) args =
   let args = Map.ofSeq args
   args.["op"], args
 
-let (|ListFind|_|) k = List.tryFind (fst >> (=) k)
+let (|ListFind|_|) k = List.tryFind (fst >> (=) k) >> Option.map snd
 
 let evaluateRaw doc =
   match evalSite false [] doc with
@@ -978,7 +1135,7 @@ let evaluateRaw doc =
 
           let args = args |> Map.map (fun _ v ->
             match v with 
-            | Record("x-evaluated", ListFind "result" r) -> snd r
+            | Record("x-evaluated", ListFind "result" r) -> r
             | _ -> v
           )
 

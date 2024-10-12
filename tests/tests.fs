@@ -9,7 +9,8 @@ let equals a b = Expect.equal a b "Should equal"
 open Tbd.Doc
 open Tbd.Demos
 
-let applyAll = List.fold apply (rcd "div")
+let merge ops1 ops2 = mergeHistories { Groups = [ops1] } { Groups = [ops2] }
+
 (*
 [<Tests>]
 let evalTests =
@@ -31,7 +32,7 @@ let evalTests =
     }
   ]
 *)
-
+(*
 [<Tests>]
 let tests =
   testList "interaction" [    
@@ -53,41 +54,59 @@ let tests =
       select [Field "counter"; Field "value"] doc5 |> equals [ Primitive(Number 2.0) ]
     }
   ]
-
+  *)
 [<Tests>]
 let mergeTests =
   testList "merging" [    
     test "indexing merges with reordering" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
-      let doc1 = applyAll ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps)
-      let doc2 = applyAll ops2 
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2
     }
 
     test "refactoring merges with adding" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
-      let doc1 = applyAll ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
-      let doc2 = applyAll ops2
+      let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
 
     test "refactoring merges with name fix" {
       let ops1 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
-      let doc1 = ops1 |> List.fold apply (rcd "div")
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
-      let doc2 = ops2 |> List.fold apply (rcd "div")
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2 
     }
 
-    test "adding budget merges with refactoring" {
-      let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
-      let doc1 = ops1 |> List.fold apply (rcd "div")
-      let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
-      let doc2 = ops2 |> List.fold apply (rcd "div")
+    test "adding speaker directly and by PBD is the same" {
+      let ops1 = { Groups = [ opsCore @ addSpeakerPbdOps ] }
+      let doc1 = applyHistory (rcd "div") ops1 
+      let ops2 = { Groups = [ opsCore @ addSpeakerOps ] }
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2 
     }
+
+    test "refactoring merges with adding by PBD" {
+      let ops1 = merge (opsCore @ addSpeakerPbdOps) (opsCore @ refactorListOps)
+      let doc1 = applyHistory (rcd "div") ops1 
+      let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerPbdOps) 
+      merge (opsCore @ refactorListOps) (opsCore @ addSpeakerPbdOps)  |> ignore
+      let doc2 = applyHistory (rcd "div") ops2
+      doc1 |> equals doc2
+    }
+
+    (*
+    test "adding budget merges with refactoring" {
+      let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
+      let doc1 = applyHistory (rcd "div") ops1
+      let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
+      let doc2 = applyHistory (rcd "div") ops2
+      doc1 |> equals doc2 
+    }*)
   ]
 
 

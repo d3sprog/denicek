@@ -55,6 +55,20 @@ module List =
       | [] -> failwith "takeNested: insufficient number of elements"
     loop [] [] n list
 
+  let rec takeWhileNested f list = 
+    let rec loop accg accr list = 
+      let addg g = match g with [] -> accr | _ -> (List.rev g)::accr
+      match list with 
+      | (x::_)::_ when not (f x) -> List.rev (addg accg)
+      | [] -> List.rev (addg accg)
+      | []::xss -> loop accg accr xss
+      | [x]::xss -> loop [] (addg (x::accg)) xss
+      | (x::xs)::xss -> loop (x::accg) accr (xs::xss)
+    loop [] [] list
+
+  //takeWhileNested (fun x -> x%2=0) [[2;4;6];[8;2];[];[4;3]]
+  //takeWhileNested (fun x -> x%2=0) [[2;4;6];[8;2];[];[4;2]]
+
   let rec truncateNested n list = 
     let rec loop accg accr n list = 
       let addg g = match g with [] -> accr | _ -> (List.rev g)::accr
