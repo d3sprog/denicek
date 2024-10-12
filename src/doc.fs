@@ -213,7 +213,7 @@ let formatSource = function
 
 let formatEdit ed = 
   match ed.Kind with
-  | PrimitiveEdit(sel, op) -> $"primitive({formatSelector sel}, op)"
+  | PrimitiveEdit(sel, op) -> $"primitive({formatSelector sel}, {op})"
   | ListAppend(sel, src) -> $"listAppend({formatSelector sel}, {formatSource src})"
   | ListReorder(sel, ord) -> $"""listReorder({formatSelector sel}, [{ String.concat "," (List.map string ord) }])"""
   | RecordAdd(sel, n, src) -> $"recordAdd({formatSelector sel}, {n}, {formatSource src})"
@@ -776,15 +776,20 @@ let updateSelectors e1 e2 =
 
 /// If the 'edit' is to something with a prefix specified by the selector 'selbase',
 /// returns new edit that is relatively to the subtree specified by selbase 
-let tryMapSelectors f edit = 
+let tryScopeSelectors f edit = 
   let sels = getSelectors edit 
   let nsels = sels |> List.choose f
   if nsels.Length = 0 then None
   elif nsels.Length = sels.Length then Some(withSelectors nsels edit)
-  else failwith $"tryMapSelectors - some selectors scoped, but some not. Think about this. Edit: {formatEdit edit}"
+  else 
+    // If the scoping cannot be applied to the target selector
+    // then even if it applies to some sources, we do not need to worry
+    match f (getTargetSelector edit) with 
+    | None -> None
+    | _ -> failwith $"tryMapSelectors - some selectors scoped, but some not. Think about this. Edit: {formatEdit edit}"
 
 let scopeEdit oldBase newBase edit = 
-  edit |> tryMapSelectors (fun s -> 
+  edit |> tryScopeSelectors (fun s -> 
     match removeSelectorPrefix oldBase s with 
     | Some(_, sel) -> Some(newBase @ sel)
     | _ -> None)
@@ -818,13 +823,9 @@ let scopeEdit oldBase newBase edit =
   *)
 let applyToAdded e1 e2 = 
   match e1.Kind with 
-  | ListAppend(sel, RefSource src) -> 
-      
+  | ListAppend(sel, RefSource src) ->       
       match scopeEdit (sel @ [All]) src e2 with
       | Some e2scoped ->
-          printfn "append %s from %s" (formatSelector sel) (formatSelector src)
-          printfn "apply %A" (formatEdit e2)
-          printfn " *** scoped %s" (formatEdit e2scoped)
           [e2scoped; e1]
           //e1
       | _ -> [e1]
@@ -837,14 +838,27 @@ let applyToAdded e1 e2 =
           //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
           [ { e1 with Kind = ListAppend(sel, ConstSource (apply nd e2scoped)) } ]
       | None -> [ e1 ]
+      (*
+
+  // TODO: Should we do something with this or not?
+  // It makes sense to adjust items added to a list, because they will be extra.
+  // But setting record fields seems tricky? It will likely conflict, so what can we do??
 
   | RecordAdd(sel, fld, ConstSource nd) -> 
-      // TODO: Untested. Also maybe this assumes nd.ID <> ""
+      match e2.Kind with 
+      // Conflict? e1 wins?
+      | RecordAdd(sel2, _, _) when sel2 = sel @ [Field fld] -> [ e1 ]
+      | _ -> 
+      
+      // printfn "set '%s' of '%s' to node %A" fld (formatSelector sel) nd
+      // printfn "apply previous edit %A" (formatEdit e2)
+      // printfn " *** scoped %s" (formatEdit e2scoped)
+
       match scopeEdit (sel @ [Field fld]) [] e2 with
       | Some e2scoped ->
           //printfn $"applyToAdded: Applying edit {e2scoped} to {nd}.\n  Got: {apply nd e2scoped}" 
           [ { e1 with Kind = RecordAdd(sel, fld, ConstSource(apply nd e2scoped)) } ]
-      | None -> [ e1 ]
+      | None -> [ e1 ]*)
 
   | Copy(_, ConstSource _) -> failwith "applyToAdded - Replace TODO"
   | _ -> [ e1 ]

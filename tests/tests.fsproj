@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <Compile Include="../src/utils.fs" />
+		<Compile Include="../src/parsec.fs" />
     <Compile Include="../src/doc.fs" />
     <Compile Include="../src/demos.fs" />
     <Compile Include="tests.fs" />
@@ -15,9 +16,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Expecto" Version="9.*" />
+    <PackageReference Include="Expecto" Version="10.*" />
     <PackageReference Include="YoloDev.Expecto.TestSdk" Version="0.*" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.*" />
-    <PackageReference Update="FSharp.Core" Version="6.*" />
+    <PackageReference Update="FSharp.Core" Version="7.*" />
   </ItemGroup>
 </Project>

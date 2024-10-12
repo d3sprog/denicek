@@ -1,6 +1,12 @@
 ﻿module Tbd.Demos
 open Tbd
 open Tbd.Doc
+open Tbd.Parsec
+open Tbd.Parsec.Operators
+
+// --------------------------------------------------------------------------------------
+// Helper functions for constructing things
+// --------------------------------------------------------------------------------------
 
 let ffld f = 
   if f = "" then failwith "no field id"
@@ -23,175 +29,220 @@ let wl s tag = { Kind = WrapList(tag, s) }
 let ord s l = { Kind = ListReorder(s, l) } 
 let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = PrimitiveEdit(sel, "_" + fn) } 
 let add sel f n = { Kind = RecordAdd(sel, ffld f, ConstSource n) }
+let addr sel f src = { Kind = RecordAdd(sel, ffld f, RefSource src) }
 let cp s1 s2 = { Kind = Copy(s2, RefSource s1) }
 let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
 let uid s id = { Kind = RecordRenameField(s, ffld id) }
 
+let selectorPart = 
+  ((P.ident <|> P.atIdent) |> P.map Field) <|>
+  (P.char '*' |> P.map (fun _ -> All)) <|>
+  (P.num |> P.map Index) <|>
+  ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
+
+let selector = 
+  P.oneOrMore (P.char '/' <*>> selectorPart)
+
+let runOrFail p s = 
+  match P.run p s with Parsed(r, []) -> r | e -> failwith $"Parsing failed {e}"
+let (!/) s = 
+  runOrFail selector s
+
+// --------------------------------------------------------------------------------------
+// Conference planning demo
+// --------------------------------------------------------------------------------------
+
+// Creates <ul><li> list of speakers
+let opsCore = 
+  [
+    add [] "t1" (nds "value" "h1" "Programming conference 2023")
+    add [] "t2" (nds "value" "h2" "Speakers")
+    add [] "speakers" (lst "ul")
+    ap (!/ "/speakers") (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
+    ap (!/ "/speakers") (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
+    ap (!/ "/speakers") (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
+  ]
+
+// Add <li> and reorder items
+let addSpeakerOps = 
+  [ 
+    ap (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    ord (!/ "/speakers") [3; 0; 1; 2] 
+  ]
+
+// Create <li> as /temp and then copy into <ul>
+let addSpeakerViaTempOps = 
+  [
+    add [] "temp" (rcd "li")
+    add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    apr (!/ "/speakers") (!/ "/temp")
+    del (!/ "/temp")
+    ord (!/ "/speakers") [3; 0; 1; 2] 
+  ]
+
+// String replace specific list item
+let fixSpeakerNameOps = 
+  [
+    ed (!/ "/speakers/2/value") "rename Jean" <| function 
+      | (String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
+      | _ -> failwith "fixSpeakerNameOps - wrong primitive"
+  ]
+
+// Turn <ul> list into <table> and split items into two columns
+let refactorListOps = 
+  [
+    uid (!/ "/speakers/*/value") "name"
+    wr (!/ "/speakers/*/name") "contents" "td"
+    
+    add (!/ "/speakers/*") "email" (nds "contents" "td" "")
+    tag (!/ "/speakers/*") "li" "tr"
+    tag (!/ "/speakers") "ul" "tbody"
+    
+    wr (!/ "/speakers") "body" "table"
+    add (!/ "/speakers") "head" (rcd "thead")
+    add (!/ "/speakers/head") "name" (nds "value" "td" "Name")
+    add (!/ "/speakers/head") "email" (nds "value" "td" "E-mail")
+
+    cp (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
+    ed (!/ "/speakers/body/*/name/contents") "get name" <| function 
+      | String s -> String(s.Substring(0, s.IndexOf(',')))
+      | _ -> failwith "refactorListOps - invalid primitive"
+    ed (!/ "/speakers/body/*/email/contents") "get email" <| function
+      | String s -> String(s.Substring(s.IndexOf(',')+1).Trim())
+      | _ -> failwith "refactorListOps - invalid primitive"
+  ]
+
+// Create <input> 
+let pbdAddInput = 
+  [
+    add [] "inp" (rcd "input")
+  ]
+
+// Use existing <input> to add one speaker
+let pbdAddFirstSpeaker = 
+  [
+    add (!/ "/inp") "@value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    add [] "temp" (rcd "li")
+    addr (!/ "/temp") "value" (!/ "/inp/@value")
+    apr (!/ "/speakers") (!/ "/temp")
+    del (!/ "/temp")
+  ]
+
+// Use existing <input> to add another speaker
+let pbdAddAnotherSpeaker = 
+  [
+    add (!/ "/inp") "@value" (ps "Barbara Liskov, liskov@mit.edu")
+    add [] "temp" (rcd "li")
+    addr (!/ "/temp") "value" (!/ "/inp/@value")
+    apr (!/ "/speakers") (!/ "/temp")
+    del (!/ "/temp")
+  ]
+  
+
+
+// --------------------------------------------------------------------------------------
+// Leftovers
+// --------------------------------------------------------------------------------------
+
+  (*
+let addTransformOps = 
+  [
+    ap [] (nds "ttitle" "h2" "Transformers")
+    add [] (rcd "x-patterns" "x-patterns")
+    add [ Field "x-patterns") (rcd "head" "thead")
+    add [ Field "x-patterns/head" ] (rcd "*" "td")
+    add [ Field "x-patterns/head/*" ] (rcd "*" "x-hole")
+    add [ Field "x-patterns/head/*/*" ] (rcd "mq" "marquee")
+    add [ Field "x-patterns/head/*/*/mq" ] (rcd "" "x-match")
+  ] 
+  *)
 
 let opsBaseCounter() = 
   [ 
     add [] "" (nds "title" "h1" "Counter")
     add [] "counter" (rcd "p")
-    add [Field "counter"] "" (nds "" "strong" "Count: ")
-    add [Field "counter"] "value" (pn 0)
+    add (!/ "/counter") "" (nds "" "strong" "Count: ")
+    add (!/ "/counter") "value" (pn 0)
     add [] "inc" (nds "" "button" "Increment")
     add [] "dec" (nds "" "button" "Decrement")
   ]
 
 let opsCounterInc() = 
   [
-    wr [Field "counter"; Field "value"] "value" "x-formula"
-    uid [Field "counter"; Field "value"; Field "value"] "right"
-    add [Field "counter"; Field "value"] "left" (pn 1)
-    add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
+    wr (!/ "/counter/value") "value" "x-formula"
+    uid (!/ "/counter/value/value") "right"
+    add (!/ "/counter/value") "left" (pn 1)
+    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/+"))
   ]
 
 let opsCounterDec() = 
   [
-    wr [Field "counter"; Field "value"] "value" "x-formula"
-    uid [Field "counter"; Field "value"; Field "value"] "right"
-    add [Field "counter"; Field "value"] "left" (pn -1)
-    add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
+    wr (!/ "/counter/value") "value" "x-formula"
+    uid (!/ "/counter/value/value") "right"
+    add (!/ "/counter/value") "left" (pn -1)
+    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/+"))
   ]
 
 let opsCounterHndl() = 
-  [ yield add [Field "inc"] "click" (lst "x-event-handler")
+  [ yield add (!/ "/inc") "click" (lst "x-event-handler")
     for op in opsCounterInc() ->
-      ap [Field "inc"; Field "click"] (represent op) 
-    yield add [Field "dec"] "click" (lst "x-event-handler")
+      ap (!/ "/inc/click") (represent op) 
+    yield add (!/ "/dec") "click" (lst "x-event-handler")
     for op in opsCounterDec() ->
-      ap [Field "dec"; Field "click"] (represent op) ]
-
-let addSpeakerOps = 
-  [ 
-    ap [Field "speakers"] (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ord [Field "speakers"] [3; 0; 1; 2] 
-  ]
-
-let addSpeakerPbdOps = 
-  [
-    add [] "temp" (rcd "li")
-    add [Field "temp"] "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apr [Field "speakers"] [Field "temp"]
-    del [Field "temp"]
-    ord [Field "speakers"] [3; 0; 1; 2] 
-  ]
-
-let addTwoSpeakersPbdOps = 
-  [
-    add [] "temp" (rcd "li")
-    add [Field "temp"] "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apr [Field "speakers"] [Field "temp"]
-    del [Field "temp"]
-    add [] "temp" (rcd "li")
-    add [Field "temp"] "value" (ps "Barbara Liskov, liskov@mit.edu")
-    apr [Field "speakers"] [Field "temp"]
-    del [Field "temp"]
-  ]
-  
-let fixSpeakerNameOps = 
-  [
-    ed [Field("speakers"); Index(2); Field("value")] "rename Jean" <| function 
-      | (String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
-      | _ -> failwith "fixSpeakerNameOps - wrong primitive"
-  ]
-
-let refactorListOps = 
-  [
-    uid [Field "speakers"; All; Field "value"] "name"
-    wr [Field "speakers"; All; Field "name"] "contents" "td"
-    
-    add [Field "speakers"; All] "email" (nds "contents" "td" "")
-    tag [Field "speakers"; All] "li" "tr"
-    tag [Field "speakers"] "ul" "tbody"
-    
-    wr [Field "speakers"] "body" "table"
-    add [Field "speakers"] "head" (rcd "thead")
-    add [Field "speakers"; Field "head"] "name" (nds "value" "td" "Name")
-    add [Field "speakers"; Field "head"] "email" (nds "value" "td" "E-mail")
-
-    cp [Field "speakers"; Field "body"; All; Field "name"] [Field "speakers"; Field "body"; All; Field "email"]
-    ed [Field "speakers"; Field "body"; All; Field "name"; Field "contents"] "get name" <| function 
-      | String s -> String(s.Substring(0, s.IndexOf(',')))
-      | _ -> failwith "refactorListOps - invalid primitive"
-    ed [Field "speakers"; Field "body"; All; Field "email"; Field "contents"] "get email" <| function
-      | String s -> String(s.Substring(s.IndexOf(',')+1).Trim())
-      | _ -> failwith "refactorListOps - invalid primitive"
-  ]
-  (*
-let addTransformOps = 
-  [
-    ap [] (nds "ttitle" "h2" "Transformers")
-    add [] (rcd "x-patterns" "x-patterns")
-    add [ Field "x-patterns"] (rcd "head" "thead")
-    add [ Field "x-patterns"; Field "head" ] (rcd "*" "td")
-    add [ Field "x-patterns"; Field "head"; Field "*" ] (rcd "*" "x-hole")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*" ] (rcd "mq" "marquee")
-    add [ Field "x-patterns"; Field "head"; Field "*"; Field "*"; Field "mq" ] (rcd "" "x-match")
-  ] 
-  *)
-let opsCore = 
-  [
-    add [] "t1" (nds "value" "h1" "Programming conference 2023")
-    add [] "t2" (nds "value" "h2" "Speakers")
-    add [] "speakers" (lst "ul")
-    ap [Field "speakers"] (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
-    ap [Field "speakers"] (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
-    ap [Field "speakers"] (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
-  ]
+      ap (!/ "/dec/click") (represent op) ]
 
 let opsBudget() = 
   [
     add [] "" (nds "" "h2" "Budgeting")
     add [] "" (nds "" "h3" "Number of people")
     add [] "counts" (rcd "ul")
-    add [Field "counts"] "attendees" (ps "Attendees: ") 
-    wr [Field "counts"; Field "attendees"] "" "li"    
-    add [Field "counts"; Field "attendees"] "count" (ndn "value" "strong" 100)
-    add [Field "counts"] "speakers" (ps "Speakers: ") 
-    wr [Field "counts"; Field "speakers"] "" "li"
+    add (!/ "/counts") "attendees" (ps "Attendees: ") 
+    wr (!/ "/counts/attendees") "" "li"    
+    add (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
+    add (!/ "/counts") "speakers" (ps "Speakers: ") 
+    wr (!/ "/counts/speakers") "" "li"
     // NOTE: Reference list - not its items using 'speakers/*' because we copy node into another node
     // (and do not want to do any implicit wrapping...)
-    add [Field "counts"; Field "speakers"] "count" (ref [Field "speakers"]) 
-    wr [Field "counts"; Field "speakers"; Field "count"] "arg" "x-formula"
-    add [Field "counts"; Field "speakers"; Field "count"] "op" (ref [Field "$builtins"; Field "count"])
-    wr [Field "counts"; Field "speakers"; Field "count"] "value" "strong"
+    add (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
+    wr (!/ "/counts/speakers/count") "arg" "x-formula"
+    add (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
+    wr (!/ "/counts/speakers/count") "value" "strong"
 
     add [] "" (nds "" "h3" "Item costs")
     add [] "costs" (rcd "ul")
-    add [Field "costs"] "travel" (ps "Travel per speaker: ") 
-    wr [Field "costs"; Field "travel"] "" "li"
-    add [Field "costs"; Field "travel"] "cost" (ndn "value" "strong" 1000)
-    add [Field "costs"] "coffee" (ps "Coffee break per person: ") 
-    wr [Field "costs"; Field "coffee"] "" "li"
-    add [Field "costs"; Field "coffee"] "cost" (ndn "value" "strong" 5)
-    add [Field "costs"] "lunch" (ps "Lunch per person: ") 
-    wr [Field "costs"; Field "lunch"] "" "li"
-    add [Field "costs"; Field "lunch"] "cost" (ndn "value" "strong" 20)
-    add [Field "costs"] "dinner" (ps "Dinner per person: ") 
-    wr [Field "costs"; Field "dinner"] "" "li"
-    add [Field "costs"; Field "dinner"] "cost" (ndn "value" "strong" 80)
+    add (!/ "/costs") "travel" (ps "Travel per speaker: ") 
+    wr (!/ "/costs/travel") "" "li"
+    add (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
+    add (!/ "/costs") "coffee" (ps "Coffee break per person: ") 
+    wr (!/ "/costs/coffee") "" "li"
+    add (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
+    add (!/ "/costs") "lunch" (ps "Lunch per person: ") 
+    wr (!/ "/costs/lunch") "" "li"
+    add (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
+    add (!/ "/costs") "dinner" (ps "Dinner per person: ") 
+    wr (!/ "/costs/dinner") "" "li"
+    add (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
     
     add [] "" (nds "" "h3" "Total costs")
     add [] "totals" (lst "ul")
     // NOTE: Construct things in a way where all structural edits (wrapping)
     // are applied to the entire list using All (this should be required!)
     // because otherwise we may end up with inconsistent structures
-    ap [Field "totals"] (nds "" "span" "Refreshments: ") 
-    ap [Field "totals"] (nds "" "span" "Speaker travel: ") 
-    wr [Field "totals"; All] "" "li"
-    add [Field "totals"; Index 0] "item" (ref [Field "costs"; Field "coffee"; Field "cost"; Field "value"])
-    add [Field "totals"; Index 1] "item" (ref [Field "costs"; Field "travel"; Field "cost"; Field "value"])
-    wr [Field "totals"; All; Field "item"] "left" "x-formula"
-    wr [Field "totals"; All; Field "item"] "formula" "strong"
-    add [Field "totals"; Index 0; Field "item"; Field "formula"] "right" (ref [Field "counts"; Field "attendees"; Field "count"; Field "value"])
-    add [Field "totals"; Index 1; Field "item"; Field "formula"] "right" (ref [Field "counts"; Field "speakers"; Field "count"; Field "value"])
-    add [Field "totals"; Index 0; Field "item"; Field "formula"] "op" (ref [Field "$builtins"; Field "*"])
-    add [Field "totals"; Index 1; Field "item"; Field "formula"] "op" (ref [Field "$builtins"; Field "*"])
+    ap (!/ "/totals") (nds "" "span" "Refreshments: ") 
+    ap (!/ "/totals") (nds "" "span" "Speaker travel: ") 
+    wr (!/ "/totals/*") "" "li"
+    add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
+    add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
+    wr (!/ "/totals/*/item") "left" "x-formula"
+    wr (!/ "/totals/*/item") "formula" "strong"
+    add (!/ "/totals/0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
+    add (!/ "/totals/1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
+    add (!/ "/totals/0/item/formula") "op" (ref (!/ "/$builtins/*"))
+    add (!/ "/totals/1/item/formula") "op" (ref (!/ "/$builtins/*"))
 
     add [] "ultimate" (ps "Total: ") 
-    wr [Field "ultimate" ] "" "h3"
-    add [Field "ultimate" ] "item" (ref [Field "totals"; All; Field "item"; Field "formula"])
-    wr [Field "ultimate"; Field "item"] "arg" "x-formula"
-    add [Field "ultimate"; Field "item"] "op" (ref [Field "$builtins"; Field "sum"])
+    wr (!/ "/ultimate") "" "h3"
+    add (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
+    wr (!/ "/ultimate/item") "arg" "x-formula"
+    add (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))
   ]
