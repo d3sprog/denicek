@@ -2,9 +2,20 @@
 
 module Patterns =
   let (|As|) v i = (v, i)
+  let (|Last|_|) l = match List.rev l with x::xs -> Some x | _ -> None
 
 module List = 
   let foldi f st lst = List.indexed lst |> List.fold f st
+
+  let filterWithState f init list = 
+    list |> List.fold (fun (state, acc) v -> 
+      let res, nstate = f state v
+      nstate, if res then v::acc else acc) (init, []) 
+    |> snd |> List.rev 
+
+  // filterWithState (fun i v -> 
+  //   if i < 3 && v % 2 = 0 then true, i+1
+  //   else false, i) 0 [10 .. 20]
 
   let prefixes list = 
     let rec loop prefix acc list = 
@@ -81,6 +92,8 @@ module List =
     loop [] [] list
 
   //collectNested (fun x -> [x;x]) [[1;2];[3;4]]
+
+  let mapNested f l = List.map (List.map f) l
 
   let foldNested f st l = List.fold f st (List.concat l)
 

@@ -3,7 +3,7 @@ open Tbd
 open Tbd.Doc
 
 let ffld f = 
-  if f = "" then "=" + System.Convert.ToBase64String(System.Guid.NewGuid().ToByteArray())
+  if f = "" then failwith "no field id"
   else f
 
 let rcd tag = Record(tag, [])
@@ -26,7 +26,7 @@ let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
 let uid s id = { Kind = RecordRenameField(s, ffld id) }
 
 
-let opsBaseCounter = 
+let opsBaseCounter() = 
   [ 
     add [] "" (nds "title" "h1" "Counter")
     add [] "counter" (rcd "p")
@@ -36,7 +36,7 @@ let opsBaseCounter =
     add [] "dec" (nds "" "button" "Decrement")
   ]
 
-let opsCounterInc = 
+let opsCounterInc() = 
   [
     wr [Field "counter"; Field "value"] "value" "x-formula"
     uid [Field "counter"; Field "value"; Field "value"] "right"
@@ -44,7 +44,7 @@ let opsCounterInc =
     add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
   ]
 
-let opsCounterDec = 
+let opsCounterDec() = 
   [
     wr [Field "counter"; Field "value"] "value" "x-formula"
     uid [Field "counter"; Field "value"; Field "value"] "right"
@@ -52,13 +52,13 @@ let opsCounterDec =
     add [Field "counter"; Field "value"] "op" (ref [Field "$builtins"; Field "+"])
   ]
 
-let opsCounterHndl = 
+let opsCounterHndl() = 
   [ yield add [Field "inc"] "click" (lst "x-event-handler")
-    for op in opsCounterInc ->
-      ap [Field "inc"; Field "click"] (represent op) 
+    for op in opsCounterInc() ->
+      ap [Field "inc"; Field "click"] (Serializer.represent op) 
     yield add [Field "dec"] "click" (lst "x-event-handler")
-    for op in opsCounterDec ->
-      ap [Field "dec"; Field "click"] (represent op) ]
+    for op in opsCounterDec() ->
+      ap [Field "dec"; Field "click"] (Serializer.represent op) ]
 
 let addSpeakerOps = 
   [ 
@@ -84,8 +84,8 @@ let refactorListOps =
     
     wr [Field "speakers"] "body" "table"
     add [Field "speakers"] "head" (rcd "thead")
-    add [Field "speakers"; Field "head"] "name" (nds "" "td" "Name")
-    add [Field "speakers"; Field "head"] "email" (nds "" "td" "E-mail")
+    add [Field "speakers"; Field "head"] "name" (nds "value" "td" "Name")
+    add [Field "speakers"; Field "head"] "email" (nds "value" "td" "E-mail")
 
     cp [Field "speakers"; Field "body"; All; Field "name"] [Field "speakers"; Field "body"; All; Field "email"]
     ed [Field "speakers"; Field "body"; All; Field "name"; Field "contents"] "get name" <| function 
@@ -109,14 +109,14 @@ let addTransformOps =
   *)
 let opsCore = 
   [
-    add [] "" (nds "" "h1" "Programming conference 2023")
-    add [] "" (nds "" "h2" "Speakers")
+    add [] "t1" (nds "value" "h1" "Programming conference 2023")
+    add [] "t2" (nds "value" "h2" "Speakers")
     add [] "speakers" (lst "ul")
     ap [Field "speakers"] (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
     ap [Field "speakers"] (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
     ap [Field "speakers"] (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
-let opsBudget = 
+let opsBudget() = 
   [
     add [] "" (nds "" "h2" "Budgeting")
     add [] "" (nds "" "h3" "Number of people")

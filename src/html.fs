@@ -26,7 +26,7 @@ let private event () : Event = failwith "JS"
 type DomAttribute = 
   | Event of (HTMLElement -> Event -> unit)
   | Attribute of string
-  | Property of obj
+  //| Property of obj
 
 type DomNode = 
   | Text of string
@@ -48,8 +48,8 @@ let createTree ns tag args children =
       match k, v with 
       | k, Attribute v ->
           attrs.Add (k, box v)
-      | k, Property o ->
-          props.Add(k, o)
+      //| k, Property o ->
+          //props.Add(k, o)
       | k, Event f ->
           props.Add ("on" + k, box (fun o -> f (getProperty o "target") (event()) ))
     let attrs = JsInterop.createObj attrs
@@ -59,6 +59,17 @@ let createTree ns tag args children =
     elem
 
 let mutable counter = 0
+
+let setCheckboxValWorkaround (tag:string) attrs =
+  // For some reason, changes to 'checked' are not always detected 
+  // correctly by virtual-dom so we make sure the right value is set.
+  if tag.ToLower() = "input" &&
+      Array.exists (function "type", Attribute "checkbox" -> true | _ -> false) attrs then
+    match Array.tryPick (function "id", Attribute id -> Some id | _ -> None) attrs with
+    | Some id ->
+        let value = Array.exists (function "checked", Attribute "checked" -> true | _ -> false) attrs
+        (Browser.Dom.document.getElementById(id) :?> HTMLInputElement).``checked`` <- value
+    | _ -> ()
 
 let rec renderVirtual node = 
   match node with
@@ -72,7 +83,8 @@ let rec renderVirtual node =
       createTree ns tag attrs children, Array.fold (>>) onrender ops
   | Element(ns, tag, attrs, children, None) ->
       let children, ops = Array.map renderVirtual children |> Array.unzip
-      createTree ns tag attrs children, Array.fold (>>) ignore ops
+      let op () = setCheckboxValWorkaround tag attrs
+      createTree ns tag attrs children, Array.fold (>>) op ops
 
 let createVirtualDomApp id initial r u = 
   let event = new Event<'T>()

@@ -7,5 +7,6 @@ src/bin/
 src/obj/
 node_modules/
 *.fs.js
+*.fs.js.map
 bundle.js
 .vs/

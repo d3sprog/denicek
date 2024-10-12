@@ -40,7 +40,7 @@ type ViewState =
 // (4) Command toolbox - state
 
 type CommandRecommendationResult = 
-  | EditRecommendation of EditList
+  | EditRecommendation of Edit list list
   | NestedRecommendation of CommandRecommendation list
   | CompleteCommand of string
   
@@ -100,6 +100,7 @@ type ViewEvent =
   | ClearMarkers
 
 // (4) Command toolbox - events
+type CopySource = CurrentNode | MarkedNode
 
 type CommandEvent = 
   | CancelCommand
@@ -108,7 +109,7 @@ type CommandEvent =
   | PreviousRecommendation
   | NextRecommendation
   | SetRecommendation of int
-  | CopyNode  
+  | CopyNode of CopySource  
   | ToggleAltMenu of bool
 
 // All the events grouped together
@@ -136,14 +137,9 @@ module Helpers =
     | [ Record("x-saved-interactions", saved) ] ->
       [ for k, nd in saved ->
           match nd with 
-          | List("x-event-handler", ops) -> k, List.map unrepresent ops
+          | List("x-event-handler", ops) -> k, List.map Serializer.unrepresent ops
           | _ -> failwith "getSavedInteractions: Expected x-event-handler" ]
     | _ -> []
-
-  let formatSelector = 
-    List.map (function All -> "*" | Tag t -> ":" + t | Index i -> string i | Field f -> f)
-    >> List.map (fun s -> "/" + s)
-    >> String.concat ""
 
   let renderSelector state trigger sel = 
     let selected = state.HistoryState.HighlightedSelector = Some sel
@@ -262,7 +258,7 @@ module Document =
             | id, Reference(Select state.DocumentState.CurrentDocument 
                     [List("x-event-handler", edits)]) when id.StartsWith "@" ->
                 yield id.Substring(1) =!> fun _ _ ->
-                  let handler = { Groups = [[ for e in edits -> unrepresent e ]] }
+                  let handler = { Groups = [[ for e in edits -> Serializer.unrepresent e ]] }
                   trigger(DocumentEvent(Evaluate(true)))
                   trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits.Append handler)))
                   trigger(DocumentEvent(Evaluate(true)))
@@ -313,7 +309,7 @@ module Document =
           +? (marked state path, "marked")
         yield! getEventHandlers nd tag path
         yield! rcdattrs ]
-
+      
       h?(tag) attrs [
         match nd with 
         | Record("x-formula", nds) -> 
@@ -351,10 +347,11 @@ module Document =
         let edits = 
           if all then state.FinalDocument |> evaluateAll
           else state.FinalDocument |> evaluateDoc
-        let nedits = state.Edits.Append edits
+        let nedits = state.Edits.Append edits // TODO: use mergeedits here?
         { state with Edits = nedits; EditIndex = nedits.Length-1 }
   
     | MergeEdits edits ->
+        let edits = filterDisabledGroups state.Initial edits
         let state = { state with Edits = mergeHistories state.Edits edits } 
         { state with EditIndex = state.Edits.Length-1 }
   
@@ -466,12 +463,6 @@ module History =
         yield h?div [] [
           h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(false))) ] [text "Eval step!"]
           h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(true))) ] [text "Eval all!"]
-          // TODO: This needs to move into demos (and does not belong here anyway)
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget))) ] [text "Add budget"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget @ addSpeakerOps))) ] [text "Add speaker"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ fixSpeakerNameOps))) ] [text "Fix name"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ refactorListOps))) ] [text "Refacor list"]
-          //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
         ]
 
         let saved = Helpers.getSavedInteractions state.DocumentState.CurrentDocument
@@ -524,17 +515,25 @@ type Shortcut =
 module Shortcuts =
   let shortcuts = [
     { Key = "d"
-      Header = "Delete current document node"
+      Header = "Delete the current document node"
       IconCode = "las la-trash"
-      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!d"); EnterCommand ] }
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!x"); EnterCommand ] }
     { Key = "c"
-      Header = "Copy current document node"
+      Header = "Copy the current document node"
       IconCode = "las la-copy"
-      Events = [ CommandEvent(CopyNode) ] }
+      Events = [ CommandEvent(CopyNode CurrentNode) ] }
+    { Key = "b"
+      Header = "Copy marked document node(s)"
+      IconCode = "las la-copy"
+      Events = [ CommandEvent(CopyNode MarkedNode) ] }
     { Key = "v"
-      Header = "Paste current document node here"
+      Header = "Paste copied at the current node"
       IconCode = "las la-paste"
       Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v"); EnterCommand ] }
+    { Key = "w"
+      Header = "Paste copied at marked nodes"
+      IconCode = "las la-paste"
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!w"); EnterCommand ] }
     { Key = "m"
       Header = "Mark current node"
       IconCode = "las la-bookmark"
@@ -601,9 +600,11 @@ module Commands =
     | Empty -> text ""
     | Repeat(t, r) -> h?span [] [ text "("; formatTemplate t; text (")" + r) ]
 
+  // Ordinary single command
   let command i l p = { Icon = i; Label = (fun _ -> text l); Parser = p }
+  // Command where the label is generated based on app state when rendering (needed for highlighting selectors)
   let commandh i l p = { Icon = i; Label = (fun s -> h?span [] (l s)); Parser = p }
-
+      
   let tagHole = P.hole "tag" P.ident
   let fieldHole = P.hole "field" (P.ident <|> P.atIdent)
   let numHole = P.hole "num" P.num
@@ -611,11 +612,14 @@ module Commands =
 
   let recordTag = P.char '<' <*>> tagHole <<*> P.char '>'
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
-  let fieldAssignment = P.char ':' <*>> fieldHole <<*> P.char '='
-  let anonAssignment = P.char ':'
-  let mapEd f = P.map (fun x -> EditRecommendation { Groups = [[{ Kind = f x }]] })
-  let mapEds f = P.map (fun x -> EditRecommendation { Groups = f x })
-  let mapEdg f = P.map (fun x -> EditRecommendation { Groups = [[ for k in f x -> { Kind = k } ]] })
+
+  // When parsed, returns just a single edit
+  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x }]] )
+  // When parsed, returns a sequence of edits
+  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k } ]])
+  // Returns potentially mutiple sequences of edits
+  // (those have to be merged using the current as shared base)
+  let mapEds f = P.map (fun x -> EditRecommendation(f x))
 
   // TODO: Missing stuff with references
   // e.g. https://github.com/tpetricek/conf/blob/85ba506a56e299a6e2d8e63b8f5a13c687b1610e/src/app.fs#L372
@@ -623,33 +627,104 @@ module Commands =
   let getCommands state trigger = [
     let doc = state.DocumentState.CurrentDocument 
     let cursorSel = state.ViewState.CursorSelector
-    let nd, trace = trace cursorSel doc |> Seq.head
+    let nd, ndTrace = trace cursorSel doc |> Seq.head
+    let withMarker f = 
+      match state.ViewState.GeneralizedMarkersSelector with 
+      | None -> [] | Some markerSel -> f markerSel
+    let markerInfo = 
+      match state.ViewState.GeneralizedMarkersSelector with 
+      | None -> None 
+      | Some markerSel -> 
+          let nd, trace = trace markerSel doc |> Seq.head
+          Some(markerSel, nd, trace)
+    let forAllMarkers f = 
+      [ yield! f cursorSel nd CurrentNode
+        match markerInfo with 
+        | None -> () | Some(markerSel, nd, _) -> yield! f markerSel nd MarkedNode ]
 
-    // Wrapping curent element in some ways
-    yield command "las la-id-card" "Wrap element as a record field"
+    // Wrapping element(s) in some ways
+    yield command "las la-id-card" "Wrap the current element as record field" 
       ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.char '>' |> mapEd (fun (tag, fld) -> 
         WrapRecord(fld, tag, cursorSel) )) 
-    yield command "las la-id-card" "Wrap element as an anonymous record field"
-      ( P.char '<' <*>> tagHole <<*> P.char '>' |> mapEd (fun (tag) -> 
-        WrapRecord(ffld "", tag, cursorSel) )) 
-    yield command "las la-list" "Wrap element as a list item"
+    yield command "las la-list" "Wrap the current element as list item" 
       ( P.char '[' <*>> tagHole <<*> P.char ']' |> mapEd (fun (tag) -> 
         WrapList(tag, cursorSel) )) 
+    match markerInfo with 
+    | Some(markerSel, _, _) ->
+        yield command "las la-id-card" "Wrap marked elements as record field" 
+          ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">*" |> mapEd (fun (tag, fld) -> 
+            WrapRecord(fld, tag, markerSel) )) 
+        yield command "las la-list" "Wrap marked elements as list item" 
+          ( P.char '[' <*>> tagHole <<*> P.keyword "]*" |> mapEd (fun (tag) -> 
+            WrapList(tag, markerSel) )) 
+    | _ -> ()
 
-    // Copy, paste, rename & save edits actions
-    yield command "las la-trash" "Delete node at current location"
-      ( P.keyword "!d" |> mapEd (fun (_) -> 
-        Delete(cursorSel) ))
+    // Rename field, update tag
+    match nd with 
+    | List(oldTag, _) | Record(oldTag, _) ->
+        yield command "las la-code" "Update tag of the current element"
+          ( P.keyword "!t " <*>> tagHole |> mapEd (fun (newTag) ->
+            UpdateTag(cursorSel, oldTag, newTag) ))
+    | _ -> ()
+    match ndTrace with 
+    | Patterns.Last(lastNd, _) when isRecord lastNd ->
+        yield command "las la-i-cursor" "Rename field containing the current element" 
+          ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
+            RecordRenameField(cursorSel, fld) ))
+    | _ -> ()
+    match markerInfo with 
+    | Some(markerSel, (List(oldTag, _) | Record(oldTag, _)), _) ->
+        yield command "las la-code" "Update tag of marked elements"
+          ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
+            UpdateTag(markerSel, oldTag, newTag) ))
+    | _ -> ()
+    match markerInfo with 
+    | Some(markerSel, _, Patterns.Last(lastNd, _)) when isRecord lastNd ->
+        yield command "las la-i-cursor" "Rename fields containing marked elements" 
+          ( P.keyword "!r* " <*>> fieldHole |> mapEd (fun (fld) ->
+            RecordRenameField(markerSel, fld) ))
+    | _ -> ()
+
+    // Reorder list items
+    match List.rev cursorSel with
+    | (Index i)::listSelRev ->
+      let listSel = List.rev listSelRev
+      let listLen = match selectSingle listSel doc with List(_, nds) -> nds.Length | _ -> 0
+      if i > 0 then
+        yield command "las la-caret-up" "Move current list item up"
+          ( P.keyword "!u" |> mapEd (fun _ ->
+            let perm = [for j in 0 .. listLen - 1 -> if j = i-1 then i elif j = i then i-1 else j ]
+            ListReorder(listSel, perm) ))
+      if i < listLen - 1 then
+        yield command "las la-caret-down" "Move current list item down"
+          ( P.keyword "!d" |> mapEd (fun _ ->
+            let perm = [for j in 0 .. listLen - 1 -> if j = i+1 then i elif j = i then i+1 else j ]
+            ListReorder(listSel, perm) ))
+    | _ -> ()
+    
+    // Delete current or marked element(s)
+    yield command "las la-trash" "Delete currently selected element" 
+      ( P.keyword "!x" |> mapEd (fun (_) -> Delete(cursorSel) ))
+    match markerInfo with 
+    | Some(markerSel, _, _) ->
+        yield command "las la-trash" "Delete currently marked elements" 
+          ( P.keyword "!x*" |> mapEd (fun (_) -> Delete(markerSel) ))
+    | _ -> ()
+
+    // Copy, paste & save edits actions
     match state.CommandState.CopySource with 
     | None -> ()
     | Some src ->
-        yield command "las la-paste" "Paste copied node at current location"
+        yield command "las la-paste" "Paste copied at the current location"
           ( P.keyword "!v" |> mapEd (fun (_) -> 
             Copy(cursorSel, RefSource src) ))
-    if not (List.isEmpty trace) && isRecord (fst (List.last trace)) then
-        yield command "las la-i-cursor" "Rename field containing the current element"
-          ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
-            RecordRenameField(cursorSel, fld) ))
+        match markerInfo with
+        | Some(markerSel, _, _) -> 
+            yield command "las la-paste" "Paste copied at marked locations"
+              ( P.keyword "!w" |> mapEd (fun (_) -> 
+                Copy(markerSel, RefSource src) ))
+        | _ -> ()
+
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let recordedEds = 
           [ for i in Seq.sort state.HistoryState.SelectedEdits ->
@@ -660,50 +735,59 @@ module Commands =
                 yield RecordAdd([], "saved-interactions", ConstSource(Record("x-saved-interactions", [])))
               yield RecordAdd([Field "saved-interactions"], fld, ConstSource(List("x-event-handler", [])))
               for op in recordedEds ->
-                ListAppend([Field "saved-interactions"; Field fld], ConstSource(represent op)) ] ))
+                ListAppend([Field "saved-interactions"; Field fld], ConstSource(Serializer.represent op)) ] ))
 
-    // Add field of some kind to a record
-    if isRecord nd then 
-      match state.CommandState.CopySource with
-      | None -> ()
-      | Some src ->
-          yield command "las la-paste" "Add copied node to current record"
-            ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun (fld) ->
-              RecordAdd(cursorSel, ffld fld, RefSource(src)) ))
-      yield command "las la-id-card" "Add record field to current record"
-        ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-          RecordAdd(cursorSel, ffld fld, ConstSource(Record(tag, []))) ))
-      yield command "las la-list" "Add list field to current record"
-        ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-          RecordAdd(cursorSel, ffld fld, ConstSource(List(tag, []))) ))
-      yield command "las la-hashtag" "Add numerical field to current record"
-        ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
-          RecordAdd(cursorSel, ffld fld, ConstSource(Primitive(Number (int num)))) ))
-      yield command "las la-font" "Add string field to current record"
-        ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
-          RecordAdd(cursorSel, ffld fld, ConstSource(Primitive(String str))) ))
+    yield! forAllMarkers (fun sel nd kind -> [
+      let cr, cl = 
+        if kind = CurrentNode then "the current record", "the current list"
+        else "marked records", "marked lists"
+      let assignment = if kind = CurrentNode then P.keyword ":" else P.keyword ":*"
+      let fieldAssignment = assignment <*>> fieldHole <<*> P.char '='
+      let anonAssignment = assignment
 
-    // Add item of some kind to a list
-    if isList nd then 
-      match state.CommandState.CopySource with
-      | None -> ()
-      | Some src ->
-          yield command "las la-paste" "Add copied node to current list"
-            ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
-              ListAppend(cursorSel, RefSource(src)) ))
-      yield command "las la-id-card" "Add record item to current list"
-        ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
-          ListAppend(cursorSel, ConstSource(Record(tag, []))) ))
-      yield command "las la-list" "Add list item to current list"
-        ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
-          ListAppend(cursorSel, ConstSource(List(tag, []))) ))
-      yield command "las la-hashtag" "Add numerical item to current list"
-        ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
-          ListAppend(cursorSel, ConstSource(Primitive(Number (int num)))) ))
-      yield command "las la-font" "Add string item to current list"
-        ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
-          ListAppend(cursorSel, ConstSource(Primitive(String str))) ))
-    
+      // Add field of some kind to a record
+      if isRecord nd then 
+        match state.CommandState.CopySource with
+        | None -> ()
+        | Some src ->
+            yield command "las la-paste" ("Add copied node to " + cr)
+              ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun (fld) ->
+                RecordAdd(sel, ffld fld, RefSource(src)) ))
+        yield command "las la-id-card" ("Add record field to " + cr)
+          ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
+            RecordAdd(sel, ffld fld, ConstSource(Record(tag, []))) ))
+        yield command "las la-list" ("Add list field to " + cr)
+          ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
+            RecordAdd(sel, ffld fld, ConstSource(List(tag, []))) ))
+        yield command "las la-hashtag" ("Add numerical field to " + cr)
+          ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
+            RecordAdd(sel, ffld fld, ConstSource(Primitive(Number (int num)))) ))
+        yield command "las la-font" ("Add string field to " + cr)
+          ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
+            RecordAdd(sel, ffld fld, ConstSource(Primitive(String str))) ))
+
+      // Add item of some kind to a list
+      if isList nd then 
+        match state.CommandState.CopySource with
+        | None -> ()
+        | Some src ->
+            yield command "las la-paste" ("Add copied node to " + cl)
+              ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
+                ListAppend(sel, RefSource(src)) ))
+        yield command "las la-id-card" ("Add record item to " + cl)
+          ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
+            ListAppend(sel, ConstSource(Record(tag, []))) ))
+        yield command "las la-list" ("Add list item to " + cl)
+          ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
+            ListAppend(sel, ConstSource(List(tag, []))) ))
+        yield command "las la-hashtag" ("Add numerical item to " + cl)
+          ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
+            ListAppend(sel, ConstSource(Primitive(Number (int num)))) ))
+        yield command "las la-font" ("Add string item to " + cl)
+          ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
+            ListAppend(sel, ConstSource(Primitive(String str))) ))
+    ])
+
     // Checks that current node has value / is non-empty
     match nd with 
     | Primitive(p) ->
@@ -719,11 +803,16 @@ module Commands =
     | _ -> ()
 
     // Built-in transformations of primitive values
-    if isString nd || isNumber nd then
-      for t in transformations do
-        yield command "las la-at" (t.Label + " (built-in)")
-          ( P.char '@' <*> P.keyword t.Key |> mapEd (fun _ ->
-            PrimitiveEdit(cursorSel, t.Key) ))
+    yield! forAllMarkers (fun sel nd kind -> [
+      printfn "forallmarkers %A %A" sel kind
+      let lbl, pAst = 
+        if kind = CurrentNode then " (current)", P.unit () 
+        else " (marked)", P.char '*' |> P.map ignore
+      if isString nd || isNumber nd then
+        for t in transformations do
+          yield command "las la-at" (t.Label + lbl)
+            ( P.char '@' <*> P.keyword t.Key <*> pAst |> mapEd (fun _ ->
+              PrimitiveEdit(sel, t.Key) )) ])
 
     // Saved interactions - generate nested completions
     // (one for applying to cursor, one for applying to all marked)
@@ -736,18 +825,16 @@ module Commands =
                   ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
                     [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
         ))
-      match state.ViewState.GeneralizedMarkersSelector with 
-      | None -> ()
-      | Some markerSel ->
-          yield command "las la-at" ("Apply " + t + " to marked (user)")
+      yield! withMarker (fun markerSel ->
+        [ command "las la-at" ("Apply " + t + " to marked (user)")
             ( P.keyword $"@{t}*" |> P.map (fun _ -> 
                 NestedRecommendation [
                   for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                    yield command "las la-at" ("Using current as " + Helpers.formatSelector prefix)
+                    yield command "las la-at" ("Using current as " + formatSelector prefix)
                       ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
                         [ for markerSel in expandWildcards markerSel doc ->
                             Helpers.replacePrefixInEdits prefix markerSel ops ] )) ]
-            ))
+            )) ])
   ]
 
   let parseCommand state = 
@@ -757,6 +844,8 @@ module Commands =
         | Parsed(ed, []) -> Some(ed)
         | _ -> None )
     match recm with 
+    | None when cmdState.SelectedRecommendation = -1 -> 
+        CompleteCommand("")
     | None -> 
         let cmd, _ = cmdState.Recommendations.[cmdState.SelectedRecommendation]
         CompleteCommand(defaultArg (getFixedTemplatePrefix (P.getTemplate cmd.Parser)) "")
@@ -878,8 +967,10 @@ module Commands =
         { state with SelectedRecommendation = idx }
     | SetRecommendation idx -> 
         { state with SelectedRecommendation = idx }    
-    | CopyNode ->
+    | CopyNode(CurrentNode) ->
         { state with CopySource = Some appstate.ViewState.CursorSelector } 
+    | CopyNode(MarkedNode) ->
+        { state with CopySource = appstate.ViewState.GeneralizedMarkersSelector } 
     
 // --------------------------------------------------------------------------------------
 // View and navigation
@@ -962,7 +1053,7 @@ module View =
         ]
         yield h?i [ "class" => "la la-long-arrow-alt-right" ] []
       yield h?span [] [ 
-        let pf = if snd state.ViewState.CursorLocation = After then "(after)" else "(before)" 
+        let pf = if snd state.ViewState.CursorLocation = After then "(right)" else "(left)" 
         match nd with 
         | Record(t, _) -> text $"{pf} record {t}"
         | List(t, _) -> text $"{pf} list {t}"
@@ -1019,21 +1110,25 @@ let updateDocument docState =
 
 let rec tryEnterCommand trigger state = 
   match Commands.parseCommand state with
-  | EditRecommendation(eds) -> 
-      let doc = 
-        { state.DocumentState with 
-            EditIndex = state.DocumentState.Edits.Length + eds.Length - 1;
-            Edits = state.DocumentState.Edits.Append eds }
+  | EditRecommendation(eds) ->      
+      // If we get multiple groups of edits, we append each to the end of the current
+      // list of edits and merge them - otherwise they interact badly
+      // (e.g. if we remove items at index 0,1,2..., the first edit changes indices)
+      let addToCurrent eds = state.DocumentState.Edits.Append({ Groups = [eds] })
+      let histories = List.map addToCurrent eds
+      let merge docState eds = Document.update state docState (MergeEdits(eds))
+      let docState = histories |> List.fold merge state.DocumentState
+      let docState = docState |> updateDocument
+      let cmdState = { state.CommandState with Command = ""; SelectedRecommendation = -1 }
       let viewState = View.fixCursor state.DocumentState.CurrentDocument state.ViewState
-      { state with 
-          ViewState = viewState
-          DocumentState = doc |> updateDocument
-          CommandState = { state.CommandState with Command = "" } } 
+      { state with ViewState = viewState; DocumentState = docState; CommandState = cmdState } 
+
   | NestedRecommendation(opts) ->
       let cmdState = 
         { state.CommandState with KnownRecommendations = opts }
         |> Commands.updateRecommendations false state trigger
       { state with CommandState = cmdState } 
+
   | CompleteCommand prefix -> 
       if prefix.StartsWith(state.CommandState.Command) && prefix.Length > state.CommandState.Command.Length then 
         let complete = prefix.Substring(state.CommandState.Command.Length)
@@ -1067,7 +1162,16 @@ let render demos trigger state =
   h?div [] [
     h?header [] [ 
       yield h?strong [] [ text "Demo: "]
-      for d, s in demos -> h?a [ "href" => "#"; "click" =!> fun _ _ -> trigger(ResetState s) ] [ text d ] 
+      for d, s, alts in demos do
+        yield h?a [ "href" => "#"; "click" =!> fun _ _ -> trigger(ResetState s) ] [ text d ] 
+        if not (List.isEmpty alts) then yield h?span ["class" => "alts"] [
+          yield text " ("
+          for i, (l, ops) in List.indexed alts do 
+            if i <> 0 then yield text ", "
+            yield h?a [ "href" => "#"; "click" =!> fun _ _ -> trigger(DocumentEvent(MergeEdits(ops))) ] [ text l ] 
+          yield text ")"
+        ]
+      yield h?label [] [ h?input ["type" => "checkbox"; "class" => "alt-hints"] []; text "Alt hint enabled" ]
     ]
     h?div [ "id" => "loc" ] (View.renderLocationInfo state)    
     h?div [ "id" => "main" ] [
@@ -1079,7 +1183,7 @@ let render demos trigger state =
       yield! History.renderHistory trigger state
     ]
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
-      let nodes = List.map (List.map represent) state.DocumentState.Edits.Groups
+      let nodes = List.map (List.map Serializer.represent) state.DocumentState.Edits.Groups
       text (Serializer.nodesToJsonString nodes)
     ]
   ]
@@ -1100,26 +1204,45 @@ let render demos trigger state =
 //let ops = opsBaseCounter
 //let ops = opsBaseCounter @ opsCounterInc @ opsCounterHndl
 
+          // TODO: This needs to move into demos (and does not belong here anyway)
+          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget))) ] [text "Add budget"]
+          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget @ addSpeakerOps))) ] [text "Add speaker"]
+          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ fixSpeakerNameOps))) ] [text "Fix name"]
+          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ refactorListOps))) ] [text "Refacor list"]
+          //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
+
 let hello = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","greetings"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings",0]}],["field","greeting"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","HeLlO woRlD!"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings",1]}],["field","greeting"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","ahOJ sVeTE!"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings",2]}],["field","greeting"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","HAlLo WElT!"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["greetings",3]}],["field","greeting"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","saLUt Le MonDE!"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","temp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"p","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}],["field","value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","hElLo wORLd!"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","first"],["id","span"],["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value"]}],["field","rest"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}]]}]]},{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}],["op","take-first"]]},{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}],["op","upper"]]},{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","rest"]}],["op","skip-first"]]},{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","rest"]}],["op","lower"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","saved-interactions"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-saved-interactions","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","normalize"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","first"],["id","span"],["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value"]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value"]}],["field","rest"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}],["op","take-first"]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","first"]}],["op","upper"]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","rest"]}],["op","skip-first"]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","normalize"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-primitive-edit","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp","value","rest"]}],["op","lower"]]}]]}]]}]]"""
 let todo = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","=vXYI2bHIj0yhbcNIbNuHfw=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Todo list demo"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","=i6AeAzX8J0OnGsLAlCn35w=="],["id","h1"],["target",{"kind":"list","tag":"x-selectors","nodes":["=vXYI2bHIj0yhbcNIbNuHfw=="]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","items"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-updateid","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["id","inp"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"button","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","=8zRye0YNiEqYYqO6GWzDvg=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Add"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","saved-interactions"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-saved-interactions","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","add-handler"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","@click"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"reference","selectors":["saved-interactions","add-handler"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}]]}]]}]]"""
-let todo2 = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","=vXYI2bHIj0yhbcNIbNuHfw=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Todo list demo"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","=i6AeAzX8J0OnGsLAlCn35w=="],["id","h1"],["target",{"kind":"list","tag":"x-selectors","nodes":["=vXYI2bHIj0yhbcNIbNuHfw=="]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","items"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-updateid","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["id","inp"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"button","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","=8zRye0YNiEqYYqO6GWzDvg=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Add"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","saved-interactions"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-saved-interactions","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","add-handler"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","@click"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"reference","selectors":["saved-interactions","add-handler"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",1,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","temp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["items",1]}]]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","remove-completed"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]}]]}]]}]]"""
+//let todo2 = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","=vXYI2bHIj0yhbcNIbNuHfw=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Todo list demo"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","=i6AeAzX8J0OnGsLAlCn35w=="],["id","h1"],["target",{"kind":"list","tag":"x-selectors","nodes":["=vXYI2bHIj0yhbcNIbNuHfw=="]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","items"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-updateid","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["id","inp"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"button","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","=8zRye0YNiEqYYqO6GWzDvg=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Add"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","saved-interactions"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-saved-interactions","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","add-handler"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","@click"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"reference","selectors":["saved-interactions","add-handler"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",1,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","temp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["items",1]}]]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","remove-completed"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]}]]}]]}]]"""
+let todo2 = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","=vXYI2bHIj0yhbcNIbNuHfw=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Todo list demo"]]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","=i6AeAzX8J0OnGsLAlCn35w=="],["id","h1"],["target",{"kind":"list","tag":"x-selectors","nodes":["=vXYI2bHIj0yhbcNIbNuHfw=="]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","items"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-updateid","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["id","inp"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","add"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"button","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","=8zRye0YNiEqYYqO6GWzDvg=="],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Add"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","saved-interactions"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-saved-interactions","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","add-handler"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["add"]}],["field","@click"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"reference","selectors":["saved-interactions","add-handler"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","add-handler"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",1,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","temp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["items",1]}]]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions"]}],["field","remove-completed"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"x-event-handler","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0,"done","@checked"]}],["cond",{"kind":"record","tag":"x-cond-equals","nodes":[["node","checked"]]}]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["saved-interactions","remove-completed"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["temp",0]}]]}]]}]]}],[{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0]}]]}],[{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0]}]]}],[{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work 1"]]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work 2"]]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp"]}],["field","@value"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","Do some work 3"]]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","tmp"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","done"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"input","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp","done"]}],["field","@type"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checkbox"]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}],["field","label"],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]}]]},{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["tmp"]}]]},{"kind":"record","tag":"x-check","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["inp","@value"]}],["cond",{"kind":"record","tag":"x-cond-nonempty","nodes":[]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",0,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",1,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",2,"done"]}],["field","@checked"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const","checked"]]}]]}],[{"kind":"record","tag":"x-edit-delete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["items",1,"done","@checked"]}]]}]]"""
+let conf2 = """[[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"h1","nodes":[["value","Programming conference 2023"]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"h2","nodes":[["value","Speakers"]]}]]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"list","tag":"ul","nodes":[]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[["value","Adele Goldberg, adele@xerox.com"]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[["value","Margaret Hamilton, hamilton@mit.com"]]}]]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers"]}],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"li","nodes":[["value","Betty Jean Jennings, betty@rand.com"]]}]]}]]}],[{"kind":"record","tag":"x-update-tag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers"]}],["old","ul"],["new","tbody"]]}],[{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","body"],["id","table"],["target",{"kind":"list","tag":"x-selectors","nodes":["speakers"]}]]}],[{"kind":"record","tag":"x-update-tag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*"]}],["old","li"],["new","td"]]}],[{"kind":"record","tag":"x-update-tag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*"]}],["old","td"],["new","tr"]]}],[{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","name"],["id","td"],["target",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*","value"]}]]}],[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*"]}],["field","email"],["src",{"kind":"record","tag":"x-src-node","nodes":[["const",{"kind":"record","tag":"td","nodes":[]}]]}]]}],[{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*","email"]}],["src",{"kind":"record","tag":"x-src-ref","nodes":[["selector",{"kind":"list","tag":"x-selectors","nodes":["speakers","body","*","value"]}]]}]]}]]"""
 
-let readJson json = 
-  let ops = { Groups = List.map (List.map unrepresent) (Serializer.nodesFromJsonString json) }
+let fromOps ops = 
   let init = rcd "div"
+  let ops = { Groups = ops }
   { DocumentState = { Initial = init; Edits = ops; EditIndex = ops.Length - 1; CurrentDocument = applyHistory init ops; FinalDocument = applyHistory init ops }
     ViewState = { CursorLocation = [], Before; CursorSelector = []; Markers = []; GeneralizedMarkersSelector = None; ViewSourceSelector = None }
     CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None; SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
     HistoryState = { HighlightedSelector = None; SelectedEdits = Set.empty; Display = false }
   }
+let readJson json = 
+  List.map (List.map Serializer.unrepresent) (Serializer.nodesFromJsonString json) |> fromOps
 
 let demos = 
-  [ "hello", readJson hello
-    "empty", readJson "[]"
-    "todo", readJson todo
-    "todo2", readJson todo2 ]
+  [ 
+    "conf", fromOps [opsCore], [
+      "ada", { Groups = [opsCore @ addSpeakerOps] }
+      "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
+      "table", { Groups = [opsCore @ refactorListOps] }
+    ]
+    "conf2", readJson conf2, []
+    "todo2", readJson todo2, []
+    "hello", readJson hello, []
+    "empty", readJson "[]", []
+    "todo", readJson todo, []
+    ]
 
-let _, state = List.head demos
+let _, state, _ = List.head demos
 
 let trigger, _, getState = createVirtualDomApp "out" state (render demos) update
 
@@ -1160,7 +1283,8 @@ Browser.Dom.window.onkeydown <- fun e ->
       if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
       else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
 
-    if e.key = "Alt" && not state.CommandState.AltMenuDisplay then
+    let altHints () = (Browser.Dom.document.getElementsByClassName("alt-hints").[0] :?> Browser.Types.HTMLInputElement).``checked``
+    if e.key = "Alt" && altHints () && not state.CommandState.AltMenuDisplay then
       e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
 
     for sc in Shortcuts.shortcuts do
