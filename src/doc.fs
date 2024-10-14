@@ -1015,6 +1015,8 @@ let unrepresentCond nd =
 
 let unrepresent nd = 
   let editKind =
+    // NOTE: Split this big pattern match into multiple smaller ones, otherwise
+    // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
     match nd with
     | Record("x-edit-wraprec", Lookup(Finds "tag" tag & Finds "id" id & Find "target" target)) ->
         EditKind.WrapRecord(tag, id, unrepresentSel target)
@@ -1022,18 +1024,24 @@ let unrepresent nd =
         EditKind.ListAppend(unrepresentSel sel, unrepresentSrc src)
     | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
         EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
+    | _ -> 
+    match nd with 
     | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
         EditKind.RecordRenameField(unrepresentSel sel, id) 
     | Record("x-edit-copy", Lookup (Find "target" tgt & Find "src" src)) ->
         EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
     | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
         EditKind.Delete(unrepresentSel tgt) 
+    | _ -> 
+    match nd with 
     | Record("x-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
         EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
     | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
         EditKind.WrapList(tag, unrepresentSel tgt) 
     | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
         EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
+    | _ -> 
+    match nd with 
     | Record("x-list-reorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
         EditKind.ListReorder(unrepresentSel tgt, unrepresentIntList perm) 
     | Record("x-update-tag", Lookup (Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
