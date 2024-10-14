@@ -1022,12 +1022,14 @@ let unrepresent nd =
         EditKind.WrapRecord(tag, id, unrepresentSel target)
     | Record("x-edit-append", Lookup (Find "target" sel & Find "src" src)) ->
         EditKind.ListAppend(unrepresentSel sel, unrepresentSrc src)
-    | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
-        EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
     | _ -> 
     match nd with 
+    | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
+        EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
     | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
         EditKind.RecordRenameField(unrepresentSel sel, id) 
+    | _ -> 
+    match nd with 
     | Record("x-edit-copy", Lookup (Find "target" tgt & Find "src" src)) ->
         EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
     | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
@@ -1038,12 +1040,14 @@ let unrepresent nd =
         EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
     | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
         EditKind.WrapList(tag, unrepresentSel tgt) 
-    | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
-        EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
     | _ -> 
     match nd with 
+    | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
+        EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
     | Record("x-list-reorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
         EditKind.ListReorder(unrepresentSel tgt, unrepresentIntList perm) 
+    | _ -> 
+    match nd with 
     | Record("x-update-tag", Lookup (Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
         EditKind.UpdateTag(unrepresentSel tgt, otag, ntag) 
     | _ -> failwith $"unrepresent - Missing case for: {nd}"  
