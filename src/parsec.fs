@@ -137,6 +137,8 @@ module P =
     andThen letter (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
   let atIdent = 
     andThen (char '@') (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
+  let dollarIdent = 
+    andThen (char '$') (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
 
   let num = 
     oneOrMore number |> map (fun cs -> int(System.String(Array.ofSeq cs)))

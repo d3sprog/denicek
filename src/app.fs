@@ -147,8 +147,8 @@ module Helpers =
 
   let (|EventHandlerNode|_|) = function
     | Record("x-event-handler", 
-        ListFind "interactions" (List("x-interaction-list", ops)) & 
-        ListFind "historyhash" (Primitive(Number hash)) ) ->
+        Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
+        Patterns.ListFind "historyhash" (Primitive(Number hash)) ) ->
         Some(Some (int hash), List.map unrepresent ops)
     // TODO: Line below kept for compatibility reasons - delete when recreating samples
     | List("x-event-handler", ops) -> Some(None, List.map unrepresent ops)
@@ -383,8 +383,8 @@ module Document =
     
     | Evaluate all -> 
         let edits = 
-          if all then state.FinalDocument |> evaluateAll
-          else state.FinalDocument |> evaluateDoc
+          if all then state.FinalDocument |> Eval.evaluateAll
+          else state.FinalDocument |> Eval.evaluateDoc
         let nedits = state.Edits.Append edits // TODO: use mergeedits here?
         { state with Edits = nedits; EditIndex = nedits.Length-1 }
   
@@ -497,12 +497,6 @@ module History =
   let renderHistory trigger state = 
     if not state.HistoryState.Display then [] else [
       h?div [ "id" => "edits" ] [
-        yield h?h3 [] [text "Demo buttons"]
-        yield h?div [] [
-          h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(false))) ] [text "Eval step!"]
-          h?button ["click" =!> fun _ _ -> trigger(DocumentEvent(Evaluate(true))) ] [text "Eval all!"]
-        ]
-
         let saved = Helpers.getSavedInteractions state.DocumentState.CurrentDocument
         if not (List.isEmpty saved) then 
           yield h?h3 [] [text "Saved interactions"]
@@ -658,7 +652,7 @@ module Commands =
   
   // Parser for selectors 
   let selPart = 
-    ((P.ident <|> P.atIdent) |> P.map Field) <|>
+    ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
     (P.char '*' |> P.map (fun _ -> All)) <|>
     (P.num |> P.map Index) <|>
     ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
@@ -1171,7 +1165,18 @@ module Demos =
   let update appstate state = function
     | LoadDemos ds -> { Demos = Some ds }
 
-  let renderDemos trigger state = 
+  let renderDemos trigger state = h?div [] [
+    h?header ["style" => "padding-bottom:0px"] [ 
+      h?strong [] [ text "Tools:" ]
+      h?a ["href" => "javascript:;"; "click" =!> fun _ _ -> 
+        trigger(DocumentEvent(Evaluate(false))) ] [text "eval step"]
+      h?a ["href" => "javascript:;"; "click" =!> fun _ _ -> 
+        trigger(DocumentEvent(Evaluate(true))) ] [text "eval all"]
+      h?label [] [ 
+        h?input ["type" => "checkbox"; "class" => "alt-hints"] []
+        text "Alt hint enabled" 
+      ]
+    ]
     h?header [] [ 
       yield h?strong [] [ text "Demo: "]
       match state.DemoState.Demos with 
@@ -1190,12 +1195,8 @@ module Demos =
                   trigger(DocumentEvent(MergeEdits(ops))) ] [ text l ] 
               yield text ")"
             ]
-      yield h?label [] [ 
-        h?input ["type" => "checkbox"; "class" => "alt-hints"] []
-        text "Alt hint enabled" 
-      ]
     ]
-
+  ]
 
 // --------------------------------------------------------------------------------------
 // Application - global event handling and rendering
@@ -1263,7 +1264,7 @@ let rec update state trigger e =
 
 let render trigger state = 
   h?div [] [
-    Demos.renderDemos trigger state
+    Demos.renderDemos trigger state 
     h?div [ "id" => "loc" ] (View.renderLocationInfo state)    
     h?div [ "id" => "main" ] [
       yield h?div [ "id" => "doc" ] [
@@ -1339,14 +1340,12 @@ let readJson json =
 
 async { 
   let! conf2Async = asyncRequest "/demos/conf2.json" |> Async.StartChild
-  let! conf2tableAsync = asyncRequest "/demos/conf2-table.json" |> Async.StartChild
   let! todoAsync = asyncRequest "/demos/todo.json"|> Async.StartChild
   let! todo2Async = asyncRequest "/demos/todo2.json" |> Async.StartChild
   let! helloAsync = asyncRequest "/demos/hello.json"|> Async.StartChild
   let! conf2tableAsync = asyncRequest "/demos/conf2-table.json" |> Async.StartChild
 
   let! conf2 = conf2Async
-  let! conf2table = conf2tableAsync
   let! todo = todoAsync
   let! todo2 = todo2Async
   let! hello = helloAsync
@@ -1354,6 +1353,7 @@ async {
 
   let demos = 
     [ 
+      "conf", fromOperationsList [opsCore @ opsBudget], []
       "conf2", readJson conf2, [
         "table", { Groups = readJsonOps conf2table }
       ]
@@ -1361,11 +1361,13 @@ async {
         "ada", { Groups = [opsCore @ addSpeakerOps] }
         "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
         "table", { Groups = [opsCore @ refactorListOps] }
+        "budget", { Groups = [opsCore @ opsBudget ] }
       ]
       "todo2", readJson todo2, []
       "hello", readJson hello, []
       "empty", readJson "[]", []
       "todo", readJson todo, []
+      "counter", fromOperationsList [opsBaseCounter], []
       ]
   trigger (DemoEvent(LoadDemos demos))
   }

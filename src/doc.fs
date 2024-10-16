@@ -575,7 +575,6 @@ let apply doc edit =
         if matches p sel then Some(List(tag, [el]))
         else None ) doc
       // Replace all relevant selectors (in references in code)
-      // if notupd then doc else
       if isStructuralSelector sel then
         let nsels = getNodeSelectors doc |> List.map (fun s1 -> wrapListSelectors s1 sel)
         withNodeSelectors doc nsels
@@ -586,14 +585,18 @@ let apply doc edit =
   // We need to update selectors in code refs  (but this is a bit experimental - changes only 'Tag' refs for lists...)
   // (dtto.)
   | UpdateTag(sel, tagOld, tagNew) ->
-      if not (isStructuralSelector sel) then failwith $"apply.UpdateTag - Maybe allow, but do not update refs? UpdateTag with non-structural selector {sel}"
+      //if not (isStructuralSelector sel) then failwith $"apply.UpdateTag - Maybe allow, but do not update refs? UpdateTag with non-structural selector {sel}"
       let doc = replace (fun p el ->
         match el with 
         | Record(t, nds) when matches p sel && t = tagOld -> Some(Record(tagNew, nds))
         | List(t, nds) when matches p sel && t = tagOld -> Some(List(tagNew, nds))
         | _ -> None ) doc
-      let nsels = getNodeSelectors doc |> List.map (fun s1 -> updateTagSelectors tagOld tagNew s1 sel)
-      withNodeSelectors doc nsels
+      // Replace all relevant selectors (in references in code)
+      if isStructuralSelector sel then 
+        let nsels = getNodeSelectors doc |> List.map (fun s1 -> updateTagSelectors tagOld tagNew s1 sel)
+        withNodeSelectors doc nsels
+      else 
+        doc
 
   // Changes structure, so only do this if selector is not value-specific
   // We need to update selectors in code refs  (replace field name)
@@ -1013,45 +1016,35 @@ let unrepresentCond nd =
   | Record("x-cond-nonempty", []) -> NonEmpty
   | _ -> failwith $"unrepresentCond - Invalid node {nd}"
 
-let unrepresent nd = 
-  let editKind =
-    // NOTE: Split this big pattern match into multiple smaller ones, otherwise
-    // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
-    match nd with
-    | Record("x-edit-wraprec", Lookup(Finds "tag" tag & Finds "id" id & Find "target" target)) ->
-        EditKind.WrapRecord(tag, id, unrepresentSel target)
-    | Record("x-edit-append", Lookup (Find "target" sel & Find "src" src)) ->
-        EditKind.ListAppend(unrepresentSel sel, unrepresentSrc src)
-    | _ -> 
-    match nd with 
-    | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
-        EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
-    | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
-        EditKind.RecordRenameField(unrepresentSel sel, id) 
-    | _ -> 
-    match nd with 
-    | Record("x-edit-copy", Lookup (Find "target" tgt & Find "src" src)) ->
-        EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
-    | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
-        EditKind.Delete(unrepresentSel tgt) 
-    | _ -> 
-    match nd with 
-    | Record("x-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
-        EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
-    | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
-        EditKind.WrapList(tag, unrepresentSel tgt) 
-    | _ -> 
-    match nd with 
-    | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
-        EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
-    | Record("x-list-reorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
-        EditKind.ListReorder(unrepresentSel tgt, unrepresentIntList perm) 
-    | _ -> 
-    match nd with 
-    | Record("x-update-tag", Lookup (Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
-        EditKind.UpdateTag(unrepresentSel tgt, otag, ntag) 
-    | _ -> failwith $"unrepresent - Missing case for: {nd}"  
-  { Kind = editKind }
+let unrepresentKind nd = 
+  // NOTE: This works if the 'match' is not wrapped inside another expression (e.g. let) otherwise
+  // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
+  match nd with
+  | Record("x-edit-wraprec", Lookup(Finds "tag" tag & Finds "id" id & Find "target" target)) ->
+      EditKind.WrapRecord(tag, id, unrepresentSel target)
+  | Record("x-edit-append", Lookup (Find "target" sel & Find "src" src)) ->
+      EditKind.ListAppend(unrepresentSel sel, unrepresentSrc src)
+  | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "src" src)) ->
+      EditKind.RecordAdd(unrepresentSel sel, f, unrepresentSrc src)
+  | Record("x-edit-updateid", Lookup (Find "target" sel & Finds "id" id)) ->
+      EditKind.RecordRenameField(unrepresentSel sel, id) 
+  | Record("x-edit-copy", Lookup (Find "target" tgt & Find "src" src)) ->
+      EditKind.Copy(unrepresentSel tgt, unrepresentSrc src) 
+  | Record("x-edit-delete", Lookup (Find "target" tgt)) ->
+      EditKind.Delete(unrepresentSel tgt) 
+  | Record("x-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
+      EditKind.Check(unrepresentSel tgt, unrepresentCond cond) 
+  | Record("x-wrap-list", Lookup (Find "target" tgt & Finds "tag" tag)) ->
+      EditKind.WrapList(tag, unrepresentSel tgt) 
+  | Record("x-primitive-edit", Lookup (Find "target" tgt & Finds "op" op)) ->
+      EditKind.PrimitiveEdit(unrepresentSel tgt, op) 
+  | Record("x-list-reorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
+      EditKind.ListReorder(unrepresentSel tgt, unrepresentIntList perm) 
+  | Record("x-update-tag", Lookup (Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
+      EditKind.UpdateTag(unrepresentSel tgt, otag, ntag) 
+  | _ -> failwith $"unrepresent - Missing case for: {nd}"
+
+let unrepresent nd = { Kind = unrepresentKind nd }
 
 let representIntList ns =
   List("x-int-list", [for n in ns -> Primitive(Number(float n)) ])
@@ -1092,121 +1085,3 @@ let represent op =
   | EditKind.UpdateTag(target, otag, ntag) ->
       rcd "x-update-tag" [ "target", representSel target; "old", ps otag; "new", ps ntag ]
 
-// --------------------------------------------------------------------------------------
-// Evaluation
-// --------------------------------------------------------------------------------------
-
-let rec evalSiteRecordChildren inFormula sels nds =
-  let rec loop i = function 
-    | (f, nd)::nds -> 
-        match evalSite inFormula (Field f::sels) nd with 
-        | Some res -> Some res
-        | None -> loop (i + 1) nds
-    | _ -> None
-  loop 0 nds 
-
-and evalSiteListChildren inFormula sels nds =
-  let rec loop i = function 
-    | nd::nds -> 
-        match evalSite inFormula (Index i::sels) nd with 
-        | Some res -> Some res
-        | None -> loop (i + 1) nds
-    | _ -> None
-  loop 0 nds 
-
-and (|EvalSiteRecordChildren|_|) inFormula sels nds = 
-  evalSiteRecordChildren inFormula sels nds
-
-and (|EvalSiteListChildren|_|) inFormula sels nds = 
-  evalSiteListChildren inFormula sels nds
-
-/// Evaluate references only if they are inside formula
-/// (they may be used for other things in the document, e.g. event handlers)
-and evalSite inFormula sels nd : option<Selectors> =
-  match nd with 
-  | Primitive _ | Reference(Field "$builtins"::_) -> None
-  | Reference(p) when inFormula -> Some (List.rev sels)
-  | Reference _ -> None
-  | Record("x-evaluated", _) -> None
-  | Record("x-formula", EvalSiteRecordChildren true sels res) -> Some res // Call by value - evaluate children first
-  | Record("x-formula", _) -> Some(List.rev sels)
-  | Record(_, EvalSiteRecordChildren false sels res) -> Some res
-  | List(_, EvalSiteListChildren false sels res) -> Some res
-  | List _ | Record _ -> None
-
-let (|Args|) args = 
-  let args = Map.ofSeq args
-  args.["op"], args
-
-let (|ListFind|_|) k = List.tryFind (fst >> (=) k) >> Option.map snd
-
-let evaluateRaw doc =
-  match evalSite false [] doc with
-  | None -> []
-  | Some sels ->
-      let it = match select sels doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sels}\n Resulted in {nds}"
-      match it with 
-      | Reference(p) -> 
-          [ //Copy(p, sels), [TagCondition(p, NotEquals, "x-evaluated")], [p]
-            //Copy(p @ [Field "result"], sels), [TagCondition(p, Equals, "x-evaluated")], [p @ [Field "result"]] 
-            WrapRecord("ref", "x-evaluated", sels)
-            RecordAdd(sels, "result", ConstSource(List("ul", [])))
-            Copy(sels @ [Field "result"], RefSource p) //, [SelectorHashEquals(p, hash (select p doc))]
-            
-
-            ]
-      | Record("x-formula", Args(Reference [ Field("$builtins"); Field op ], args)) ->
-          // Used previously for dependencies - now not needed
-          // let ss = args.Keys |> Seq.map (fun k -> sels @ [Field k]) |> List.ofSeq
-
-          let args = args |> Map.map (fun _ v ->
-            match v with 
-            | Record("x-evaluated", ListFind "result" r) -> r
-            | _ -> v
-          )
-
-          let res = 
-            match op with 
-            | "count" | "sum" ->
-                let sum = List.map (function Primitive(Number n) -> n | _ -> failwith "evaluate: Argument of 'sum' is not a number.") >> List.sum 
-                let count = List.length >> float
-                let f = (dict [ "count", count; "sum", sum ]).[op]
-                match args.TryFind "arg" with
-                | Some(List(_, nds)) -> 
-                     Primitive(Number(f nds))
-                | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
-            | "+" | "*" -> 
-                let f = (dict [ "+",(+); "*",(*) ]).[op]
-                match args.TryFind "left", args.TryFind "right" with
-                | Some(Primitive(Number n1)),
-                  Some(Primitive(Number n2)) -> 
-                    Primitive(Number(f n1 n2))
-                | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
-            | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"      
-            
-          //printfn "wrap %A" sels
-          [ Copy(sels, ConstSource res) ]//, [] ]  // Dependencies = ss
-          (*
-          [ WrapRecord("result", "x-evaluated", Object, sels, true), [], ss
-            ListAppend(sels, { ID = "previous"; Expression = Primitive(String "na") }), [], ss
-            Copy(sels @ [Field "result"], sels @ [Field "previous"]), [], ss
-            Replace(sels @ [Field "result"], { ID = "result"; Expression = res } ), [], ss
-            ] *)
-      | Record("x-formula", nds) -> 
-          failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"
-      | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
-
-let evaluateDoc doc =
-  let eds = 
-    [ for ed(*, conds, deps *) in evaluateRaw doc -> 
-        //{ CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
-        { Kind = ed } ]
-  { Groups = [eds] }
-
-let evaluateAll doc = 
-  let rec loop doc = seq {
-    let edits = evaluateDoc doc
-    yield! edits.Groups
-    let ndoc = applyHistory doc edits 
-    if doc <> ndoc then yield! loop ndoc }
-  { Groups = List.ofSeq (loop doc) }

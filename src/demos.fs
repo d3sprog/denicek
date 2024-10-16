@@ -35,7 +35,7 @@ let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
 let uid s id = { Kind = RecordRenameField(s, ffld id) }
 
 let selectorPart = 
-  ((P.ident <|> P.atIdent) |> P.map Field) <|>
+  ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
   (P.char '*' |> P.map (fun _ -> All)) <|>
   (P.num |> P.map Index) <|>
   ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
@@ -112,6 +112,65 @@ let refactorListOps =
       | _ -> failwith "refactorListOps - invalid primitive"
   ]
 
+// Add budget computation using formulas
+let opsBudget = 
+  [
+    add [] "t3" (nds "v" "h2" "Budgeting")
+    add [] "t4" (nds "v" "h3" "Number of people")
+    add [] "counts" (rcd "ul")
+    add (!/ "/counts") "attendees" (ps "Attendees: ") 
+    wr (!/ "/counts/attendees") "lable" "li"    
+    add (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
+    add (!/ "/counts") "speakers" (ps "Speakers: ") 
+    wr (!/ "/counts/speakers") "label" "li"
+    
+    // NOTE: Reference list - not its items using 'speakers/*' because we copy node into another node
+    // (and do not want to do any implicit wrapping...)
+    add (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
+    wr (!/ "/counts/speakers/count") "arg" "x-formula"
+    add (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
+    wr (!/ "/counts/speakers/count") "value" "strong"
+
+    add [] "t5" (nds "v" "h3" "Item costs")
+    add [] "costs" (rcd "ul")
+    add (!/ "/costs") "travel" (ps "Travel per speaker: ") 
+    wr (!/ "/costs/travel") "label" "li"
+    add (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
+    add (!/ "/costs") "coffee" (ps "Coffee break per person: ") 
+    wr (!/ "/costs/coffee") "label" "li"
+    add (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
+    add (!/ "/costs") "lunch" (ps "Lunch per person: ") 
+    wr (!/ "/costs/lunch") "label" "li"
+    add (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
+    add (!/ "/costs") "dinner" (ps "Dinner per person: ") 
+    wr (!/ "/costs/dinner") "label" "li"
+    add (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
+    
+    add [] "t6" (nds "v" "h3" "Total costs")
+    add [] "totals" (lst "ul")
+    // NOTE: Construct things in a way where all structural edits (wrapping)
+    // are applied to the entire list using All (this should be required!)
+    // because otherwise we may end up with inconsistent structures
+    ap (!/ "/totals") (ps "Refreshments: ") 
+    ap (!/ "/totals") (ps "Speaker travel: ") 
+    wr (!/ "/totals/*") "label" "li"    
+    add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
+    add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
+    
+    wr (!/ "/totals/*/item") "left" "x-formula"
+    wr (!/ "/totals/*/item") "formula" "strong"
+    add (!/ "/totals/0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
+    add (!/ "/totals/1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
+    add (!/ "/totals/0/item/formula") "op" (ref (!/ "/$builtins/mul"))
+    add (!/ "/totals/1/item/formula") "op" (ref (!/ "/$builtins/mul"))
+    
+    add [] "ultimate" (ps "Total: ") 
+    wr (!/ "/ultimate") "t7" "h3"
+    add (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
+    wr (!/ "/ultimate/item") "arg" "x-formula"
+    add (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))    
+  ]
+
 // Create <input> 
 let pbdAddInput = 
   [
@@ -157,14 +216,14 @@ let addTransformOps =
   ] 
   *)
 
-let opsBaseCounter() = 
+let opsBaseCounter = 
   [ 
-    add [] "" (nds "title" "h1" "Counter")
+    add [] "t" (nds "title" "h1" "Counter")
     add [] "counter" (rcd "p")
-    add (!/ "/counter") "" (nds "" "strong" "Count: ")
+    add (!/ "/counter") "l" (nds "v" "strong" "Count: ")
     add (!/ "/counter") "value" (pn 0)
-    add [] "inc" (nds "" "button" "Increment")
-    add [] "dec" (nds "" "button" "Decrement")
+    add [] "inc" (nds "v" "button" "Increment")
+    add [] "dec" (nds "v" "button" "Decrement")
   ]
 
 let opsCounterInc() = 
@@ -172,7 +231,7 @@ let opsCounterInc() =
     wr (!/ "/counter/value") "value" "x-formula"
     uid (!/ "/counter/value/value") "right"
     add (!/ "/counter/value") "left" (pn 1)
-    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/+"))
+    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterDec() = 
@@ -180,7 +239,7 @@ let opsCounterDec() =
     wr (!/ "/counter/value") "value" "x-formula"
     uid (!/ "/counter/value/value") "right"
     add (!/ "/counter/value") "left" (pn -1)
-    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/+"))
+    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterHndl() = 
@@ -191,58 +250,3 @@ let opsCounterHndl() =
     for op in opsCounterDec() ->
       ap (!/ "/dec/click") (represent op) ]
 
-let opsBudget() = 
-  [
-    add [] "" (nds "" "h2" "Budgeting")
-    add [] "" (nds "" "h3" "Number of people")
-    add [] "counts" (rcd "ul")
-    add (!/ "/counts") "attendees" (ps "Attendees: ") 
-    wr (!/ "/counts/attendees") "" "li"    
-    add (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
-    add (!/ "/counts") "speakers" (ps "Speakers: ") 
-    wr (!/ "/counts/speakers") "" "li"
-    // NOTE: Reference list - not its items using 'speakers/*' because we copy node into another node
-    // (and do not want to do any implicit wrapping...)
-    add (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
-    wr (!/ "/counts/speakers/count") "arg" "x-formula"
-    add (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
-    wr (!/ "/counts/speakers/count") "value" "strong"
-
-    add [] "" (nds "" "h3" "Item costs")
-    add [] "costs" (rcd "ul")
-    add (!/ "/costs") "travel" (ps "Travel per speaker: ") 
-    wr (!/ "/costs/travel") "" "li"
-    add (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
-    add (!/ "/costs") "coffee" (ps "Coffee break per person: ") 
-    wr (!/ "/costs/coffee") "" "li"
-    add (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
-    add (!/ "/costs") "lunch" (ps "Lunch per person: ") 
-    wr (!/ "/costs/lunch") "" "li"
-    add (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
-    add (!/ "/costs") "dinner" (ps "Dinner per person: ") 
-    wr (!/ "/costs/dinner") "" "li"
-    add (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
-    
-    add [] "" (nds "" "h3" "Total costs")
-    add [] "totals" (lst "ul")
-    // NOTE: Construct things in a way where all structural edits (wrapping)
-    // are applied to the entire list using All (this should be required!)
-    // because otherwise we may end up with inconsistent structures
-    ap (!/ "/totals") (nds "" "span" "Refreshments: ") 
-    ap (!/ "/totals") (nds "" "span" "Speaker travel: ") 
-    wr (!/ "/totals/*") "" "li"
-    add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
-    add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
-    wr (!/ "/totals/*/item") "left" "x-formula"
-    wr (!/ "/totals/*/item") "formula" "strong"
-    add (!/ "/totals/0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
-    add (!/ "/totals/1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
-    add (!/ "/totals/0/item/formula") "op" (ref (!/ "/$builtins/*"))
-    add (!/ "/totals/1/item/formula") "op" (ref (!/ "/$builtins/*"))
-
-    add [] "ultimate" (ps "Total: ") 
-    wr (!/ "/ultimate") "" "h3"
-    add (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
-    wr (!/ "/ultimate/item") "arg" "x-formula"
-    add (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))
-  ]

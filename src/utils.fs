@@ -3,6 +3,7 @@
 module Patterns =
   let (|As|) v i = (v, i)
   let (|Last|_|) l = match List.rev l with x::xs -> Some x | _ -> None
+  let (|ListFind|_|) k = List.tryFind (fst >> (=) k) >> Option.map snd
 
 module List = 
   let foldi f st lst = List.indexed lst |> List.fold f st
