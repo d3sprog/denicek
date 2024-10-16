@@ -76,9 +76,9 @@ let evaluateRaw doc =
             //Copy(p @ [Field "result"], sels), [TagCondition(p, Equals, "x-evaluated")], [p @ [Field "result"]] 
 
             // cannot - update tag
-            WrapRecord("result", "x-formula", sels)
-            RecordAdd(sels, "ref", RefSource(sels @ [Field "result"]))
-            Copy(sels @ [Field "result"], RefSource p) //, [SelectorHashEquals(p, hash (select p doc))]
+            //WrapRecord("result", "x-formula", sels)
+            //RecordAdd(sels, "ref", RefSource(sels @ [Field "result"]))
+            //Copy(sels @ [Field "result"], RefSource p) //, [SelectorHashEquals(p, hash (select p doc))]
           ]
 
       | Record("x-formula", allArgs & OpAndArgs(Reference [ Field("$builtins"); Field op ], args)) ->
@@ -120,7 +120,7 @@ let evaluateRaw doc =
             // WrapRecord("result", "x-evaluated", sels)
             // RecordAdd(sels, "formula", RefSource(sels @ [Field "result"]))
             // RecordAdd(sels, "result", ConstSource(res))
-            RecordAdd(sels, "result", ConstSource(res))
+            //RecordAdd(sels, "result", ConstSource(res))
 
             //ListAppend(sels, { ID = "previous"; Expression = Primitive(String "na") })
             //Copy(sels @ [Field "result"], sels @ [Field "previous"])
@@ -131,10 +131,7 @@ let evaluateRaw doc =
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
 let evaluateDoc doc =
-  let eds = 
-    [ for ed(*, conds, deps *) in evaluateRaw doc -> 
-        //{ CanDuplicate = false; IsEvaluated = true; Kind = ed; Conditions = conds; Dependencies = deps } ]
-        { Kind = ed } ]
+  let eds = [ for ed in evaluateRaw doc -> { Kind = ed } ]
   { Groups = [eds] }
 
 let evaluateAll doc = 

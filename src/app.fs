@@ -308,11 +308,11 @@ module Document =
           let el = unbox<Browser.Types.HTMLInputElement> el
           let ed = 
             if el.``type`` = "checkbox" && el.``checked`` then
-              RecordAdd(path, "@checked", ConstSource(Primitive(String "checked")))
+              Value(RecordAdd(path, "@checked", ConstSource(Primitive(String "checked"))))
             elif el.``type`` = "checkbox" && not el.``checked`` then
-              Delete(path @ [Field "@checked"])
+              Shared(ValueKind, RecordDelete(path, "@checked"))
             else
-              RecordAdd(path, "@value", ConstSource(Primitive(String el.value)))
+              Value(RecordAdd(path, "@value", ConstSource(Primitive(String el.value))))
           let edit = { Groups = [[ { Kind = ed } ]] }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits.Append edit)))
     ]
@@ -453,7 +453,7 @@ module History =
     | RefSource sel -> Helpers.renderSelector state trigger sel
 
   let renderEdit state trigger (i, ed) = 
-    let render n fa sel args = 
+    let render sk n fa sel args = 
       h?li [] [ 
         h?input [ 
           yield "type" => "checkbox"
@@ -468,7 +468,7 @@ module History =
         ] [ 
           yield h?i [ "class" => "fa " + fa ] [] 
           yield text " "
-          yield h?strong [] [ text n ]
+          yield h?strong [] [ text (if sk = ValueKind then "v." + n else "s." + n) ]
           yield text " at "
           yield Helpers.renderSelector state trigger sel
           yield text " with ("
@@ -479,20 +479,22 @@ module History =
           yield text ")"
         ]
       ]
+    let renderv = render ValueKind
     match ed.Kind with 
-    | ListAppend(sel, nd) -> render "append" "fa-at" sel ["node", formatSource state trigger nd]
-    | PrimitiveEdit(sel, fn) -> render "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
-    | ListReorder(sel, perm) -> render "reorder" "fa-list-ol" sel ["perm", text (string perm)]
-    | Copy(tgt, src) -> render "copy" "fa-copy" tgt ["from", formatSource state trigger src]
-    | WrapRecord(id, tg, sel) -> render "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
-    | WrapList(tg, sel) -> render "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
-    | RecordAdd(sel, f, nd) -> render "addfield" "fa-plus" sel ["node", formatSource state trigger nd; "fld", text f]
-    | UpdateTag(sel, t1, t2) -> render "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
-    | RecordRenameField(sel, id) -> render "updid" "fa-font" sel ["id", text id]
-    | Delete(sel) -> render "del" "fa-xmark" sel []
-    | Check(sel, NonEmpty) -> render "check" "fa-circle-check" sel ["cond", text "nonempty"]
-    | Check(sel, EqualsTo(Number n)) -> render "check" "fa-circle-check" sel ["=", text (string n)]
-    | Check(sel, EqualsTo(String s)) -> render "check" "fa-circle-check" sel ["=", text s]
+    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatSource state trigger nd]
+    | Value(PrimitiveEdit(sel, fn)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
+    | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatSource state trigger nd; "fld", text f]
+    | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
+    | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
+    | Value(Check(sel, EqualsTo(String s))) -> renderv "check" "fa-circle-check" sel ["=", text s]
+    | Shared(sk, ListReorder(sel, perm)) -> render sk "reorder" "fa-list-ol" sel ["perm", text (string perm)]
+    | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", formatSource state trigger src]
+    | Shared(sk, WrapRecord(id, tg, sel)) -> render sk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
+    | Shared(sk, WrapList(tg, sel)) -> render sk "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
+    | Shared(sk, UpdateTag(sel, t1, t2)) -> render sk "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
+    | Shared(sk, RecordRenameField(sel, fold, fnew)) -> render sk "updid" "fa-font" sel ["old", text fold; "new", text fnew]
+    | Shared(sk, ListDelete(sel, i)) -> render sk "del" "fa-xmark" sel ["index", text (string i)]
+    | Shared(sk, RecordDelete(sel, fld)) -> render sk "del" "fa-rectangle-xmark" sel ["fld", text fld]
 
   let renderHistory trigger state = 
     if not state.HistoryState.Display then [] else [
@@ -657,7 +659,9 @@ module Commands =
     (P.num |> P.map Index) <|>
     ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
   //let selPart = P.keyword "aa"
-  let refHole = (P.oneOrMoreEnd (P.char '/' <*>> P.hole "sel" selPart))
+  let refHole = 
+    (P.oneOrMoreEnd (P.char '/' <*>> P.hole "sel" selPart)) <|>
+    (P.char '/' |> P.map (fun _ -> []))
 
   //P.run (P.keyword ":" <*>> fieldHole <<*> P.char '=' <*> refHole) ":foo=/"
         

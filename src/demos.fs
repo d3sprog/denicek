@@ -12,6 +12,7 @@ let ffld f =
   if f = "" then failwith "no field id"
   else f
 
+// Node construction
 let rcd tag = Record(tag, [])
 let lst tag = List(tag, [])
 let ref sel = Reference(sel)
@@ -21,18 +22,21 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
-let del sel = { Kind = Delete(sel) }
-let ap s n = { Kind = ListAppend(s, ConstSource n) } 
-let apr s sel = { Kind = ListAppend(s, RefSource sel) } 
-let wr s fld tag = { Kind = WrapRecord(ffld fld, tag, s) }
-let wl s tag = { Kind = WrapList(tag, s) }
-let ord s l = { Kind = ListReorder(s, l) } 
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = PrimitiveEdit(sel, "_" + fn) } 
-let add sel f n = { Kind = RecordAdd(sel, ffld f, ConstSource n) }
-let addr sel f src = { Kind = RecordAdd(sel, ffld f, RefSource src) }
-let cp s1 s2 = { Kind = Copy(s2, RefSource s1) }
-let tag s t1 t2 = { Kind = UpdateTag(s, t1, t2) }
-let uid s id = { Kind = RecordRenameField(s, ffld id) }
+// Value edits
+let ap s n = { Kind = Value(ListAppend(s, ConstSource n)) } 
+let apr s sel = { Kind = Value(ListAppend(s, RefSource sel)) } 
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
+let add sel f n = { Kind = Value(RecordAdd(sel, ffld f, ConstSource n)) }
+let addr sel f src = { Kind = Value(RecordAdd(sel, ffld f, RefSource src)) }
+
+// Shared structural
+let ordS s l = { Kind = Shared(StructuralKind, ListReorder(s, l)) } 
+let delrS sel f = { Kind = Shared(StructuralKind, RecordDelete(sel, f)) }
+let wrS s fld tag = { Kind = Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) }
+let wlS s tag = { Kind = Shared(StructuralKind, WrapList(tag, s)) }
+let cpS s1 s2 = { Kind = Shared(StructuralKind, Copy(s2, RefSource s1)) }
+let tagS s t1 t2 = { Kind = Shared(StructuralKind, UpdateTag(s, t1, t2)) }
+let uidS s fold fnew = { Kind = Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) }
 
 let selectorPart = 
   ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
@@ -41,7 +45,8 @@ let selectorPart =
   ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
 
 let selector = 
-  P.oneOrMore (P.char '/' <*>> selectorPart)
+  (P.oneOrMore (P.char '/' <*>> selectorPart)) <|>
+  (P.char '/' |> P.map (fun _ -> []))
 
 let runOrFail p s = 
   match P.run p s with Parsed(r, []) -> r | e -> failwith $"Parsing failed {e}"
@@ -67,7 +72,7 @@ let opsCore =
 let addSpeakerOps = 
   [ 
     ap (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ord (!/ "/speakers") [3; 0; 1; 2] 
+    ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
 
 // Create <li> as /temp and then copy into <ul>
@@ -76,8 +81,8 @@ let addSpeakerViaTempOps =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
     apr (!/ "/speakers") (!/ "/temp")
-    del (!/ "/temp")
-    ord (!/ "/speakers") [3; 0; 1; 2] 
+    delrS (!/ "/") "temp"
+    ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
 
 // String replace specific list item
@@ -91,19 +96,19 @@ let fixSpeakerNameOps =
 // Turn <ul> list into <table> and split items into two columns
 let refactorListOps = 
   [
-    uid (!/ "/speakers/*/value") "name"
-    wr (!/ "/speakers/*/name") "contents" "td"
+    uidS (!/ "/speakers/*") "value" "name"
+    wrS (!/ "/speakers/*/name") "contents" "td"
     
     add (!/ "/speakers/*") "email" (nds "contents" "td" "")
-    tag (!/ "/speakers/*") "li" "tr"
-    tag (!/ "/speakers") "ul" "tbody"
+    tagS (!/ "/speakers/*") "li" "tr"
+    tagS (!/ "/speakers") "ul" "tbody"
     
-    wr (!/ "/speakers") "body" "table"
+    wrS (!/ "/speakers") "body" "table"
     add (!/ "/speakers") "head" (rcd "thead")
     add (!/ "/speakers/head") "name" (nds "value" "td" "Name")
     add (!/ "/speakers/head") "email" (nds "value" "td" "E-mail")
 
-    cp (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
+    cpS (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
     ed (!/ "/speakers/body/*/name/contents") "get name" <| function 
       | String s -> String(s.Substring(0, s.IndexOf(',')))
       | _ -> failwith "refactorListOps - invalid primitive"
@@ -119,31 +124,31 @@ let opsBudget =
     add [] "t4" (nds "v" "h3" "Number of people")
     add [] "counts" (rcd "ul")
     add (!/ "/counts") "attendees" (ps "Attendees: ") 
-    wr (!/ "/counts/attendees") "lable" "li"    
+    wrS (!/ "/counts/attendees") "lable" "li"    
     add (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
     add (!/ "/counts") "speakers" (ps "Speakers: ") 
-    wr (!/ "/counts/speakers") "label" "li"
+    wrS (!/ "/counts/speakers") "label" "li"
     
     // NOTE: Reference list - not its items using 'speakers/*' because we copy node into another node
     // (and do not want to do any implicit wrapping...)
     add (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
-    wr (!/ "/counts/speakers/count") "arg" "x-formula"
+    wrS (!/ "/counts/speakers/count") "arg" "x-formula"
     add (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
-    wr (!/ "/counts/speakers/count") "value" "strong"
+    wrS (!/ "/counts/speakers/count") "value" "strong"
 
     add [] "t5" (nds "v" "h3" "Item costs")
     add [] "costs" (rcd "ul")
     add (!/ "/costs") "travel" (ps "Travel per speaker: ") 
-    wr (!/ "/costs/travel") "label" "li"
+    wrS (!/ "/costs/travel") "label" "li"
     add (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
     add (!/ "/costs") "coffee" (ps "Coffee break per person: ") 
-    wr (!/ "/costs/coffee") "label" "li"
+    wrS (!/ "/costs/coffee") "label" "li"
     add (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
     add (!/ "/costs") "lunch" (ps "Lunch per person: ") 
-    wr (!/ "/costs/lunch") "label" "li"
+    wrS (!/ "/costs/lunch") "label" "li"
     add (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
     add (!/ "/costs") "dinner" (ps "Dinner per person: ") 
-    wr (!/ "/costs/dinner") "label" "li"
+    wrS (!/ "/costs/dinner") "label" "li"
     add (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
     
     add [] "t6" (nds "v" "h3" "Total costs")
@@ -153,21 +158,21 @@ let opsBudget =
     // because otherwise we may end up with inconsistent structures
     ap (!/ "/totals") (ps "Refreshments: ") 
     ap (!/ "/totals") (ps "Speaker travel: ") 
-    wr (!/ "/totals/*") "label" "li"    
+    wrS (!/ "/totals/*") "label" "li"    
     add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
     add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
     
-    wr (!/ "/totals/*/item") "left" "x-formula"
-    wr (!/ "/totals/*/item") "formula" "strong"
+    wrS (!/ "/totals/*/item") "left" "x-formula"
+    wrS (!/ "/totals/*/item") "formula" "strong"
     add (!/ "/totals/0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
     add (!/ "/totals/1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
     add (!/ "/totals/0/item/formula") "op" (ref (!/ "/$builtins/mul"))
     add (!/ "/totals/1/item/formula") "op" (ref (!/ "/$builtins/mul"))
     
     add [] "ultimate" (ps "Total: ") 
-    wr (!/ "/ultimate") "t7" "h3"
+    wrS (!/ "/ultimate") "t7" "h3"
     add (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
-    wr (!/ "/ultimate/item") "arg" "x-formula"
+    wrS (!/ "/ultimate/item") "arg" "x-formula"
     add (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))    
   ]
 
@@ -184,7 +189,7 @@ let pbdAddFirstSpeaker =
     add [] "temp" (rcd "li")
     addr (!/ "/temp") "value" (!/ "/inp/@value")
     apr (!/ "/speakers") (!/ "/temp")
-    del (!/ "/temp")
+    delrS (!/ "/") "temp"
   ]
 
 // Use existing <input> to add another speaker
@@ -194,7 +199,7 @@ let pbdAddAnotherSpeaker =
     add [] "temp" (rcd "li")
     addr (!/ "/temp") "value" (!/ "/inp/@value")
     apr (!/ "/speakers") (!/ "/temp")
-    del (!/ "/temp")
+    delrS (!/ "/") "temp"
   ]
   
 
@@ -228,16 +233,16 @@ let opsBaseCounter =
 
 let opsCounterInc() = 
   [
-    wr (!/ "/counter/value") "value" "x-formula"
-    uid (!/ "/counter/value/value") "right"
+    wrS (!/ "/counter/value") "value" "x-formula"
+    uidS (!/ "/counter/value") "value" "right"
     add (!/ "/counter/value") "left" (pn 1)
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterDec() = 
   [
-    wr (!/ "/counter/value") "value" "x-formula"
-    uid (!/ "/counter/value/value") "right"
+    wrS (!/ "/counter/value") "value" "x-formula"
+    uidS (!/ "/counter/value") "value" "right"
     add (!/ "/counter/value") "left" (pn -1)
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
