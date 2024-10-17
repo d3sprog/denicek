@@ -166,6 +166,7 @@ type SharedEdit =
 type ValueEdit = 
   | PrimitiveEdit of Selectors * string
   | ListAppend of Selectors * Node
+  | ListAppendFrom of Selectors * Selectors
   | RecordAdd of Selectors * string * Node
   | Check of Selectors * Condition
 
@@ -203,6 +204,8 @@ let formatEdit ed =
       fmt "primitive" ValueKind [formatSelector sel; formatString op]
   | Value(ListAppend(sel, nd)) -> 
       fmt "listAppend" ValueKind [formatSelector sel; formatNode nd]
+  | Value(ListAppendFrom(sel, src)) -> 
+      fmt "listAppendFrom" ValueKind [formatSelector sel; formatSelector src]
   | Value(RecordAdd(sel, n, nd)) -> 
       fmt "recordAdd" ValueKind [formatSelector sel; formatString n; formatNode nd]
   | Value(Check(sel, NonEmpty)) -> 
@@ -269,7 +272,8 @@ let getTargetSelector ed =
   | Value(Check(s, _)) -> s
   // Add selector to the end, pointing to the affected node
   | Shared(_, WrapList(_, s)) 
-  | Value(ListAppend(s, _)) -> s @ [All]
+  | Value(ListAppend(s, _))
+  | Value(ListAppendFrom(s, _)) -> s @ [All]
   | Shared(_, ListDelete(s, i)) -> s @ [Index i]
   | Shared(_, RecordRenameField(s, id, _)) 
   | Shared(_, RecordDelete(s, id))
@@ -287,9 +291,10 @@ let withTargetSelector tgt ed =
   | Shared(sk, Copy(_, s)) -> Shared(sk, Copy(tgt, s)) |> ret
   | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(tgt, f)) |> ret
   | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
-  // Add selector to the end, pointing to the affected node
+  // Remove added selector, pointing to the affected node
   | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.dropLast tgt)) |> ret
   | Value(ListAppend(_, nd)) -> Value(ListAppend(List.dropLast tgt, nd)) |> ret
+  | Value(ListAppendFrom(_, src)) -> Value(ListAppendFrom(List.dropLast tgt, src)) |> ret
   | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast tgt, getLastIndex tgt)) |> ret
   | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(tgt, getLastField tgt, n)) |> ret
   | Shared(sk, RecordDelete(_, _)) -> Shared(sk, RecordDelete(List.dropLast tgt, getLastField tgt)) |> ret
@@ -317,12 +322,14 @@ let getSelectors ed =
   | Value(Check(s, _)) -> [s]
   | Value(ListAppend(s, nd)) 
   | Value(RecordAdd(s, _, nd)) -> s :: (getNodeSelectors nd)
+  | Value(ListAppendFrom(s1, s2)) 
   | Shared(_, Copy(s1, s2)) -> [s1; s2]
 
 let withSelectors sels ed =
   let ret nk = { Kind = nk }
   match ed.Kind with
   | Value(ListAppend(_, nd)) -> Value(ListAppend(List.head sels, withNodeSelectors nd (List.tail sels))) |> ret
+  | Value(ListAppendFrom(_, _)) -> Value(ListAppendFrom(List.head sels, List.exactlyOne (List.tail sels))) |> ret
   | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(List.head sels, s, withNodeSelectors nd (List.tail sels))) |> ret
   | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(List.exactlyOne sels, f)) |> ret
   | Value(Check(_, cond)) -> Value(Check(List.exactlyOne sels, cond)) |> ret
@@ -512,11 +519,15 @@ let apply doc edit =
         | _ -> None ) doc
 
   | Value(ListAppend(sel, nd)) ->
-      // TODO: For this and the below, we should probably follow the 'Copy' logic
-      // and allow multiple source/targets as long as the number matches...
       replace (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [nd]))
+        | _ -> None ) doc
+
+  | Value(ListAppendFrom(sel, src)) ->
+      replace (fun p el ->
+        match el with 
+        | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [selectSingle src doc]))
         | _ -> None ) doc
 
   | Value(RecordAdd(sel, fld, nd)) ->
@@ -558,7 +569,7 @@ let apply doc edit =
         // We cannot update selectors if the target node was deleted, but 
         // we can check there are no such selectors in the document.
         for docSel in getNodeSelectors doc do 
-          if includes sel docSel then
+          if includes (sel @ [Field fdel])docSel then
             failwith $"apply.RecordDelete - Cannot delete {formatSelector sel}. Document contains conflicting selector {formatSelector docSel}."
         doc
       else doc
@@ -780,14 +791,20 @@ let applyToAdded e1 e2 =
           let nnd = apply nd e2scoped
           [ { e1 with Kind = Value(ListAppend(sel, nnd)) }]
       | None -> [e1]
+
   | Value(RecordAdd(sel, fld, nd)) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
-      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
+      | Some e2scoped -> [e1] // TRICKY - c.f. TODO demo. failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
       | None -> [e1]
 
-  // TODO: maybe we do not want to modify it permanently though?
-  | Shared(_, Copy(sel, src)) -> 
+  | Value(ListAppendFrom(sel, src)) -> 
+      // TODO: maybe we do not want to modify it permanently though?
       match scopeEdit (sel @ [All]) src e2 with
+      | Some e2scoped -> [e2scoped; e1]
+      | _ -> [e1]
+
+  | Shared(_, Copy(sel, src)) -> 
+      match scopeEdit sel src e2 with
       | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
       | _ -> [e1]
 
@@ -927,6 +944,8 @@ let unrepresent nd =
   // Value edits
   | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd)) ->
       Value(ListAppend(unrepresentSel sel, nd)) |> ret
+  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src)) ->
+      Value(ListAppendFrom(unrepresentSel sel, unrepresentSel src)) |> ret
   | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd)) ->
       Value(RecordAdd(unrepresentSel sel, f, nd)) |> ret
   | Record("x-edit-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
@@ -959,6 +978,8 @@ let represent op =
   // Value edits
   | Value(ListAppend(target, nd)) ->
       rcd "x-edit-append" [ "target", representSel target; "node", nd ]
+  | Value(ListAppendFrom(target, src)) ->
+      rcd "x-edit-appendfrom" [ "target", representSel target; "src", representSel src ]
   | Value(RecordAdd(target, f, nd)) ->
       rcd "x-edit-add" [ "target", representSel target; "field", ps f; "node", nd ]
   | Value(Check(target, cond)) -> 

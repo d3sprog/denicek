@@ -462,6 +462,7 @@ module History =
     let renderv = render ValueKind
     match ed.Kind with 
     | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger nd]
+    | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderSelector state trigger src]
     | Value(PrimitiveEdit(sel, fn)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
     | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger nd; "fld", text f]
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
@@ -797,9 +798,8 @@ module Commands =
         | None -> ()
         | Some src ->
             yield command sk "las la-paste" ("Add copied node to " + cl)
-              ( anonAssignment <*>> P.keyword "!v" |> mapEdg (fun _ ->
-                [ Value(ListAppend(sel, Primitive(String "(temp)"))) 
-                  Shared(ValueKind, Copy(sel @ [Index children.Length], src)) ] ))
+              ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
+                Value(ListAppendFrom(sel, src)) ))
         yield command sk "las la-id-card" ("Add record item to " + cl)
           ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
             Value(ListAppend(sel, Record(tag, []))) ))
@@ -1306,10 +1306,10 @@ let startWithHandler op = Async.StartImmediate <| async {
   with e -> Browser.Dom.console.error(e.ToString()) }
 
 async { 
-  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved" ]
+  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| confBase; confAdd; confTable; helloBase; helloSaved |] ->
+  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase |] ->
     let demos = 
       [ 
         "conf2", readJson confBase, [
@@ -1325,17 +1325,9 @@ async {
           "table", { Groups = [opsCore @ refactorListOps] }
           "budget", { Groups = [opsCore @ opsBudget ] }
         ]
+        "todo", readJson todoBase, []
         "empty", readJson "[]", []
-        (*
-        "conf", fromOperationsList [opsCore @ opsBudget], []
-        "conf2", readJson conf2, [
-          "table", { Groups = readJsonOps conf2table }
-        ]
-        "todo2", readJson todo2, []
-        "hello", readJson hello, []
-        "todo", readJson todo, []
         "counter", fromOperationsList [opsBaseCounter], []
-        *)
         ]
     trigger (DemoEvent(LoadDemos demos))
   | _ -> failwith "wrong number of demos" }

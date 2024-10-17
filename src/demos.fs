@@ -24,10 +24,9 @@ let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
 // Value edits
 let ap s n = { Kind = Value(ListAppend(s, n)) } 
-//let apr s sel = { Kind = Value(ListAppend(s, RefSource sel)) } 
+let apf s sel = { Kind = Value(ListAppendFrom(s, sel)) } 
 let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
 let add sel f n = { Kind = Value(RecordAdd(sel, ffld f, n)) }
-//let addr sel f src = { Kind = Value(RecordAdd(sel, ffld f, RefSource src)) }
 
 // Shared structural
 let ordS s l = { Kind = Shared(StructuralKind, ListReorder(s, l)) } 
@@ -81,8 +80,7 @@ let addSpeakerViaTempOps =
   [
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ap (!/ "/speakers") (ps "(temp)")
-    cpV (!/ "/speakers/3") (!/ "/temp")
+    apf (!/ "/speakers") (!/ "/temp")
     delrS (!/ "/") "temp"
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
@@ -191,8 +189,7 @@ let pbdAddFirstSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/temp/value") (!/ "/inp/@value")
-    ap (!/ "/speakers") (ps "(empty)")
-    cpV (!/ "/speakers/3") (!/ "/temp")
+    apf (!/ "/speakers") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
 
@@ -203,8 +200,7 @@ let pbdAddAnotherSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/temp/value") (!/ "/inp/@value")
-    ap (!/ "/speakers") (ps "(empty)")
-    cpV (!/ "/speakers/4") (!/ "/temp")
+    apf (!/ "/speakers") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
   
