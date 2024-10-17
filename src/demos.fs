@@ -23,18 +23,19 @@ let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
 // Value edits
-let ap s n = { Kind = Value(ListAppend(s, ConstSource n)) } 
-let apr s sel = { Kind = Value(ListAppend(s, RefSource sel)) } 
+let ap s n = { Kind = Value(ListAppend(s, n)) } 
+//let apr s sel = { Kind = Value(ListAppend(s, RefSource sel)) } 
 let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
-let add sel f n = { Kind = Value(RecordAdd(sel, ffld f, ConstSource n)) }
-let addr sel f src = { Kind = Value(RecordAdd(sel, ffld f, RefSource src)) }
+let add sel f n = { Kind = Value(RecordAdd(sel, ffld f, n)) }
+//let addr sel f src = { Kind = Value(RecordAdd(sel, ffld f, RefSource src)) }
 
 // Shared structural
 let ordS s l = { Kind = Shared(StructuralKind, ListReorder(s, l)) } 
 let delrS sel f = { Kind = Shared(StructuralKind, RecordDelete(sel, f)) }
 let wrS s fld tag = { Kind = Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) }
 let wlS s tag = { Kind = Shared(StructuralKind, WrapList(tag, s)) }
-let cpS s1 s2 = { Kind = Shared(StructuralKind, Copy(s2, RefSource s1)) }
+let cpS s1 s2 = { Kind = Shared(StructuralKind, Copy(s2, s1)) }
+let cpV s1 s2 = { Kind = Shared(ValueKind, Copy(s2, s1)) }
 let tagS s t1 t2 = { Kind = Shared(StructuralKind, UpdateTag(s, t1, t2)) }
 let uidS s fold fnew = { Kind = Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) }
 
@@ -80,7 +81,8 @@ let addSpeakerViaTempOps =
   [
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apr (!/ "/speakers") (!/ "/temp")
+    ap (!/ "/speakers") (ps "(temp)")
+    cpV (!/ "/speakers/3") (!/ "/temp")
     delrS (!/ "/") "temp"
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
@@ -187,8 +189,10 @@ let pbdAddFirstSpeaker =
   [
     add (!/ "/inp") "@value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
     add [] "temp" (rcd "li")
-    addr (!/ "/temp") "value" (!/ "/inp/@value")
-    apr (!/ "/speakers") (!/ "/temp")
+    add (!/ "/temp") "value" (ps "(empty)") 
+    cpV (!/ "/temp/value") (!/ "/inp/@value")
+    ap (!/ "/speakers") (ps "(empty)")
+    cpV (!/ "/speakers/3") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
 
@@ -197,8 +201,10 @@ let pbdAddAnotherSpeaker =
   [
     add (!/ "/inp") "@value" (ps "Barbara Liskov, liskov@mit.edu")
     add [] "temp" (rcd "li")
-    addr (!/ "/temp") "value" (!/ "/inp/@value")
-    apr (!/ "/speakers") (!/ "/temp")
+    add (!/ "/temp") "value" (ps "(empty)") 
+    cpV (!/ "/temp/value") (!/ "/inp/@value")
+    ap (!/ "/speakers") (ps "(empty)")
+    cpV (!/ "/speakers/4") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
   

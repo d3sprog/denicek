@@ -1,4 +1,5 @@
 ﻿#if INTERACTIVE
+#nowarn "3353"
 #load "../src/utils.fs" "../src/parsec.fs" "../src/doc.fs" "../src/demos.fs"
 let equals a b = a = b
 #else

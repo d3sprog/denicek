@@ -46,17 +46,22 @@
     #ctx kbd .entered { color:rgb(190, 36, 172); }
     #ctx #cmd { border:1px solid #e0e0e0; border-radius:4px; margin:5px; padding:4px; font:300 12px Inter, sans-serif; }
     #ctx.altmenu, #ctx.altmenu ul { max-height:10000px;}
+
     /* highlighted selector */
-    .selsel { border:4px solid #e8d0b2; }
+    .selsel { border:3px solid #e8d0b2; }
     .treenode.selsel { background:#e8d0b2; border-style:none; }
     .selector.selsel { background:#e8d0b2; }
 
     /* cursor and generalized structural cursor */
-    .gensel { box-shadow:inset 0px 0px 0px 4px rgb(255, 227, 164); }
-    .cursor-after { box-shadow:0px 0px 0px 4px rgb(190, 207, 255), 4px 0px 0px 4px #8ca7ff; }
-    .cursor-before { box-shadow:0px 0px 0px 4px rgb(190, 207, 255), -4px 0px 0px 4px #8ca7ff; }
-    .cursor-after.gensel { box-shadow:0px 0px 0px 4px rgb(190, 207, 255), 4px 0px 0px 4px #8ca7ff, inset 0px 0px 0px 4px rgb(255, 227, 164); }
-    .cursor-before.gensel { box-shadow:0px 0px 0px 4px rgb(190, 207, 255), -4px 0px 0px 4px #8ca7ff, inset 0px 0px 0px 4px rgb(255, 227, 164); }
+    .gensel { box-shadow:inset 0px 0px 0px 3px rgb(255, 227, 164); }
+    .cursor-after { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), 3px 0px 0px 3px #8ca7ff; }
+    .cursor-before { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff; }
+    .cursor-after.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), 3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
+    .cursor-before.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
+
+    /* basic styling for things in the document */
+    input { padding:3px; }
+    button { padding:3px 10px 3px 10px; }
 
 
     #edits { font:300 8pt Inter, sans-serif; height:100vh; left:70vw; background:#f0f0f0; overflow:scroll; padding:0px 0px 0px 10px }
@@ -83,13 +88,10 @@
     x-match {  display:inline-block; }
     x-match::before { content:"(matched content)" }
 
-    x-event-handler { display:block; padding-left:20px; text-align:left; }
-    x-event-handler > * { display:list-item; }
-    x-event-handler { display:none; }
-
-
-
-
+    x-saved-interactions { display:none; }
+    x-interaction { display:block; padding-left:20px; text-align:left; }
+    x-interaction-list > * { display:list-item; }
+    
     xx-evaluated > *:nth-child(2) {
       display:none;
     }

@@ -272,7 +272,8 @@ module Document =
             match nd with 
             | id, Reference(Select state.DocumentState.CurrentDocument 
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" ->
-                yield id.Substring(1) =!> fun _ _ ->
+                yield id.Substring(1) =!> fun _ e ->
+                  e.preventDefault()
                   // Add saved edits to the original document state and merge them with 
                   // current state so that they can be updated to match new document schema
                   let handler = { Groups = [ops] }
@@ -291,11 +292,11 @@ module Document =
           let el = unbox<Browser.Types.HTMLInputElement> el
           let ed = 
             if el.``type`` = "checkbox" && el.``checked`` then
-              Value(RecordAdd(path, "@checked", ConstSource(Primitive(String "checked"))))
+              Value(RecordAdd(path, "@checked", Primitive(String "checked")))
             elif el.``type`` = "checkbox" && not el.``checked`` then
               Shared(ValueKind, RecordDelete(path, "@checked"))
             else
-              Value(RecordAdd(path, "@value", ConstSource(Primitive(String el.value))))
+              Value(RecordAdd(path, "@value", Primitive(String el.value)))
           let edit = { Groups = [[ { Kind = ed } ]] }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits.Append edit)))
     ]
@@ -431,10 +432,6 @@ module History =
           yield text "}"
         ]
 
-  let formatSource state trigger = function
-    | ConstSource nd -> formatNode state trigger nd
-    | RefSource sel -> Helpers.renderSelector state trigger sel
-
   let renderEdit state trigger (i, ed) = 
     let render sk n fa sel args = 
       h?li [] [ 
@@ -464,20 +461,20 @@ module History =
       ]
     let renderv = render ValueKind
     match ed.Kind with 
-    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatSource state trigger nd]
+    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger nd]
     | Value(PrimitiveEdit(sel, fn)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
-    | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatSource state trigger nd; "fld", text f]
+    | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger nd; "fld", text f]
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
     | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
     | Value(Check(sel, EqualsTo(String s))) -> renderv "check" "fa-circle-check" sel ["=", text s]
     | Shared(sk, ListReorder(sel, perm)) -> render sk "reorder" "fa-list-ol" sel ["perm", text (string perm)]
-    | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", formatSource state trigger src]
+    | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", Helpers.renderSelector state trigger src]
     | Shared(sk, WrapRecord(id, tg, sel)) -> render sk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
     | Shared(sk, WrapList(tg, sel)) -> render sk "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
     | Shared(sk, UpdateTag(sel, t1, t2)) -> render sk "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
     | Shared(sk, RecordRenameField(sel, fold, fnew)) -> render sk "updid" "fa-font" sel ["old", text fold; "new", text fnew]
-    | Shared(sk, ListDelete(sel, i)) -> render sk "del" "fa-xmark" sel ["index", text (string i)]
-    | Shared(sk, RecordDelete(sel, fld)) -> render sk "del" "fa-rectangle-xmark" sel ["fld", text fld]
+    | Shared(sk, ListDelete(sel, i)) -> render sk "delitm" "fa-xmark" sel ["index", text (string i)]
+    | Shared(sk, RecordDelete(sel, fld)) -> render sk "delfld" "fa-rectangle-xmark" sel ["fld", text fld]
 
   let renderHistory trigger state = 
     if not state.HistoryState.Display then [] else [
@@ -554,11 +551,11 @@ module Shortcuts =
     { Key = "v"
       Header = "Paste copied at the current node"
       IconCode = "las la-paste"
-      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v"); EnterCommand ] }
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v*"); EnterCommand ] }
     { Key = "w"
       Header = "Paste copied at marked nodes"
       IconCode = "las la-paste"
-      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v*"); EnterCommand ] }
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v"); EnterCommand ] }
     { Key = "e"
       Header = "Evaluate all formulas"
       IconCode = "las la-play"
@@ -654,59 +651,39 @@ module Commands =
     let cursorSel = state.ViewState.CursorSelector
     let genSel = state.ViewState.GeneralizedStructuralSelector
     let nd, ndTrace = trace cursorSel doc |> Seq.head
-    //let withMarker f = 
-      //f state.ViewState.GeneralizedStructuralSelector
-      //match state.ViewState.GeneralizedMarkersSelector with 
-      //| None -> [] | Some markerSel -> f markerSel
-    //let markerInfo = 
-      (*
-      match state.ViewState.GeneralizedMarkersSelector with 
-      | None -> None 
-      | Some markerSel -> 
-          let nd, trace = trace markerSel doc |> Seq.head
-          Some(markerSel, nd, trace)
-      *)
-      //let nd, trace = trace state.ViewState.GeneralizedStructuralSelector doc |> Seq.head
-      //Some(state.ViewState.GeneralizedStructuralSelector, nd, trace)
-    (*
-    let forAllMarkers f = 
-      [ yield! f cursorSel nd CurrentNode
-        match markerInfo with 
-        | None -> () | Some(markerSel, nd, _) -> yield! f markerSel nd MarkedNode ]
-        *)
 
     // Wrapping element(s) in some ways
-    yield command VK "las la-id-card" "Wrap the current element as record field" 
-      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.char '>' |> mapEd (fun (tag, fld) -> 
-        Shared(ValueKind, WrapRecord(fld, tag, cursorSel)) )) 
-    yield command VK "las la-list" "Wrap the current element as list item" 
-      ( P.char '[' <*>> tagHole <<*> P.char ']' |> mapEd (fun (tag) -> 
-        Shared(ValueKind, WrapList(tag, cursorSel)) )) 
     yield command SK "las la-id-card" "Wrap marked elements as record field" 
-      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">*" |> mapEd (fun (tag, fld) -> 
+      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">" |> mapEd (fun (tag, fld) -> 
         Shared(StructuralKind, WrapRecord(fld, tag, genSel)) )) 
     yield command SK "las la-list" "Wrap marked elements as list item" 
-      ( P.char '[' <*>> tagHole <<*> P.keyword "]*" |> mapEd (fun (tag) -> 
+      ( P.char '[' <*>> tagHole <<*> P.keyword "]" |> mapEd (fun (tag) -> 
         Shared(StructuralKind, WrapList(tag, genSel)) )) 
+    yield command VK "las la-id-card" "Wrap the current element as record field" 
+      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">*" |> mapEd (fun (tag, fld) -> 
+        Shared(ValueKind, WrapRecord(fld, tag, cursorSel)) )) 
+    yield command VK "las la-list" "Wrap the current element as list item" 
+      ( P.char '[' <*>> tagHole <<*> P.keyword "]*" |> mapEd (fun (tag) -> 
+        Shared(ValueKind, WrapList(tag, cursorSel)) )) 
         
     // Rename field, update tag
     match nd with 
     | List(oldTag, _) | Record(oldTag, _) ->
-        yield command VK "las la-code" "Update tag of the current element"
-          ( P.keyword "!t " <*>> tagHole |> mapEd (fun (newTag) ->
-            Shared(ValueKind, UpdateTag(cursorSel, oldTag, newTag)) ))
         yield command SK "las la-code" "Update tag of marked elements"
-          ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
+          ( P.keyword "!t " <*>> tagHole |> mapEd (fun (newTag) ->
             Shared(StructuralKind, UpdateTag(genSel, oldTag, newTag)) ))
+        yield command VK "las la-code" "Update tag of the current element"
+          ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
+            Shared(ValueKind, UpdateTag(cursorSel, oldTag, newTag)) ))
     | _ -> ()
     match ndTrace with 
     | Patterns.Last(_, Field fold) ->
-        yield command VK "las la-i-cursor" "Rename field containing the current element" 
-          ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
-            Shared(ValueKind, RecordRenameField(List.dropLast cursorSel, fold, fld)) ))
         yield command SK "las la-i-cursor" "Rename fields containing marked elements" 
-          ( P.keyword "!r* " <*>> fieldHole |> mapEd (fun (fld) ->
+          ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
             Shared(StructuralKind, RecordRenameField(List.dropLast genSel, fold, fld)) ))
+        yield command VK "las la-i-cursor" "Rename field containing the current element" 
+          ( P.keyword "!r* " <*>> fieldHole |> mapEd (fun (fld) ->
+            Shared(ValueKind, RecordRenameField(List.dropLast cursorSel, fold, fld)) ))
     | _ -> ()
 
     // Reorder list items
@@ -716,49 +693,49 @@ module Commands =
       let genListSel = Helpers.generalizeToStructuralSelector listSel
       let listLen = match selectSingle listSel doc with List(_, nds) -> nds.Length | _ -> 0
       if i > 0 then
-        yield command VK "las la-caret-up" "Move the current list item up"
+        yield command SK "las la-caret-up" "Move marked list items up"
           ( P.keyword "!u" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i-1 then i elif j = i then i-1 else j ]
-            Shared(ValueKind, ListReorder(listSel, perm)) ))
-        yield command VK "las la-caret-up" "Move marked list items up"
+            Shared(StructuralKind, ListReorder(listSel, perm)) ))
+        yield command VK "las la-caret-up" "Move the current list item up"
           ( P.keyword "!u*" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i-1 then i elif j = i then i-1 else j ]
-            Shared(StructuralKind, ListReorder(listSel, perm)) ))
+            Shared(ValueKind, ListReorder(listSel, perm)) ))
       if i < listLen - 1 then
-        yield command VK "las la-caret-down" "Move the current list item down"
+        yield command SK "las la-caret-down" "Move marked list items down"
           ( P.keyword "!d" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i+1 then i elif j = i then i+1 else j ]
-            Shared(ValueKind, ListReorder(listSel, perm)) ))
-        yield command VK "las la-caret-down" "Move marked list items down"
+            Shared(StructuralKind, ListReorder(listSel, perm)) ))
+        yield command VK "las la-caret-down" "Move the current list item down"
           ( P.keyword "!d*" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i+1 then i elif j = i then i+1 else j ]
-            Shared(StructuralKind, ListReorder(listSel, perm)) ))
+            Shared(ValueKind, ListReorder(listSel, perm)) ))
     | _ -> ()
     
     // Delete current or marked element(s)
     match ndTrace with 
     | Patterns.Last(_, Field fold) ->
-        yield command VK "las la-trash" "Delete the currently selected record field" 
-          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(ValueKind, RecordDelete(cursorSel, fold)) ))
         yield command SK "las la-trash" "Delete currently marked record fields" 
-          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(StructuralKind, RecordDelete(genSel, fold)) ))
+          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(StructuralKind, RecordDelete(List.dropLast genSel, fold)) ))
+        yield command VK "las la-trash" "Delete the currently selected record field" 
+          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(ValueKind, RecordDelete(List.dropLast cursorSel, fold)) ))
     | Patterns.Last(_, Index idx) ->
-        yield command VK "las la-trash" "Delete the currently selected list item" 
-          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(ValueKind, ListDelete(cursorSel, idx)) ))
         yield command SK "las la-trash" "Delete currently marked list items" 
-          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(StructuralKind, ListDelete(genSel, idx)) ))
+          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(StructuralKind, ListDelete(List.dropLast genSel, idx)) ))
+        yield command VK "las la-trash" "Delete the currently selected list item" 
+          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(ValueKind, ListDelete(List.dropLast cursorSel, idx)) ))
     | _ -> ()
 
     // Copy, paste & save edits actions
     match state.CommandState.CopySource with 
     | None -> ()
     | Some src ->
-        yield command VK "las la-paste" "Paste copied at the current location"
-          ( P.keyword "!v" |> mapEd (fun (_) -> 
-            Shared(ValueKind, Copy(cursorSel, RefSource src)) ))
         yield command SK "las la-paste" "Paste copied at marked locations"
+          ( P.keyword "!v" |> mapEd (fun (_) -> 
+            Shared(StructuralKind, Copy(genSel, src)) ))
+        yield command VK "las la-paste" "Paste copied at the current location"
           ( P.keyword "!v*" |> mapEd (fun (_) -> 
-            Shared(StructuralKind, Copy(genSel, RefSource src)) ))
+            Shared(ValueKind, Copy(cursorSel, src)) ))
 
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let recordedEds = 
@@ -768,25 +745,25 @@ module Commands =
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
                 yield Value(RecordAdd([], "saved-interactions", 
-                  ConstSource(Record("x-saved-interactions", []))))              
+                  Record("x-saved-interactions", [])))
               yield Value(RecordAdd([Field "saved-interactions"], fld, 
-                ConstSource(Record("x-interaction", [ 
+                Record("x-interaction", [ 
                   "historyhash", Primitive(Number state.DocumentState.CurrentHash); 
-                  "interactions", List("x-interaction-list", []) ]))))
+                  "interactions", List("x-interaction-list", []) ])))
               for op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
-                  ConstSource(represent op))) ] ))
+                  represent op)) ] ))
              
     // The following are value edits regardless of to what they are applied
     // But it may be useful to apply them to all marked nodes. We use '+' in the notation 
     // instead of '*' to indicate this. (We may want to allow '+' for other commands..)
-    for sel, sk, kind in [cursorSel, ValueKind, CurrentNode; genSel, StructuralKind, MarkedNode ] do
+    for sel, sk, kind in [genSel, StructuralKind, MarkedNode; cursorSel, ValueKind, CurrentNode] do
       let cr, cl = 
         if kind = CurrentNode then "the current record", "the current list"
         else "marked records", "marked lists"
-      let assignment = if kind = CurrentNode then P.keyword ":" else P.keyword ":+"
-      let fieldAssignment = assignment <*>> fieldHole <<*> P.char '='
-      let anonAssignment = assignment
+      let assignSymbol = if kind = CurrentNode then P.keyword "*=" else P.keyword "="
+      let fieldAssignment = P.char ':' <*>> fieldHole <<*> assignSymbol
+      let anonAssignment = P.char ':' <*> assignSymbol
 
       // Add field of some kind to a record
       if isRecord nd then 
@@ -794,45 +771,49 @@ module Commands =
         | None -> ()
         | Some src ->
             yield command sk "las la-paste" ("Add copied node to " + cr)
-              ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun (fld) ->
-                Value(RecordAdd(sel, ffld fld, RefSource(src))) ))
+              ( fieldAssignment <<*> P.keyword "!v" |> mapEdg (fun (fld) ->
+                [ Value(RecordAdd(sel, fld, Primitive(String "(temp)"))) 
+                  Shared(ValueKind, Copy(sel @ [Field fld], src)) ] ))
         yield command sk "las la-id-card" ("Add record field to " + cr)
           ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-            Value(RecordAdd(sel, ffld fld, ConstSource(Record(tag, [])))) ))
+            Value(RecordAdd(sel, fld, Record(tag, []))) ))
         yield command sk "las la-list" ("Add list field to " + cr)
           ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-            Value(RecordAdd(sel, ffld fld, ConstSource(List(tag, [])))) ))
+            Value(RecordAdd(sel, fld, List(tag, []))) ))
         yield command sk "las la-link" ("Add reference field to " + cr)
           ( fieldAssignment <*> refHole |> mapEd (fun (fld, ref) ->
-            Value(RecordAdd(sel, ffld fld, ConstSource(Reference(ref)))) ))
+            Value(RecordAdd(sel, fld, Reference(ref))) ))
         yield command sk "las la-hashtag" ("Add numerical field to " + cr)
           ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
-            Value(RecordAdd(sel, ffld fld, ConstSource(Primitive(Number (int num))))) ))
+            Value(RecordAdd(sel, fld, Primitive(Number (int num)))) ))
         yield command sk "las la-font" ("Add string field to " + cr)
           ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
-            Value(RecordAdd(sel, ffld fld, ConstSource(Primitive(String str)))) ))
+            Value(RecordAdd(sel, fld, Primitive(String str))) ))
 
       // Add item of some kind to a list
-      if isList nd then 
+      match nd with 
+      | List(_, children) ->
         match state.CommandState.CopySource with
         | None -> ()
         | Some src ->
             yield command sk "las la-paste" ("Add copied node to " + cl)
-              ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
-                Value(ListAppend(sel, RefSource(src))) ))
+              ( anonAssignment <*>> P.keyword "!v" |> mapEdg (fun _ ->
+                [ Value(ListAppend(sel, Primitive(String "(temp)"))) 
+                  Shared(ValueKind, Copy(sel @ [Index children.Length], src)) ] ))
         yield command sk "las la-id-card" ("Add record item to " + cl)
           ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
-            Value(ListAppend(sel, ConstSource(Record(tag, [])))) ))
+            Value(ListAppend(sel, Record(tag, []))) ))
         yield command sk "las la-list" ("Add list item to " + cl)
           ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
-            Value(ListAppend(sel, ConstSource(List(tag, [])))) ))
+            Value(ListAppend(sel, List(tag, []))) ))
         yield command sk "las la-hashtag" ("Add numerical item to " + cl)
           ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
-            Value(ListAppend(sel, ConstSource(Primitive(Number (int num))))) ))
+            Value(ListAppend(sel, Primitive(Number (int num)))) ))
         yield command sk "las la-font" ("Add string item to " + cl)
           ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
-            Value(ListAppend(sel, ConstSource(Primitive(String str)))) ))
-    
+            Value(ListAppend(sel, Primitive(String str))) ))
+      | _ -> ()
+      
     // Checks that current node has value / is non-empty
     match nd with 
     | Primitive(p) ->
@@ -849,10 +830,10 @@ module Commands =
 
     // Built-in transformations of primitive values
     // (these are also only value edits, like RecordAdd/ListAppend above)
-    for sel, sk, kind in [cursorSel, ValueKind, CurrentNode; genSel, StructuralKind, MarkedNode ] do
+    for sel, sk, kind in [genSel, StructuralKind, MarkedNode; cursorSel, ValueKind, CurrentNode] do
       let lbl, pAst = 
-        if kind = CurrentNode then " (current)", P.unit () 
-        else " (marked)", P.char '+' |> P.map ignore
+        if kind = CurrentNode then " (current)", P.char '*' |> P.map ignore
+        else " (marked)", P.unit () 
       if isString nd || isNumber nd then
         for t in transformations do
           yield command sk "las la-at" (t.Label + lbl)
@@ -862,22 +843,22 @@ module Commands =
     // Saved interactions - generate nested completions
     // (one for applying to cursor, one for applying to all marked)
     for t, _, ops in Helpers.getSavedInteractions doc do
-      yield command VK "las la-at" ("Apply " + t + " to current (user)")
+      yield command SK "las la-at" ("Apply " + t + " to marked (user)")
         ( P.keyword $"@{t}" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield commandh VK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
-                  ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
-                    [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
-        ))
-      yield command SK "las la-at" ("Apply " + t + " to marked (user)")
-        ( P.keyword $"@{t}+" |> P.map (fun _ -> 
-            NestedRecommendation [
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
                 yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
-                  ( P.keyword $"@{t}+ {string i}" |> mapEds (fun _ ->
+                  ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
                     [ for markerSel in expandWildcards genSel doc ->
                         Helpers.replacePrefixInEdits prefix markerSel ops ] )) ]
+        ))
+      yield command VK "las la-at" ("Apply " + t + " to current (user)")
+        ( P.keyword $"@{t}*" |> P.map (fun _ -> 
+            NestedRecommendation [
+              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                yield commandh VK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                  ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
+                    [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
         ))
   ]
 
@@ -1154,7 +1135,7 @@ module Demos =
       h?a ["href" => "javascript:;"; "click" =!> fun _ _ -> 
         trigger(DocumentEvent(Evaluate(true))) ] [text "eval all"]
       h?label [] [ 
-        h?input ["type" => "checkbox"; "class" => "alt-hints"] []
+        h?input ["type" => "checkbox"; "class" => "alt-hints"; "checked" => "checked" ] []
         text "Alt hint enabled" 
       ]
     ]
@@ -1325,45 +1306,39 @@ let startWithHandler op = Async.StartImmediate <| async {
   with e -> Browser.Dom.console.error(e.ToString()) }
 
 async { 
-  (*
-  let! conf2Async = asyncRequest "/demos/conf2.json" |> Async.StartChild
-  let! todoAsync = asyncRequest "/demos/todo.json"|> Async.StartChild
-  let! todo2Async = asyncRequest "/demos/todo2.json" |> Async.StartChild
-  let! helloAsync = asyncRequest "/demos/hello.json"|> Async.StartChild
-  let! conf2tableAsync = asyncRequest "/demos/conf2-table.json" |> Async.StartChild
-
-  let! conf2 = conf2Async
-  let! todo = todoAsync
-  let! todo2 = todo2Async
-  let! hello = helloAsync
-  let! conf2table = conf2tableAsync
-  *)
-  let! confBaseAsync = asyncRequest "/demos/conf-base.json" |> Async.StartChild
-  let! confBase = confBaseAsync
-  
-  let demos = 
-    [ 
-      "conf2", readJson confBase, [] 
-      "conf", fromOperationsList [opsCore], [
-        "ada", { Groups = [opsCore @ addSpeakerOps] }
-        "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
-        "table", { Groups = [opsCore @ refactorListOps] }
-        "budget", { Groups = [opsCore @ opsBudget ] }
-      ]
-      "empty", readJson "[]", []
-      (*
-      "conf", fromOperationsList [opsCore @ opsBudget], []
-      "conf2", readJson conf2, [
-        "table", { Groups = readJsonOps conf2table }
-      ]
-      "todo2", readJson todo2, []
-      "hello", readJson hello, []
-      "todo", readJson todo, []
-      "counter", fromOperationsList [opsBaseCounter], []
-      *)
-      ]
-  trigger (DemoEvent(LoadDemos demos))
-  }
+  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved" ]
+  let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
+  match jsons with 
+  | [| confBase; confAdd; confTable; helloBase; helloSaved |] ->
+    let demos = 
+      [ 
+        "conf2", readJson confBase, [
+          "add", { Groups = readJsonOps confAdd }
+          "table", { Groups = readJsonOps confTable }
+        ] 
+        "hello", readJson helloBase, [
+          "saved", { Groups = readJsonOps helloSaved }
+        ]
+        "conf", fromOperationsList [opsCore], [
+          "ada", { Groups = [opsCore @ addSpeakerOps] }
+          "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
+          "table", { Groups = [opsCore @ refactorListOps] }
+          "budget", { Groups = [opsCore @ opsBudget ] }
+        ]
+        "empty", readJson "[]", []
+        (*
+        "conf", fromOperationsList [opsCore @ opsBudget], []
+        "conf2", readJson conf2, [
+          "table", { Groups = readJsonOps conf2table }
+        ]
+        "todo2", readJson todo2, []
+        "hello", readJson hello, []
+        "todo", readJson todo, []
+        "counter", fromOperationsList [opsBaseCounter], []
+        *)
+        ]
+    trigger (DemoEvent(LoadDemos demos))
+  | _ -> failwith "wrong number of demos" }
 |> startWithHandler
 
 Browser.Dom.window.onkeypress <- fun e -> 
