@@ -48,9 +48,9 @@
     #ctx.altmenu, #ctx.altmenu ul { max-height:10000px;}
 
     /* highlighted selector */
-    .selsel { border:3px solid #e8d0b2; }
-    .treenode.selsel { background:#e8d0b2; border-style:none; }
-    .selector.selsel { background:#e8d0b2; }
+    .selsel { outline:3px solid #ecc7ee; }
+    .treenode.selsel { background:#ecc7ee; }
+    .selector.selsel { background:#ecc7ee; }
 
     /* cursor and generalized structural cursor */
     .gensel { box-shadow:inset 0px 0px 0px 3px rgb(255, 227, 164); }
@@ -58,6 +58,15 @@
     .cursor-before { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff; }
     .cursor-after.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), 3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
     .cursor-before.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
+
+    /* source code view */
+    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
 
     /* basic styling for things in the document */
     input { padding:3px; }
@@ -76,33 +85,21 @@
     a.sel, a.sel a { color:#00AF40; }
     td { border:1px solid black; padding:2px; }
     thead td { font-weight: bold; }
-/*
-    #hcontrols, #hcontrols span { font:300 10pt 'merriweather sans' }
-    #hcontrols { position:absolute; margin-top:30px; }
-    #hcontrols { background:#e0e0e0; padding:4px 10px 4px 10px; border-radius:10px; }
-    #hcontrols .histindex { display:inline-block; text-align:center; width:20px; }
-    #hcontrols .disabled { color:#808080; }
-    #hcontrols .details { margin:0px 0px -4px 10px; letter-spacing:-0.5px; text-overflow:ellipsis; max-width:400px; white-space:nowrap; overflow:hidden; display:inline-block; }
-*/
+
+    /*
     x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
     x-match {  display:inline-block; }
     x-match::before { content:"(matched content)" }
-
+    */
     x-saved-interactions { display:none; }
+    /*
     x-interaction { display:block; padding-left:20px; text-align:left; }
     x-interaction-list > * { display:list-item; }
-    
-    xx-evaluated > *:nth-child(2) {
+    */
+    x-evaluated > *:nth-child(1) {
       display:none;
     }
     
-    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
-    .treedoc .treenode { width:fit-content; }
-    .treedoc .treetag span { color:#0074E8; }
-    .treedoc .treebody { padding-left:10px; }
-    .treedoc span.attrname { color:#DD22CA; }
-    .treedoc span.attrvalue { color:#003EAA; }
-    .treedoc .inline > div { display: inline; padding-left: 0px; }
 </style>
 </head>
 <body>

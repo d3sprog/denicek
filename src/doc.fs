@@ -632,8 +632,9 @@ let apply doc edit =
         match select sel doc with         
         | tgs when tgs.Length = srcNodes.Length -> srcNodes
         // Slightly clever in that we can copy multiple source nodes into a single target list node
-        // | [List(t, _)] -> [List(t, srcNodes)] 
-        | [tgt] -> failwith $"apply.Copy - Single target {formatSelector sel} but multiple source nodes from {formatSelector src}"; 
+        // (this is needed for evaluation of arguments - see eval.fs)
+        | [List(t, _)] -> [List(t, srcNodes)] 
+        | [tgt] -> failwith $"apply.Copy - Single target {formatSelector sel} but multiple source nodes from {formatSelector src}. Target={formatNode tgt}"; 
         | _ -> failwith "apply.Copy - Mismatching number of source and target notes"
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
