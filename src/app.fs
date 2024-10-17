@@ -35,8 +35,7 @@ type ViewState =
   { CursorLocation : Cursor
     CursorSelector : Selectors
     ViewSourceSelector : Selectors option
-    Markers : Selectors list
-    GeneralizedMarkersSelector : Selectors option }
+    GeneralizedStructuralSelector : Selectors }
 
 // (4) Command toolbox - state
 
@@ -48,6 +47,7 @@ type CommandRecommendationResult =
 and CommandRecommendation = 
   { Icon : string
     Label : ApplicationState -> DomNode
+    EditKind : SharedEditKind
     Parser : Parsec.Parser<CommandRecommendationResult> }
 
 and CommandState =
@@ -103,8 +103,6 @@ type CursorMove =
 type ViewEvent = 
   | MoveCursor of CursorMove
   | ToggleViewSource
-  | AddMarker
-  | ClearMarkers
 
 // (4) Command toolbox - events
 type CopySource = CurrentNode | MarkedNode
@@ -145,21 +143,19 @@ let (+?) s1 (b, s2) = if b then (s1 + " " + s2) else s1
 
 module Helpers = 
 
-  let (|EventHandlerNode|_|) = function
-    | Record("x-event-handler", 
+  let (|InteractionNode|_|) = function
+    | Record("x-interaction", 
         Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
         Patterns.ListFind "historyhash" (Primitive(Number hash)) ) ->
         Some(Some (int hash), List.map unrepresent ops)
-    // TODO: Line below kept for compatibility reasons - delete when recreating samples
-    | List("x-event-handler", ops) -> Some(None, List.map unrepresent ops)
     | _ -> None
 
   let getSavedInteractions doc = 
     match select [Field "saved-interactions"] doc with 
     | [ Record("x-saved-interactions", saved) ] ->
         saved |> List.map (function 
-          | k, EventHandlerNode(hist, ops) -> k, hist, ops
-          | _ -> failwith "getSavedInteractions: Expected x-event-handler" )
+          | k, InteractionNode(hist, ops) -> k, hist, ops
+          | _ -> failwith "getSavedInteractions: Expected x-interaction" )
     | _ -> []
 
   let renderHistoryHash state trigger hist =
@@ -184,21 +180,8 @@ module Helpers =
       text (formatSelector sel)
     ]
 
-  let rec generalizeSelectors sels = 
-    let allEmpty = List.forall List.isEmpty sels
-    let allCons = List.forall (List.isEmpty >> not) sels
-    if allEmpty then Some [] else
-    if not allCons then None else
-    let heads = List.map List.head sels
-    let tails = List.map List.tail sels
-    generalizeSelectors tails |> Option.bind (fun tail ->
-      heads 
-      |> List.tryReduce (fun s1 s2 ->
-          match s1, s2 with 
-          | _ when s1 = s2 -> Some s1
-          | (Index _ | Tag _ | All), (Index _ | Tag _ | All) -> Some All
-          | _ -> None)
-      |> Option.map (fun head -> head :: tail))
+  let generalizeToStructuralSelector sels = 
+    sels |> List.map (function Index _ | Tag _ -> All | s -> s)
 
   let replacePrefixInEdits prefix replacementSel edits = 
     edits |> List.map (fun op ->
@@ -225,8 +208,8 @@ module Document =
   let isPlainTextNode = function
     | Reference _ | Primitive _ | Primitive _ -> true | _ -> false
   let isListNode = function List _ -> true | _ -> false
-  let marked state path = 
-    state.ViewState.GeneralizedMarkersSelector |> Option.exists (fun gs -> matches gs path)
+  let generalizedSel state path = 
+    matches state.ViewState.GeneralizedStructuralSelector path
   let cursorBefore state path =
     matches state.ViewState.CursorSelector path && snd state.ViewState.CursorLocation = Before 
   let cursorAfter state path =
@@ -245,7 +228,7 @@ module Document =
           +? (highlightedSel state path, "selsel")
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
-          +? (marked state path, "marked")
+          +? (generalizedSel state path, "gensel")
       ] [
         h?div ["class" => "treetag" ] [
           yield text "<"
@@ -288,7 +271,7 @@ module Document =
           for nd in nds do
             match nd with 
             | id, Reference(Select state.DocumentState.CurrentDocument 
-                    [Helpers.EventHandlerNode(histhash, ops) ]) when id.StartsWith "@" ->
+                    [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" ->
                 yield id.Substring(1) =!> fun _ _ ->
                   // Add saved edits to the original document state and merge them with 
                   // current state so that they can be updated to match new document schema
@@ -344,7 +327,7 @@ module Document =
           +? (highlightedSel state path, "selsel")
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
-          +? (marked state path, "marked")
+          +? (generalizedSel state path, "gensel")
         yield! getEventHandlers nd tag path
         yield! rcdattrs ]
       
@@ -575,15 +558,7 @@ module Shortcuts =
     { Key = "w"
       Header = "Paste copied at marked nodes"
       IconCode = "las la-paste"
-      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!w"); EnterCommand ] }
-    { Key = "m"
-      Header = "Mark current node"
-      IconCode = "las la-bookmark"
-      Events = [ ViewEvent(AddMarker) ] }
-    { Key = "n"
-      Header = "Clear all marked nodes"
-      IconCode = "las la-backspace"
-      Events = [ ViewEvent(ClearMarkers) ] }
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v*"); EnterCommand ] }
     { Key = "e"
       Header = "Evaluate all formulas"
       IconCode = "las la-play"
@@ -643,9 +618,9 @@ module Commands =
     | Repeat(t, r) -> h?span [] [ text "("; formatTemplate t; text (")" + r) ]
 
   // Ordinary single command
-  let command i l p = { Icon = i; Label = (fun _ -> text l); Parser = p }
+  let command sk i l p = { EditKind = sk; Icon = i; Label = (fun _ -> text l); Parser = p }
   // Command where the label is generated based on app state when rendering (needed for highlighting selectors)
-  let commandh i l p = { Icon = i; Label = (fun s -> h?span [] (l s)); Parser = p }
+  let commandh sk i l p = { EditKind = sk; Icon = i; Label = (fun s -> h?span [] (l s)); Parser = p }
       
   let tagHole = P.hole "tag" P.ident
   let fieldHole = P.hole "field" (P.ident <|> P.atIdent)
@@ -658,12 +633,9 @@ module Commands =
     (P.char '*' |> P.map (fun _ -> All)) <|>
     (P.num |> P.map Index) <|>
     ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
-  //let selPart = P.keyword "aa"
   let refHole = 
     (P.oneOrMoreEnd (P.char '/' <*>> P.hole "sel" selPart)) <|>
     (P.char '/' |> P.map (fun _ -> []))
-
-  //P.run (P.keyword ":" <*>> fieldHole <<*> P.char '=' <*> refHole) ":foo=/"
         
   let recordTag = P.char '<' <*>> tagHole <<*> P.char '>'
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
@@ -676,132 +648,143 @@ module Commands =
   // (those have to be merged using the current as shared base)
   let mapEds f = P.map (fun x -> EditRecommendation(f x))
 
-  // TODO: Missing stuff with references
-  // e.g. https://github.com/tpetricek/conf/blob/85ba506a56e299a6e2d8e63b8f5a13c687b1610e/src/app.fs#L372
-
   let getCommands state trigger = [
+    let VK, SK = ValueKind, StructuralKind
     let doc = state.DocumentState.CurrentDocument 
     let cursorSel = state.ViewState.CursorSelector
+    let genSel = state.ViewState.GeneralizedStructuralSelector
     let nd, ndTrace = trace cursorSel doc |> Seq.head
-    let withMarker f = 
-      match state.ViewState.GeneralizedMarkersSelector with 
-      | None -> [] | Some markerSel -> f markerSel
-    let markerInfo = 
+    //let withMarker f = 
+      //f state.ViewState.GeneralizedStructuralSelector
+      //match state.ViewState.GeneralizedMarkersSelector with 
+      //| None -> [] | Some markerSel -> f markerSel
+    //let markerInfo = 
+      (*
       match state.ViewState.GeneralizedMarkersSelector with 
       | None -> None 
       | Some markerSel -> 
           let nd, trace = trace markerSel doc |> Seq.head
           Some(markerSel, nd, trace)
+      *)
+      //let nd, trace = trace state.ViewState.GeneralizedStructuralSelector doc |> Seq.head
+      //Some(state.ViewState.GeneralizedStructuralSelector, nd, trace)
+    (*
     let forAllMarkers f = 
       [ yield! f cursorSel nd CurrentNode
         match markerInfo with 
         | None -> () | Some(markerSel, nd, _) -> yield! f markerSel nd MarkedNode ]
+        *)
 
     // Wrapping element(s) in some ways
-    yield command "las la-id-card" "Wrap the current element as record field" 
+    yield command VK "las la-id-card" "Wrap the current element as record field" 
       ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.char '>' |> mapEd (fun (tag, fld) -> 
-        WrapRecord(fld, tag, cursorSel) )) 
-    yield command "las la-list" "Wrap the current element as list item" 
+        Shared(ValueKind, WrapRecord(fld, tag, cursorSel)) )) 
+    yield command VK "las la-list" "Wrap the current element as list item" 
       ( P.char '[' <*>> tagHole <<*> P.char ']' |> mapEd (fun (tag) -> 
-        WrapList(tag, cursorSel) )) 
-    match markerInfo with 
-    | Some(markerSel, _, _) ->
-        yield command "las la-id-card" "Wrap marked elements as record field" 
-          ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">*" |> mapEd (fun (tag, fld) -> 
-            WrapRecord(fld, tag, markerSel) )) 
-        yield command "las la-list" "Wrap marked elements as list item" 
-          ( P.char '[' <*>> tagHole <<*> P.keyword "]*" |> mapEd (fun (tag) -> 
-            WrapList(tag, markerSel) )) 
-    | _ -> ()
-
+        Shared(ValueKind, WrapList(tag, cursorSel)) )) 
+    yield command SK "las la-id-card" "Wrap marked elements as record field" 
+      ( P.char '<' <*>> tagHole <<*> P.char ' ' <*> fieldHole <<*> P.keyword ">*" |> mapEd (fun (tag, fld) -> 
+        Shared(StructuralKind, WrapRecord(fld, tag, genSel)) )) 
+    yield command SK "las la-list" "Wrap marked elements as list item" 
+      ( P.char '[' <*>> tagHole <<*> P.keyword "]*" |> mapEd (fun (tag) -> 
+        Shared(StructuralKind, WrapList(tag, genSel)) )) 
+        
     // Rename field, update tag
     match nd with 
     | List(oldTag, _) | Record(oldTag, _) ->
-        yield command "las la-code" "Update tag of the current element"
+        yield command VK "las la-code" "Update tag of the current element"
           ( P.keyword "!t " <*>> tagHole |> mapEd (fun (newTag) ->
-            UpdateTag(cursorSel, oldTag, newTag) ))
+            Shared(ValueKind, UpdateTag(cursorSel, oldTag, newTag)) ))
+        yield command SK "las la-code" "Update tag of marked elements"
+          ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
+            Shared(StructuralKind, UpdateTag(genSel, oldTag, newTag)) ))
     | _ -> ()
     match ndTrace with 
-    | Patterns.Last(lastNd, _) when isRecord lastNd ->
-        yield command "las la-i-cursor" "Rename field containing the current element" 
+    | Patterns.Last(_, Field fold) ->
+        yield command VK "las la-i-cursor" "Rename field containing the current element" 
           ( P.keyword "!r " <*>> fieldHole |> mapEd (fun (fld) ->
-            RecordRenameField(cursorSel, fld) ))
-    | _ -> ()
-    match markerInfo with 
-    | Some(markerSel, (List(oldTag, _) | Record(oldTag, _)), _) ->
-        yield command "las la-code" "Update tag of marked elements"
-          ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
-            UpdateTag(markerSel, oldTag, newTag) ))
-    | _ -> ()
-    match markerInfo with 
-    | Some(markerSel, _, Patterns.Last(lastNd, _)) when isRecord lastNd ->
-        yield command "las la-i-cursor" "Rename fields containing marked elements" 
+            Shared(ValueKind, RecordRenameField(List.dropLast cursorSel, fold, fld)) ))
+        yield command SK "las la-i-cursor" "Rename fields containing marked elements" 
           ( P.keyword "!r* " <*>> fieldHole |> mapEd (fun (fld) ->
-            RecordRenameField(markerSel, fld) ))
+            Shared(StructuralKind, RecordRenameField(List.dropLast genSel, fold, fld)) ))
     | _ -> ()
 
     // Reorder list items
     match List.rev cursorSel with
     | (Index i)::listSelRev ->
       let listSel = List.rev listSelRev
+      let genListSel = Helpers.generalizeToStructuralSelector listSel
       let listLen = match selectSingle listSel doc with List(_, nds) -> nds.Length | _ -> 0
       if i > 0 then
-        yield command "las la-caret-up" "Move current list item up"
+        yield command VK "las la-caret-up" "Move the current list item up"
           ( P.keyword "!u" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i-1 then i elif j = i then i-1 else j ]
-            ListReorder(listSel, perm) ))
+            Shared(ValueKind, ListReorder(listSel, perm)) ))
+        yield command VK "las la-caret-up" "Move marked list items up"
+          ( P.keyword "!u*" |> mapEd (fun _ ->
+            let perm = [for j in 0 .. listLen - 1 -> if j = i-1 then i elif j = i then i-1 else j ]
+            Shared(StructuralKind, ListReorder(listSel, perm)) ))
       if i < listLen - 1 then
-        yield command "las la-caret-down" "Move current list item down"
+        yield command VK "las la-caret-down" "Move the current list item down"
           ( P.keyword "!d" |> mapEd (fun _ ->
             let perm = [for j in 0 .. listLen - 1 -> if j = i+1 then i elif j = i then i+1 else j ]
-            ListReorder(listSel, perm) ))
+            Shared(ValueKind, ListReorder(listSel, perm)) ))
+        yield command VK "las la-caret-down" "Move marked list items down"
+          ( P.keyword "!d*" |> mapEd (fun _ ->
+            let perm = [for j in 0 .. listLen - 1 -> if j = i+1 then i elif j = i then i+1 else j ]
+            Shared(StructuralKind, ListReorder(listSel, perm)) ))
     | _ -> ()
     
     // Delete current or marked element(s)
-    yield command "las la-trash" "Delete currently selected element" 
-      ( P.keyword "!x" |> mapEd (fun (_) -> Delete(cursorSel) ))
-    match markerInfo with 
-    | Some(markerSel, _, _) ->
-        yield command "las la-trash" "Delete currently marked elements" 
-          ( P.keyword "!x*" |> mapEd (fun (_) -> Delete(markerSel) ))
+    match ndTrace with 
+    | Patterns.Last(_, Field fold) ->
+        yield command VK "las la-trash" "Delete the currently selected record field" 
+          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(ValueKind, RecordDelete(cursorSel, fold)) ))
+        yield command SK "las la-trash" "Delete currently marked record fields" 
+          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(StructuralKind, RecordDelete(genSel, fold)) ))
+    | Patterns.Last(_, Index idx) ->
+        yield command VK "las la-trash" "Delete the currently selected list item" 
+          ( P.keyword "!x" |> mapEd (fun (_) -> Shared(ValueKind, ListDelete(cursorSel, idx)) ))
+        yield command SK "las la-trash" "Delete currently marked list items" 
+          ( P.keyword "!x*" |> mapEd (fun (_) -> Shared(StructuralKind, ListDelete(genSel, idx)) ))
     | _ -> ()
 
     // Copy, paste & save edits actions
     match state.CommandState.CopySource with 
     | None -> ()
     | Some src ->
-        yield command "las la-paste" "Paste copied at the current location"
+        yield command VK "las la-paste" "Paste copied at the current location"
           ( P.keyword "!v" |> mapEd (fun (_) -> 
-            Copy(cursorSel, RefSource src) ))
-        match markerInfo with
-        | Some(markerSel, _, _) -> 
-            yield command "las la-paste" "Paste copied at marked locations"
-              ( P.keyword "!w" |> mapEd (fun (_) -> 
-                Copy(markerSel, RefSource src) ))
-        | _ -> ()
+            Shared(ValueKind, Copy(cursorSel, RefSource src)) ))
+        yield command SK "las la-paste" "Paste copied at marked locations"
+          ( P.keyword "!v*" |> mapEd (fun (_) -> 
+            Shared(StructuralKind, Copy(genSel, RefSource src)) ))
 
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let recordedEds = 
           [ for i in Seq.sort state.HistoryState.SelectedEdits ->
               state.DocumentState.Edits.[i] ]
-        yield command "las la-save" "Save selected edits in the document"
+        yield command VK "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
-                yield RecordAdd([], "saved-interactions", ConstSource(Record("x-saved-interactions", [])))
-              
-              yield RecordAdd([Field "saved-interactions"], fld, 
-                ConstSource(Record("x-event-handler", [ 
+                yield Value(RecordAdd([], "saved-interactions", 
+                  ConstSource(Record("x-saved-interactions", []))))              
+              yield Value(RecordAdd([Field "saved-interactions"], fld, 
+                ConstSource(Record("x-interaction", [ 
                   "historyhash", Primitive(Number state.DocumentState.CurrentHash); 
-                  "interactions", List("x-interaction-list", []) ])))
+                  "interactions", List("x-interaction-list", []) ]))))
               for op in recordedEds ->
-                ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
-                  ConstSource(represent op)) ] ))
-
-    yield! forAllMarkers (fun sel nd kind -> [
+                Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
+                  ConstSource(represent op))) ] ))
+             
+    // The following are value edits regardless of to what they are applied
+    // But it may be useful to apply them to all marked nodes. We use '+' in the notation 
+    // instead of '*' to indicate this. (We may want to allow '+' for other commands..)
+    for sel, sk, kind in [cursorSel, ValueKind, CurrentNode; genSel, StructuralKind, MarkedNode ] do
       let cr, cl = 
         if kind = CurrentNode then "the current record", "the current list"
         else "marked records", "marked lists"
-      let assignment = if kind = CurrentNode then P.keyword ":" else P.keyword ":*"
+      let assignment = if kind = CurrentNode then P.keyword ":" else P.keyword ":+"
       let fieldAssignment = assignment <*>> fieldHole <<*> P.char '='
       let anonAssignment = assignment
 
@@ -810,94 +793,92 @@ module Commands =
         match state.CommandState.CopySource with
         | None -> ()
         | Some src ->
-            yield command "las la-paste" ("Add copied node to " + cr)
+            yield command sk "las la-paste" ("Add copied node to " + cr)
               ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun (fld) ->
-                RecordAdd(sel, ffld fld, RefSource(src)) ))
-        yield command "las la-id-card" ("Add record field to " + cr)
+                Value(RecordAdd(sel, ffld fld, RefSource(src))) ))
+        yield command sk "las la-id-card" ("Add record field to " + cr)
           ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, ffld fld, ConstSource(Record(tag, []))) ))
-        yield command "las la-list" ("Add list field to " + cr)
+            Value(RecordAdd(sel, ffld fld, ConstSource(Record(tag, [])))) ))
+        yield command sk "las la-list" ("Add list field to " + cr)
           ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, ffld fld, ConstSource(List(tag, []))) ))
-        yield command "las la-link" ("Add reference field to " + cr)
+            Value(RecordAdd(sel, ffld fld, ConstSource(List(tag, [])))) ))
+        yield command sk "las la-link" ("Add reference field to " + cr)
           ( fieldAssignment <*> refHole |> mapEd (fun (fld, ref) ->
-            RecordAdd(sel, ffld fld, ConstSource(Reference(ref))) ))
-        yield command "las la-hashtag" ("Add numerical field to " + cr)
+            Value(RecordAdd(sel, ffld fld, ConstSource(Reference(ref)))) ))
+        yield command sk "las la-hashtag" ("Add numerical field to " + cr)
           ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
-            RecordAdd(sel, ffld fld, ConstSource(Primitive(Number (int num)))) ))
-        yield command "las la-font" ("Add string field to " + cr)
+            Value(RecordAdd(sel, ffld fld, ConstSource(Primitive(Number (int num))))) ))
+        yield command sk "las la-font" ("Add string field to " + cr)
           ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
-            RecordAdd(sel, ffld fld, ConstSource(Primitive(String str))) ))
+            Value(RecordAdd(sel, ffld fld, ConstSource(Primitive(String str)))) ))
 
       // Add item of some kind to a list
       if isList nd then 
         match state.CommandState.CopySource with
         | None -> ()
         | Some src ->
-            yield command "las la-paste" ("Add copied node to " + cl)
+            yield command sk "las la-paste" ("Add copied node to " + cl)
               ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
-                ListAppend(sel, RefSource(src)) ))
-        yield command "las la-id-card" ("Add record item to " + cl)
+                Value(ListAppend(sel, RefSource(src))) ))
+        yield command sk "las la-id-card" ("Add record item to " + cl)
           ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
-            ListAppend(sel, ConstSource(Record(tag, []))) ))
-        yield command "las la-list" ("Add list item to " + cl)
+            Value(ListAppend(sel, ConstSource(Record(tag, [])))) ))
+        yield command sk "las la-list" ("Add list item to " + cl)
           ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
-            ListAppend(sel, ConstSource(List(tag, []))) ))
-        yield command "las la-hashtag" ("Add numerical item to " + cl)
+            Value(ListAppend(sel, ConstSource(List(tag, [])))) ))
+        yield command sk "las la-hashtag" ("Add numerical item to " + cl)
           ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
-            ListAppend(sel, ConstSource(Primitive(Number (int num)))) ))
-        yield command "las la-font" ("Add string item to " + cl)
+            Value(ListAppend(sel, ConstSource(Primitive(Number (int num))))) ))
+        yield command sk "las la-font" ("Add string item to " + cl)
           ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
-            ListAppend(sel, ConstSource(Primitive(String str))) ))
-    ])
-
+            Value(ListAppend(sel, ConstSource(Primitive(String str)))) ))
+    
     // Checks that current node has value / is non-empty
     match nd with 
     | Primitive(p) ->
-        yield command "las la-spell-check" "Check node has the current value"
+        yield command VK "las la-spell-check" "Check node has the current value"
           ( P.keyword "*eq" |> mapEd (fun (str) ->
-            Check(cursorSel, EqualsTo p) ))
+            Value(Check(cursorSel, EqualsTo p)) ))
     | _ -> ()
     match nd with 
     | Primitive(String(NonEmpty _) | Number _) ->
-        yield command "las la-check-square" "Check node value is not empty"
+        yield command VK "las la-check-square" "Check node value is not empty"
           ( P.keyword "*ne" |> mapEd (fun (str) ->
-            Check(cursorSel, NonEmpty) ))
+            Value(Check(cursorSel, NonEmpty)) ))
     | _ -> ()
 
     // Built-in transformations of primitive values
-    yield! forAllMarkers (fun sel nd kind -> [
-      printfn "forallmarkers %A %A" sel kind
+    // (these are also only value edits, like RecordAdd/ListAppend above)
+    for sel, sk, kind in [cursorSel, ValueKind, CurrentNode; genSel, StructuralKind, MarkedNode ] do
       let lbl, pAst = 
         if kind = CurrentNode then " (current)", P.unit () 
-        else " (marked)", P.char '*' |> P.map ignore
+        else " (marked)", P.char '+' |> P.map ignore
       if isString nd || isNumber nd then
         for t in transformations do
-          yield command "las la-at" (t.Label + lbl)
+          yield command sk "las la-at" (t.Label + lbl)
             ( P.char '@' <*> P.keyword t.Key <*> pAst |> mapEd (fun _ ->
-              PrimitiveEdit(sel, t.Key) )) ])
-
+              Value(PrimitiveEdit(sel, t.Key)) )) 
+              
     // Saved interactions - generate nested completions
     // (one for applying to cursor, one for applying to all marked)
     for t, _, ops in Helpers.getSavedInteractions doc do
-      yield command "las la-at" ("Apply " + t + " to current (user)")
+      yield command VK "las la-at" ("Apply " + t + " to current (user)")
         ( P.keyword $"@{t}" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield commandh "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                yield commandh VK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
                   ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
                     [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
         ))
-      yield! withMarker (fun markerSel ->
-        [ command "las la-at" ("Apply " + t + " to marked (user)")
-            ( P.keyword $"@{t}*" |> P.map (fun _ -> 
-                NestedRecommendation [
-                  for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                    yield command "las la-at" ("Using current as " + formatSelector prefix)
-                      ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
-                        [ for markerSel in expandWildcards markerSel doc ->
-                            Helpers.replacePrefixInEdits prefix markerSel ops ] )) ]
-            )) ])
+      yield command SK "las la-at" ("Apply " + t + " to marked (user)")
+        ( P.keyword $"@{t}+" |> P.map (fun _ -> 
+            NestedRecommendation [
+              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                  ( P.keyword $"@{t}+ {string i}" |> mapEds (fun _ ->
+                    [ for markerSel in expandWildcards genSel doc ->
+                        Helpers.replacePrefixInEdits prefix markerSel ops ] )) ]
+        ))
   ]
 
   let parseCommand state = 
@@ -923,7 +904,7 @@ module Commands =
     let selected = i = state.CommandState.SelectedRecommendation          
     let el = 
       h?li [ 
-        "class" => "" +? (selected, "selected") 
+        "class" => "" +? (selected, "selected") +? (c.EditKind = StructuralKind, "structural") 
         "mouseover" =!> fun _ _ -> trigger(CommandEvent(SetRecommendation i))
         "click" =!> fun _ _ -> trigger(EnterCommand)
       ] [
@@ -995,9 +976,7 @@ module Commands =
           else None )  
         { state with SelectedRecommendation = 0; Recommendations = recs }
     | cmd ->
-        //printfn "UPDATE RECOMMENDATIONS"
         let recs = state.KnownRecommendations |> List.choose (fun c -> 
-          //printfn " * %s = %A" (innerText (c.Label appstate)) (P.run c.Parser cmd)
           match P.run c.Parser cmd with 
           | Parsed(_, []) -> Some(c, Empty)
           | Partial t -> Some(c, t)
@@ -1035,13 +1014,18 @@ module Commands =
     | CopyNode(CurrentNode) ->
         { state with CopySource = Some appstate.ViewState.CursorSelector } 
     | CopyNode(MarkedNode) ->
-        { state with CopySource = appstate.ViewState.GeneralizedMarkersSelector } 
+        //{ state with CopySource = appstate.ViewState.GeneralizedMarkersSelector } 
+        { state with CopySource = Some appstate.ViewState.GeneralizedStructuralSelector } 
     
 // --------------------------------------------------------------------------------------
 // View and navigation
 // --------------------------------------------------------------------------------------
 
 module View = 
+  let updateStructuralSelector state = 
+    let genSel = Helpers.generalizeToStructuralSelector state.CursorSelector
+    { state with GeneralizedStructuralSelector = genSel }
+
   let locations nd : seq<Cursor * Selectors> = 
     let rec loop loc sel nd = seq {
       match nd with 
@@ -1097,7 +1081,7 @@ module View =
       if locs.ContainsKey(cur) then cur, locs.[cur]
       else loop (curi.[0 .. curi.Length - 2], curm)
     let cursorLoc, cursorSel = loop state.CursorLocation
-    { state with CursorSelector = cursorSel; CursorLocation = cursorLoc }
+    { state with CursorSelector = cursorSel; CursorLocation = cursorLoc } |> updateStructuralSelector
 
   let renderLocationInfo state = [
     let traces = trace state.ViewState.CursorSelector state.DocumentState.CurrentDocument |> List.ofSeq
@@ -1129,13 +1113,6 @@ module View =
     ]
 
   let rec update appstate state = function
-    | AddMarker ->
-        let marks = state.CursorSelector :: state.Markers
-        let gen = Helpers.generalizeSelectors marks
-        { state with Markers = marks; GeneralizedMarkersSelector = gen }
-    | ClearMarkers ->
-        { state with Markers = []; GeneralizedMarkersSelector = None }
-
     | ToggleViewSource ->
         match state.ViewSourceSelector with 
         | None -> { state with ViewSourceSelector = Some state.CursorSelector }
@@ -1143,7 +1120,7 @@ module View =
   
     | MoveCursor dir ->      
         let ncur, nsel = moveCursor appstate.DocumentState.CurrentDocument state.CursorLocation dir
-        let state = { state with CursorLocation = ncur; CursorSelector = nsel }
+        let state = { state with CursorLocation = ncur; CursorSelector = nsel } |> updateStructuralSelector
         // Make sure the cursor is pointing to a visible thing
         let _, tr = trace nsel appstate.DocumentState.CurrentDocument |> Seq.exactlyOne
         match state.ViewSourceSelector with 
@@ -1294,8 +1271,9 @@ let fromOperationsList ops =
   let ops = { Groups = ops }
   { DocumentState = { Initial = init; Edits = ops; EditIndex = ops.Length - 1; 
       CurrentDocument = init; FinalDocument = init; CurrentHash = 0 } |> updateDocument
-    ViewState = { CursorLocation = [], Before; CursorSelector = []; Markers = []; 
-      GeneralizedMarkersSelector = None; ViewSourceSelector = None }
+    ViewState = { CursorLocation = [], Before; CursorSelector = []; 
+      // Markers = []; GeneralizedMarkersSelector = None; 
+      GeneralizedStructuralSelector = []; ViewSourceSelector = None }
     CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
       SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
     HistoryState = { HighlightedSelector = None; 
@@ -1342,7 +1320,12 @@ let readJsonOps json =
 let readJson json = 
   readJsonOps json |> fromOperationsList
 
+let startWithHandler op = Async.StartImmediate <| async {
+  try do! op
+  with e -> Browser.Dom.console.error(e.ToString()) }
+
 async { 
+  (*
   let! conf2Async = asyncRequest "/demos/conf2.json" |> Async.StartChild
   let! todoAsync = asyncRequest "/demos/todo.json"|> Async.StartChild
   let! todo2Async = asyncRequest "/demos/todo2.json" |> Async.StartChild
@@ -1354,28 +1337,34 @@ async {
   let! todo2 = todo2Async
   let! hello = helloAsync
   let! conf2table = conf2tableAsync
-
+  *)
+  let! confBaseAsync = asyncRequest "/demos/conf-base.json" |> Async.StartChild
+  let! confBase = confBaseAsync
+  
   let demos = 
     [ 
-      "conf", fromOperationsList [opsCore @ opsBudget], []
-      "conf2", readJson conf2, [
-        "table", { Groups = readJsonOps conf2table }
-      ]
+      "conf2", readJson confBase, [] 
       "conf", fromOperationsList [opsCore], [
         "ada", { Groups = [opsCore @ addSpeakerOps] }
         "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
         "table", { Groups = [opsCore @ refactorListOps] }
         "budget", { Groups = [opsCore @ opsBudget ] }
       ]
+      "empty", readJson "[]", []
+      (*
+      "conf", fromOperationsList [opsCore @ opsBudget], []
+      "conf2", readJson conf2, [
+        "table", { Groups = readJsonOps conf2table }
+      ]
       "todo2", readJson todo2, []
       "hello", readJson hello, []
-      "empty", readJson "[]", []
       "todo", readJson todo, []
       "counter", fromOperationsList [opsBaseCounter], []
+      *)
       ]
   trigger (DemoEvent(LoadDemos demos))
   }
-|> Async.StartImmediate
+|> startWithHandler
 
 Browser.Dom.window.onkeypress <- fun e -> 
   let targetNotText = 

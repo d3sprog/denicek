@@ -6,6 +6,9 @@ module Patterns =
   let (|ListFind|_|) k = List.tryFind (fst >> (=) k) >> Option.map snd
 
 module List = 
+
+  let dropLast tgt = List.rev (List.tail (List.rev tgt))
+  
   let foldi f st lst = List.indexed lst |> List.fold f st
 
   let filterWithState f init list = 

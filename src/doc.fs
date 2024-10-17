@@ -280,7 +280,6 @@ let getTargetSelector ed =
   | Value(RecordAdd(s, id, _)) -> s @ [Field id]
 
 let withTargetSelector tgt ed = 
-  let dropLast tgt = List.rev (List.tail (List.rev tgt))
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withTargetSelector - expected selector ending with a field"
   let getLastIndex tgt = match List.last tgt with Index i -> i | _ -> failwith "withTargetSelector - expected selector ending with an index"
   let ret nk = { Kind = nk }
@@ -292,13 +291,13 @@ let withTargetSelector tgt ed =
   | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(tgt, f)) |> ret
   | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
   // Add selector to the end, pointing to the affected node
-  | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, dropLast tgt)) |> ret
-  | Value(ListAppend(_, nd)) -> Value(ListAppend(dropLast tgt, nd)) |> ret
-  | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(dropLast tgt, getLastIndex tgt)) |> ret
+  | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.dropLast tgt)) |> ret
+  | Value(ListAppend(_, nd)) -> Value(ListAppend(List.dropLast tgt, nd)) |> ret
+  | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast tgt, getLastIndex tgt)) |> ret
   | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(tgt, getLastField tgt, n)) |> ret
-  | Shared(sk, RecordDelete(_, _)) -> Shared(sk, RecordDelete(dropLast tgt, getLastField tgt)) |> ret
-  | Shared(sk, WrapRecord(t, _, _)) -> Shared(sk, WrapRecord(t, getLastField tgt, dropLast tgt)) |> ret
-  | Value(RecordAdd(_, _, nd)) -> Value(RecordAdd(dropLast tgt, getLastField tgt, nd)) |> ret
+  | Shared(sk, RecordDelete(_, _)) -> Shared(sk, RecordDelete(List.dropLast tgt, getLastField tgt)) |> ret
+  | Shared(sk, WrapRecord(t, _, _)) -> Shared(sk, WrapRecord(t, getLastField tgt, List.dropLast tgt)) |> ret
+  | Value(RecordAdd(_, _, nd)) -> Value(RecordAdd(List.dropLast tgt, getLastField tgt, nd)) |> ret
 
 let getTargetSelectorPrefixes eds = 
   let sels = System.Collections.Generic.HashSet<_>()
@@ -785,25 +784,35 @@ let updateSelectors e1 e2 =
 //
 let applyToAdded e1 e2 = 
   match e1.Kind with 
+   // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
   | Value(ListAppend(sel, ConstSource nd)) -> 
-      // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
       match scopeEdit (sel @ [All]) [] e2 with
       | Some e2scoped ->
           let nnd = apply nd e2scoped
           [ { e1 with Kind = Value(ListAppend(sel, ConstSource(nnd))) }]
       | None -> [e1]
+  | Value(RecordAdd(sel, fld, ConstSource nd)) -> 
+      match scopeEdit (sel @ [Field fld]) [] e2 with
+      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
+      | None -> [e1]
+  | Shared(_, Copy(sel, ConstSource nd)) -> 
+      match scopeEdit sel [] e2 with
+      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
+      | _ -> [e1]
 
+  // TODO: maybe we do not want to modify it permanently though?
   | Value(ListAppend(sel, RefSource src)) ->       
-      // TODO: maybe we do not want to  modify it permanently though?
       match scopeEdit (sel @ [All]) src e2 with
       | Some e2scoped -> [e2scoped; e1]
       | _ -> [e1]
-
-  | Value(RecordAdd(_, _, _)) -> 
-      failwith "applyToAdded - RecordAdd - this is TODO"
-
-  | Shared(_, Copy(_, _)) -> 
-      failwith "applyToAdded - Copy - this is TODO"
+  | Value(RecordAdd(sel, fld, RefSource src)) -> 
+      match scopeEdit (sel @ [Field fld]) src e2 with
+      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
+      | None -> [e1]
+  | Shared(_, Copy(sel, RefSource src)) -> 
+      match scopeEdit (sel @ [All]) src e2 with
+      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
+      | _ -> [e1]
 
   | _ -> [e1]
 
