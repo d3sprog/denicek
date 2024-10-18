@@ -646,7 +646,7 @@ let apply doc edit =
         // (this is needed for evaluation of arguments - see eval.fs)
         | [List(t, _)] -> [List(t, srcNodes)] 
         | [tgt] -> failwith $"apply.Copy - Single target {formatSelector sel} but multiple source nodes from {formatSelector src}. Target={formatNode tgt}"; 
-        | _ -> failwith "apply.Copy - Mismatching number of source and target notes"
+        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, tgt nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
         if matches p sel then Some(next())
@@ -791,23 +791,25 @@ let applyToAdded e1 e2 =
           let nnd = apply nd e2scoped
           [ { e1 with Kind = Value(ListAppend(sel, nnd)) }]
       | None -> [e1]
-
+      (*
+   // TODO: Breaks TODO list
   | Value(RecordAdd(sel, fld, nd)) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
       | Some e2scoped -> [e1] // TRICKY - c.f. TODO demo. failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
       | None -> [e1]
-
+      //*)
   | Value(ListAppendFrom(sel, src)) -> 
       // TODO: maybe we do not want to modify it permanently though?
       match scopeEdit (sel @ [All]) src e2 with
       | Some e2scoped -> [e2scoped; e1]
       | _ -> [e1]
-
+  (*
+  // TODO: Breaks TODO list
   | Shared(_, Copy(sel, src)) -> 
       match scopeEdit sel src e2 with
       | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
       | _ -> [e1]
-
+      *)
   | _ -> [e1]
 
 // Assuming 'e1' and 'e2' happened independently,
