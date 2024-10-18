@@ -670,17 +670,17 @@ let apply doc edit =
 // Merge
 // --------------------------------------------------------------------------------------
 
+type ScopingResult = AllOutOfScope | TargetOutOfScope | SourceOutOfScope | InScope of Edit
+
 let tryScopeSelectors f edit = 
   let sels = getSelectors edit 
   let nsels = sels |> List.choose f
-  if nsels.Length = 0 then None
-  elif nsels.Length = sels.Length then Some(withSelectors nsels edit)
+  if nsels.Length = 0 then AllOutOfScope
+  elif nsels.Length = sels.Length then InScope(withSelectors nsels edit)
   else 
-    // If the scoping cannot be applied to the target selector
-    // then even if it applies to some sources, we do not need to worry
     match f (getTargetSelector edit) with 
-    | None -> None
-    | _ -> failwith $"tryMapSelectors - some selectors scoped, but some not. Think about this. Edit: {formatEdit edit}"
+    | None -> TargetOutOfScope
+    | _ -> SourceOutOfScope
 
 let scopeEdit oldBase newBase edit = 
   edit |> tryScopeSelectors (fun s -> 
@@ -741,7 +741,6 @@ let updateSelectors e1 e2 =
   | Shared(StructuralKind, ListDelete(sel, idel)) ->
       [mapSelectors (decrementSelectorsAfterDel sel idel) e1]
   | Shared(StructuralKind, WrapRecord(id, tag, sel)) ->             
-      printfn $"           -> wrapRecordSelectors {id} {formatSelector sel} in {formatEdit e1}"
       [mapSelectors (wrapRecordSelectors id sel) e1]
   | Shared(StructuralKind, WrapList(tag, sel)) -> 
       [mapSelectors (wrapListSelectors sel) e1]
@@ -750,7 +749,7 @@ let updateSelectors e1 e2 =
   | Shared(StructuralKind, RecordRenameField(sel, fold, fnew)) ->
       [mapSelectors (renameFieldSelectors fold fnew sel) e1]
   | Shared(StructuralKind, ListReorder(sel, ord)) -> 
-      // TODO: If 'e1' is itself ListReorder pointing to the same thing, do something clever!
+      // TODO: If 'e1' is ListReorder pointing to the same thing, do something clever!
       // (treat this as a conflict and then do something about it...)
       // (get back to this once we have conflict detection...)
       [mapSelectors (reorderSelectors ord sel) e1]
@@ -782,41 +781,67 @@ let updateSelectors e1 e2 =
 // * If the edit 'e1' is adding new item to a record, then .. think about this.
 // * If the edit 'e1' is copying .. think about this.
 //
-let applyToAdded e1 e2 = 
+type EditMoveState = 
+  { UniqueTempField : string; PrefixEdits : Edit list; SuffixEdits : Edit list }
+
+let applyToAdded ctx e1 e2 = 
+  //printfn $"applyToAdded\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
   match e1.Kind with 
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
   | Value(ListAppend(sel, nd)) -> 
       match scopeEdit (sel @ [All]) [] e2 with
-      | Some e2scoped ->
+      | InScope e2scoped ->
           let nnd = apply nd e2scoped
-          [ { e1 with Kind = Value(ListAppend(sel, nnd)) }]
-      | None -> [e1]
-      (*
-   // TODO: Breaks TODO list
+          [ { e1 with Kind = Value(ListAppend(sel, nnd)) }], ctx
+      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+      | SourceOutOfScope -> 
+          // TODO: If we have a more elaborate transform, we can probably do this
+          // (e.g., store 'nd' somewhere in doc, transform it & ListAppendFrom)
+          failwith "applyToAdded: Source out of scope (TODO)" 
+
+
+  | Value(ListAppendFrom(sel, src)) -> 
+      // A naive implementation is to scope e2 to 'src' and then return [e2scoped; e1] 
+      // This mutates the source in-place in the document - which works for my demos
+      // but it is not correct in general. Instead, we create temp field, apply
+      // all edits to this field and then appendfrom this new temp field.
+      match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField ] e2 with
+      | InScope e2scoped -> 
+          let prefix = [
+            { Kind = Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty"))) }
+            { Kind = Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)) } ]
+          let suffix = [
+            { Kind = Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) } ]
+          let res = [
+            e2scoped
+            { Kind = Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) } ]
+          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } else 
+          res, ctx
+      | _ -> [e1], ctx
+
   | Value(RecordAdd(sel, fld, nd)) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
-      | Some e2scoped -> [e1] // TRICKY - c.f. TODO demo. failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
-      | None -> [e1]
-      //*)
-  | Value(ListAppendFrom(sel, src)) -> 
-      // TODO: maybe we do not want to modify it permanently though?
-      match scopeEdit (sel @ [All]) src e2 with
-      | Some e2scoped -> [e2scoped; e1]
-      | _ -> [e1]
-  (*
-  // TODO: Breaks TODO list
+      | InScope _ | SourceOutOfScope -> 
+          // TODO: This is conflict, because e2 was doing something with a 
+          // record field and e1 is now replacing it with a new thing.
+          // We can let 'e1' win (return [e1]) or 'e2' win (return [])
+          [e1], ctx
+      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+
   | Shared(_, Copy(sel, src)) -> 
       match scopeEdit sel src e2 with
-      | Some e2scoped -> failwith $"applyToAdded - TODO\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
-      | _ -> [e1]
-      *)
-  | _ -> [e1]
+      | InScope _ | SourceOutOfScope -> 
+          // TODO: Same conflict as in the case of RecordAdd - with same options.
+          [e1], ctx
+      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+
+  | _ -> [e1], ctx
 
 // Assuming 'e1' and 'e2' happened independently,
 // modify 'e1' so that it can be placed after 'e2'.
-let moveBefore e1 e2 = 
-  applyToAdded e1 e2
-  |> List.collect (fun e1 -> updateSelectors e1 e2)
+let moveBefore ctx e1 e2 = 
+  let e1s, ctx = applyToAdded ctx e1 e2
+  e1s |> List.collect (fun e1 -> updateSelectors e1 e2), ctx
 
 
 // --------------------------------------------------------------------------------------
@@ -856,15 +881,21 @@ let filterDisabledGroups initial hist =
   
 let mergeHistories h1 h2 =
   let shared, (e1s, e2s) = List.sharedPrefixNested h1.Groups h2.Groups
+  let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
   let e2sAfter = 
     e2s |> List.collectNested (fun e2 ->
         printfn $"Move edit e2: {formatEdit e2}"
         // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
         // (caveat is that the operation can turn it into multiple edits)
-        let res = List.foldNested (fun e2 e1 -> 
-          printfn $"    - after e1: {formatEdit e1}"
-          //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
-          e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s 
+        let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
+        let res = 
+          List.foldNested (fun e2 e1 -> 
+            printfn $"    - after e1: {formatEdit e1}"
+            //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
+            let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
+            ctx <- nctx
+            e2s ) [e2] e1s 
+        let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
         printfn $"""    = [{String.concat ", " (List.map formatEdit res)}]"""
         res
           )         

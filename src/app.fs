@@ -1305,6 +1305,8 @@ let startWithHandler op = Async.StartImmediate <| async {
   try do! op
   with e -> Browser.Dom.console.error(e.ToString()) }
 
+let pbdCore = opsCore @ pbdAddInput
+
 async { 
   let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
@@ -1325,6 +1327,7 @@ async {
           "table", { Groups = [opsCore @ refactorListOps] }
           "budget", { Groups = [opsCore @ opsBudget ] }
         ]
+        //"??", fromOperationsList (mergeHistories { Groups = [pbdCore @ refactorListOps] } { Groups = [pbdCore @ pbdAddFirstSpeaker] }).Groups, []
         "todo", readJson todoBase, []
         "empty", readJson "[]", []
         "counter", fromOperationsList [opsBaseCounter], []

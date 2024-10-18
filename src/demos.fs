@@ -188,7 +188,7 @@ let pbdAddFirstSpeaker =
     add (!/ "/inp") "@value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
-    cpV (!/ "/temp/value") (!/ "/inp/@value")
+    cpV (!/ "/inp/@value") (!/ "/temp/value") 
     apf (!/ "/speakers") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
@@ -199,7 +199,7 @@ let pbdAddAnotherSpeaker =
     add (!/ "/inp") "@value" (ps "Barbara Liskov, liskov@mit.edu")
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
-    cpV (!/ "/temp/value") (!/ "/inp/@value")
+    cpV (!/ "/inp/@value") (!/ "/temp/value") 
     apf (!/ "/speakers") (!/ "/temp")
     delrS (!/ "/") "temp"
   ]
@@ -256,4 +256,6 @@ let opsCounterHndl() =
     yield add (!/ "/dec") "click" (lst "x-event-handler")
     for op in opsCounterDec() ->
       ap (!/ "/dec/click") (represent op) ]
+
+
 

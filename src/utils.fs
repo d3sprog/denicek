@@ -7,6 +7,10 @@ module Patterns =
 
 module List = 
 
+  let foldCollect (f:'st -> 'a -> 'b list * 'st) st list = 
+    let st, acc = List.fold (fun (st, acc) v -> let res, st = f st v in (st, res::acc)) (st, []) list 
+    List.collect id (List.rev acc), st
+
   let dropLast tgt = List.rev (List.tail (List.rev tgt))
   
   let foldi f st lst = List.indexed lst |> List.fold f st
