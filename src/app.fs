@@ -16,7 +16,7 @@ type DocumentState =
     Edits : EditList
     EditIndex : int 
     CurrentDocument : Node 
-    CurrentHash : int
+    FinalHash : int
     FinalDocument : Node }
 
 // (2) Edit history panel - state
@@ -648,7 +648,7 @@ module Commands =
 
   let getCommands state trigger = [
     let VK, SK = ValueKind, StructuralKind
-    let doc = state.DocumentState.CurrentDocument 
+    let doc = state.DocumentState.FinalDocument 
     let cursorSel = state.ViewState.CursorSelector
     let genSel = state.ViewState.GeneralizedStructuralSelector
     let nd, ndTrace = trace cursorSel doc |> Seq.head
@@ -749,7 +749,7 @@ module Commands =
                   Record("x-saved-interactions", [])))
               yield Value(RecordAdd([Field "saved-interactions"], fld, 
                 Record("x-interaction", [ 
-                  "historyhash", Primitive(Number state.DocumentState.CurrentHash); 
+                  "historyhash", Primitive(Number state.DocumentState.FinalHash); 
                   "interactions", List("x-interaction-list", []) ])))
               for op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
@@ -1168,8 +1168,8 @@ let updateDocument docState =
   { docState with 
       CurrentDocument = 
         docState.Edits.[0 .. docState.EditIndex] |> applyHistory docState.Initial  
-      CurrentHash = 
-        docState.Edits.[0 .. docState.EditIndex].Hash
+      FinalHash = 
+        docState.Edits.Hash
       FinalDocument = 
         docState.Edits |> applyHistory docState.Initial }
 
@@ -1251,7 +1251,7 @@ let fromOperationsList ops =
   let init = rcd "div"
   let ops = { Groups = ops }
   { DocumentState = { Initial = init; Edits = ops; EditIndex = ops.Length - 1; 
-      CurrentDocument = init; FinalDocument = init; CurrentHash = 0 } |> updateDocument
+      CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
     ViewState = { CursorLocation = [], Before; CursorSelector = []; 
       // Markers = []; GeneralizedMarkersSelector = None; 
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
