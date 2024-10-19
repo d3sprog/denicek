@@ -11,12 +11,19 @@ open Tbd.Demos
 
 // (1) Document and its history - state
 
+type Hash = int 
+
+type EditNode = 
+  { Edit : Edit 
+    Hash : Hash
+    ParentHash : Hash }
+
 type DocumentState = 
-  { Initial : Node 
-    Edits : EditList
-    EditIndex : int 
-    CurrentDocument : Node 
+  { Edits : Map<Hash, EditNode>
+    CurrentHash : int 
     FinalHash : int
+    Initial : Node 
+    CurrentDocument : Node 
     FinalDocument : Node }
 
 // (2) Edit history panel - state
@@ -61,7 +68,7 @@ and CommandState =
 // (5) Demos - state
 
 and DemoState = 
-  { Demos : option<list<string * ApplicationState * list<string * EditList>>> }
+  { Demos : option<list<string * ApplicationState * list<string * Hash * Edit list>>> }
 
 // All the states grouped together
 
@@ -81,9 +88,9 @@ and ApplicationState =
 type DocumentEvent = 
   | UndoLastEdit
   | Evaluate of all:bool
-  | MergeEdits of EditList
-  | SetEditIndex of int
-  | MoveEditIndex of int 
+  | MergeEdits of Hash * Edit list
+  | SetCurrentEditHash of Hash
+  | MoveEditIndex of int
 
 // (2) Edit history panel - events
 
@@ -120,7 +127,7 @@ type CommandEvent =
 // (5) Demos - events
 
 type DemoEvent = 
-  | LoadDemos of list<string * ApplicationState * list<string * EditList>>
+  | LoadDemos of list<string * ApplicationState * list<string * Hash * Edit list>>
 
 // All the events grouped together
 // (EnterCommand is here because entering a command affects global application 
@@ -147,7 +154,7 @@ module Helpers =
     | Record("x-interaction", 
         Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
         Patterns.ListFind "historyhash" (Primitive(Number hash)) ) ->
-        Some(Some (int hash), List.map unrepresent ops)
+        Some(int hash, List.map unrepresent ops)
     | _ -> None
 
   let getSavedInteractions doc = 
@@ -161,10 +168,7 @@ module Helpers =
   let renderHistoryHash state trigger hist =
     h?a [
       "href" => "javascript:;"
-      "click" =!> fun _ _ -> 
-          match state.DocumentState.Edits.EditsByHash(hist) with 
-          | Some eds -> trigger(DocumentEvent(SetEditIndex(eds.Length - 1)))
-          | _ -> ()
+      "click" =!> fun _ _ -> trigger(DocumentEvent(SetCurrentEditHash(hist)))
     ] [
       text (string hist)
     ]
@@ -276,13 +280,8 @@ module Document =
                   e.preventDefault()
                   // Add saved edits to the original document state and merge them with 
                   // current state so that they can be updated to match new document schema
-                  let handler = { Groups = [ops] }
                   // TODO: trigger(DocumentEvent(Evaluate(true)))
-                  let baseeds = 
-                    histhash 
-                    |> Option.bind state.DocumentState.Edits.EditsByHash
-                    |> Option.defaultValue state.DocumentState.Edits
-                  trigger(DocumentEvent(MergeEdits(baseeds.Append handler)))
+                  trigger(DocumentEvent(MergeEdits(histhash, ops)))
                   // TODO: trigger(DocumentEvent(Evaluate(true)))
                   // trigger(DocumentEvent(MoveEditIndex(System.Int32.MaxValue)))
             | _ -> ()
@@ -297,8 +296,8 @@ module Document =
               Shared(ValueKind, RecordDelete(path, "@checked"))
             else
               Value(RecordAdd(path, "@value", Primitive(String el.value)))
-          let edit = { Groups = [[ { Kind = ed } ]] }
-          trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits.Append edit)))
+          let edit = { Kind = ed }
+          trigger(DocumentEvent(MergeEdits(state.DocumentState.FinalHash, [edit] )))
     ]
 
     /// Render source code or preview, depending on what's selected
@@ -359,29 +358,53 @@ module Document =
 
     loop [] ""
     
+  let getEditNodeList (edits:Map<Hash, EditNode>) hash = 
+    let rec loop hash = seq {
+      if hash <> 0 then 
+        yield edits.[hash]
+        yield! loop edits.[hash].ParentHash }
+    List.ofSeq (loop hash) |> List.rev
 
-  let update appstate state = function
+  let getEditList edits hash = 
+    getEditNodeList edits hash |> List.map (fun en -> en.Edit)
+
+  let hashEdit (parent:Hash) (edit:Edit) : Hash = 
+    hash (parent, edit)
+
+  let withHashes (edits:Edit list) = 
+    let rec loop parentHash acc edits =
+      match edits with 
+      | ed::edits -> 
+          let hash = hashEdit parentHash ed 
+          loop hash ({ Edit = ed; Hash = hash; ParentHash = parentHash }::acc) edits
+      | [] -> List.rev acc
+    loop 0 [] edits
+
+  let rec update appstate state = function
     | UndoLastEdit ->
-        let nedits = state.Edits.Truncate(state.Edits.Length - 1)
-        { state with Edits = nedits; EditIndex = min state.EditIndex (nedits.Length - 1) }
-    
+        let prevHash = state.Edits.[state.FinalHash].ParentHash
+        { state with Edits = state.Edits.Remove(state.FinalHash); FinalHash = prevHash }
+  
     | Evaluate all -> 
         let edits = 
           if all then state.FinalDocument |> Eval.evaluateAll
           else state.FinalDocument |> Eval.evaluateDoc
-        let nedits = state.Edits.Append edits // TODO: use mergeedits here?
-        { state with Edits = nedits; EditIndex = nedits.Length-1 }
+        update appstate state (MergeEdits(state.FinalHash, edits)) 
   
-    | MergeEdits edits ->
-        let edits = filterDisabledGroups state.Initial edits
-        let state = { state with Edits = mergeHistories state.Edits edits } 
-        { state with EditIndex = state.Edits.Length-1 }
+    | MergeEdits(baseHash, edits) ->
+        // TODO... let edits = filterDisabledGroups state.Initial edits
+        let e1 = getEditList state.Edits state.FinalHash
+        let e2 = getEditList state.Edits baseHash @ edits
+        let merged = mergeHistories e1 e2 |> withHashes
+        let edits = merged |> List.fold (fun edits en -> Map.add en.Hash en edits) state.Edits
+        let finalHash = (List.last merged).Hash
+        { state with Edits = edits; FinalHash = finalHash; CurrentHash = finalHash }
   
     | MoveEditIndex d ->
-        { state with EditIndex = max 0 (min (state.Edits.Length - 1) (state.EditIndex + d)) }
+        state // TODO: { state with EditIndex = max 0 (min (state.Edits.Length - 1) (state.EditIndex + d)) }
 
-    | SetEditIndex i ->
-        { state with EditIndex = i }
+    | SetCurrentEditHash hash ->
+        { state with CurrentHash = hash }
 
 // --------------------------------------------------------------------------------------
 // Edit history panel
@@ -390,13 +413,16 @@ module Document =
 module History = 
   let update appstate state = function
     | ExtendSelection(dir) ->
+        state
+        // TODO
+        (*
         let nsel = set [ appstate.DocumentState.EditIndex; appstate.DocumentState.EditIndex+dir ]
         let other = 
           Seq.initInfinite (fun i -> appstate.DocumentState.EditIndex-(i*dir)) 
           |> Seq.takeWhile (state.SelectedEdits.Contains)
           |> set
         { state with SelectedEdits = nsel + other  }
-
+        *)
     | ToggleEditHistory -> 
         { state with Display = not state.Display }
     | ToggleEdit(i, true) ->
@@ -406,9 +432,9 @@ module History =
     | HighlightSelector sel ->
         { state with HighlightedSelector = sel }        
     | SelectNone ->
-        { state with SelectedEdits = set [] }
+        state // TODO { state with SelectedEdits = set [] }
     | SelectAll ->
-        { state with SelectedEdits = set [ 0 .. appstate.DocumentState.Edits.Length - 1 ] }
+        state // TODO { state with SelectedEdits = set [ 0 .. appstate.DocumentState.Edits.Length - 1 ] }
 
 
   let rec formatNode state trigger (nd:Node) = 
@@ -432,19 +458,19 @@ module History =
           yield text "}"
         ]
 
-  let renderEdit state trigger (i, ed) = 
+  let renderEdit state trigger en = 
     let render sk n fa sel args = 
       h?li [] [ 
         h?input [ 
           yield "type" => "checkbox"
-          if state.HistoryState.SelectedEdits.Contains(i) then yield "checked" => "checked"
+          // TODO: if state.HistoryState.SelectedEdits.Contains(i) then yield "checked" => "checked"
           yield "click" =!> fun el _ ->
             let chk = (unbox<Browser.Types.HTMLInputElement> el).``checked``
-            trigger(HistoryEvent(ToggleEdit(i, chk)))
+            () // TODO trigger(HistoryEvent(ToggleEdit(i, chk)))
         ] []
         h?a [ 
-          "class" => "" +? (i = state.DocumentState.EditIndex, "sel")
-          "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(DocumentEvent(SetEditIndex i))
+          "class" => "" +? (en.Hash = state.DocumentState.CurrentHash, "sel")
+          "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(DocumentEvent(SetCurrentEditHash en.Hash))
         ] [ 
           yield h?i [ "class" => "fa " + fa ] [] 
           yield text " "
@@ -460,7 +486,7 @@ module History =
         ]
       ]
     let renderv = render ValueKind
-    match ed.Kind with 
+    match en.Edit.Kind with 
     | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger nd]
     | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderSelector state trigger src]
     | Value(PrimitiveEdit(sel, fn)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
@@ -480,6 +506,8 @@ module History =
   let renderHistory trigger state = 
     if not state.HistoryState.Display then [] else [
       h?div [ "id" => "edits" ] [
+        (*
+        TODO
         let saved = Helpers.getSavedInteractions state.DocumentState.CurrentDocument
         if not (List.isEmpty saved) then 
           yield h?h3 [] [text "Saved interactions"]
@@ -488,12 +516,9 @@ module History =
               h?li [] [ 
                 yield h?p [] [ 
                   yield Helpers.renderSelector state trigger [Field "saved-interactions"; Field k] 
-                  match histhash with 
-                  | Some histhash -> 
-                      yield text " (" 
-                      yield Helpers.renderHistoryHash state trigger (int histhash)
-                      yield text ")"
-                  | _ -> ()
+                  yield text " (" 
+                  yield Helpers.renderHistoryHash state trigger (int histhash)
+                  yield text ")"              
                 ]
                 yield h?ol [] [
                   for ied in Seq.rev (Seq.indexed ops) -> 
@@ -501,7 +526,7 @@ module History =
                 ]
               ]
           ]
-        
+        *)
         yield h?h3 [] [text "Edit history" ]
         yield h?p [] [ 
           text "Use "
@@ -516,11 +541,10 @@ module History =
           text " | "
           h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectAll) ] [ text "all" ]
         ]
-        yield h?ol [] [              
-          for ieds in List.revNested (List.indexedNested state.DocumentState.Edits.Groups) do
-            for ied in ieds do
-              yield renderEdit state trigger ied
-            yield h?li [] [ h?hr [] [] ]
+        let ens = Document.getEditNodeList state.DocumentState.Edits state.DocumentState.FinalHash
+        yield h?ol [] [           
+          for en in ens do
+            yield renderEdit state trigger en
         ]
       ] 
     ]
@@ -738,6 +762,7 @@ module Commands =
           ( P.keyword "!v*" |> mapEd (fun (_) -> 
             Shared(ValueKind, Copy(cursorSel, src)) ))
 
+            (* TODO
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let recordedEds = 
           [ for i in Seq.sort state.HistoryState.SelectedEdits ->
@@ -754,6 +779,7 @@ module Commands =
               for op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
                   represent op)) ] ))
+                  *)
              
     // The following are value edits regardless of to what they are applied
     // But it may be useful to apply them to all marked nodes. We use '+' in the notation 
@@ -1148,13 +1174,18 @@ module Demos =
           for d, s, alts in demos do
             yield h?a [ "href" => "#"; "click" =!> fun _ _ -> 
               let s = { s with DemoState = state.DemoState }
+              printfn "RESET STATE"
+              printfn $"{formatNode s.DocumentState.CurrentDocument}"
+              for ed in Document.getEditList s.DocumentState.Edits s.DocumentState.CurrentHash do
+                printfn $"{formatEdit ed}"
+
               trigger(ResetState s) ] [ text d ] 
             if not (List.isEmpty alts) then yield h?span ["class" => "alts"] [
               yield text " ("
-              for i, (l, ops) in List.indexed alts do 
+              for i, (l, baseHash, ops) in List.indexed alts do 
                 if i <> 0 then yield text ", "
                 yield h?a [ "href" => "#"; "click" =!> fun _ _ -> 
-                  trigger(DocumentEvent(MergeEdits(ops))) ] [ text l ] 
+                  trigger(DocumentEvent(MergeEdits(baseHash, ops))) ] [ text l ] 
               yield text ")"
             ]
     ]
@@ -1167,11 +1198,9 @@ module Demos =
 let updateDocument docState = 
   { docState with 
       CurrentDocument = 
-        docState.Edits.[0 .. docState.EditIndex] |> applyHistory docState.Initial  
-      FinalHash = 
-        docState.Edits.Hash
+        Document.getEditList docState.Edits docState.CurrentHash |> applyHistory docState.Initial  
       FinalDocument = 
-        docState.Edits |> applyHistory docState.Initial }
+        Document.getEditList docState.Edits docState.FinalHash |> applyHistory docState.Initial }
 
 
 let rec tryEnterCommand trigger state = 
@@ -1180,7 +1209,9 @@ let rec tryEnterCommand trigger state =
       // If we get multiple groups of edits, we append each to the end of the current
       // list of edits and merge them - otherwise they interact badly
       // (e.g. if we remove items at index 0,1,2..., the first edit changes indices)
-      let addToCurrent eds = state.DocumentState.Edits.Append({ Groups = [eds] })
+      (*
+      TODO
+      let addToCurrent eds = state.DocumentState.Edits @ eds
       let histories = List.map addToCurrent eds
       let merge docState eds = Document.update state docState (MergeEdits(eds))
       let docState = histories |> List.fold merge state.DocumentState
@@ -1188,6 +1219,8 @@ let rec tryEnterCommand trigger state =
       let cmdState = { state.CommandState with Command = ""; SelectedRecommendation = -1 }
       let viewState = View.fixCursor state.DocumentState.CurrentDocument state.ViewState
       { state with ViewState = viewState; DocumentState = docState; CommandState = cmdState } 
+      *)
+      state
 
   | NestedRecommendation(opts) ->
       let cmdState = 
@@ -1237,8 +1270,8 @@ let render trigger state =
       yield! History.renderHistory trigger state
     ]
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
-      let nodes = List.map (List.map represent) state.DocumentState.Edits.Groups
-      text (Serializer.nodesToJsonString nodes)
+      // TODO let nodes = List.map represent state.DocumentState.Edits
+      //text (Serializer.nodesToJsonString nodes)
     ]
   ]
 
@@ -1247,11 +1280,13 @@ let render trigger state =
 // Initial state and global handlers
 // --------------------------------------------------------------------------------------
 
-let fromOperationsList ops = 
+let fromOperationsList eds = 
   let init = rcd "div"
-  let ops = { Groups = ops }
-  { DocumentState = { Initial = init; Edits = ops; EditIndex = ops.Length - 1; 
-      CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
+  let eds = Document.withHashes eds 
+  let ops = eds |> List.map (fun en -> en.Hash, en) |> Map.ofList
+  let finalHash = if eds.Length = 0 then 0 else eds.[eds.Length - 1].Hash
+  { DocumentState = { Initial = init; Edits = ops; CurrentHash = finalHash; 
+      CurrentDocument = init; FinalDocument = init; FinalHash = finalHash } |> updateDocument
     ViewState = { CursorLocation = [], Before; CursorSelector = []; 
       // Markers = []; GeneralizedMarkersSelector = None; 
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
@@ -1296,7 +1331,7 @@ let asyncRequest file =
 
 
 let readJsonOps json = 
-  List.map (List.map unrepresent) (Serializer.nodesFromJsonString json) 
+  List.map unrepresent (Serializer.nodesFromJsonString json) 
 
 let readJson json = 
   readJsonOps json |> fromOperationsList
@@ -1315,22 +1350,22 @@ async {
     let demos = 
       [ 
         "conf2", readJson confBase, [
-          "add", { Groups = readJsonOps confAdd }
-          "table", { Groups = readJsonOps confTable }
+          //"add", readJsonOps confAdd 
+          //"table", readJsonOps confTable 
         ] 
         "hello", readJson helloBase, [
-          "saved", { Groups = readJsonOps helloSaved }
+          //"saved", readJsonOps helloSaved 
         ]
-        "conf", fromOperationsList [opsCore], [
-          "ada", { Groups = [opsCore @ addSpeakerOps] }
-          "rename", { Groups = [opsCore @ fixSpeakerNameOps] }
-          "table", { Groups = [opsCore @ refactorListOps] }
-          "budget", { Groups = [opsCore @ opsBudget ] }
+        "conf", fromOperationsList opsCore, [
+          //"ada", opsCore @ addSpeakerOps
+          //"rename", opsCore @ fixSpeakerNameOps
+          //"table", opsCore @ refactorListOps
+          //"budget", opsCore @ opsBudget 
         ]
-        //"??", fromOperationsList (mergeHistories { Groups = [pbdCore @ refactorListOps] } { Groups = [pbdCore @ pbdAddFirstSpeaker] }).Groups, []
+        //"??", fromOperationsList (mergeHistories [pbdCore @ refactorListOps] } [pbdCore @ pbdAddFirstSpeaker] }).Groups, []
         "todo", readJson todoBase, []
         "empty", readJson "[]", []
-        "counter", fromOperationsList [opsBaseCounter], []
+        "counter", fromOperationsList opsBaseCounter, []
         ]
     trigger (DemoEvent(LoadDemos demos))
   | _ -> failwith "wrong number of demos" }

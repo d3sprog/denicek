@@ -113,13 +113,12 @@ let evaluateRaw doc =
 
 
 let evaluateDoc doc =
-  let eds = [ for ed in evaluateRaw doc -> { Kind = ed } ]
-  { Groups = [eds] }
+  [ for ed in evaluateRaw doc -> { Kind = ed } ]
 
 let evaluateAll doc = 
   let rec loop doc = seq {
     let edits = evaluateDoc doc
-    yield! edits.Groups
+    yield! edits
     let ndoc = applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
-  { Groups = List.ofSeq (loop doc) }
+  List.ofSeq (loop doc)

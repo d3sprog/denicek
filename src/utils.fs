@@ -25,6 +25,13 @@ module List =
   //   if i < 3 && v % 2 = 0 then true, i+1
   //   else false, i) 0 [10 .. 20]
 
+  let sharedPrefix l1 l2 = 
+    let rec loop acc l1 l2 = 
+      match l1, l2 with 
+      | v1::l1, v2::l2 when v1 = v2 -> loop (v1::acc) l1 l2
+      | _ -> List.rev acc, (l1, l2)
+    loop [] l1 l2
+
   let prefixes list = 
     let rec loop prefix acc list = 
       match list with 
@@ -43,7 +50,7 @@ module List =
     match list with 
     | [] -> None
     | x::xs -> loop x xs 
-
+    (*
   let rec skipNested n list = 
     match list with 
     | _ when n <= 0 -> list
@@ -128,3 +135,5 @@ module List =
 
   // indexedNested [[0;0;0];[0;0]]
   // sliceNested 3 3 [[1;2];[];[3;4];[];[5;6]]
+
+  *)
