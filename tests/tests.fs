@@ -11,8 +11,7 @@ let equals a b = Expect.equal a b "Should equal"
 open Tbd.Doc
 open Tbd.Demos
 
-let merge ops1 ops2 = (mergeHistories { Groups = [ops1] } { Groups = [ops2] }).Groups |> List.collect id 
-let apply init ops = applyHistory init { Groups = [ops] }
+let apply init ops = applyHistory init ops
 let printEdits = List.iter (formatEdit >> printfn " - %s")
 
 (*
@@ -22,7 +21,7 @@ let evalTests =
     test "adding speaker invalidates evaluated results" {
       let doc = opsCore @ opsBudget |> List.fold apply (rcd "root" "div")
       let evalOps = evaluateAll doc |> List.ofSeq
-      let ops1 = merge (opsCore @ opsBudget @ evalOps) (opsCore @ opsBudget @ addSpeakerOps)
+      let ops1 = mergeHistories (opsCore @ opsBudget @ evalOps) (opsCore @ opsBudget @ addSpeakerOps)
       let postEvalOps = evaluateAll (applyAll ops1) |> List.ofSeq
 
       let r1 = applyAll (opsCore @ opsBudget @ evalOps) |> select [Field "ultimate"; Field "item"]
@@ -60,39 +59,39 @@ let tests =
   ]
   *)
 [<Tests>]
-let basicMergeTests =
+let basicmergeHistoriesTests =
   testList "basic merging" [
-    test "merge rename" {
+    test "mergeHistories rename" {
       let ops1 = [ uidS [Field "test"] "f1" "f2" ]
       let ops2 = [ uidS [Field "test"] "f1" "f3" ]
-      merge ops1 ops2 |> equals [ uidS [Field "test"] "f1" "f2"; uidS [Field "test"] "f2" "f3" ]
-      merge ops2 ops1 |> equals [ uidS [Field "test"] "f1" "f3"; uidS [Field "test"] "f3" "f2" ]
+      mergeHistories ops1 ops2 |> equals [ uidS [Field "test"] "f1" "f2"; uidS [Field "test"] "f2" "f3" ]
+      mergeHistories ops2 ops1 |> equals [ uidS [Field "test"] "f1" "f3"; uidS [Field "test"] "f3" "f2" ]
     }
   ]
 
 [<Tests>]
-let complexMergeTests =
+let complexmergeHistoriesTests =
   testList "complex merging" [    
-    test "indexing merges with reordering" {
-      let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
+    test "indexing mergeHistoriess with reordering" {
+      let ops1 = mergeHistories (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
       let doc1 = apply (rcd "div") ops1 
-      let ops2 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps)
+      let ops2 = mergeHistories (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps)
       let doc2 = apply (rcd "div") ops2 
       doc1 |> equals doc2
     }
 
-    test "refactoring merges with adding" {
-      let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
+    test "refactoring mergeHistoriess with adding" {
+      let ops1 = mergeHistories (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
       let doc1 = apply (rcd "div") ops1 
-      let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
+      let ops2 = mergeHistories (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
       let doc2 = apply (rcd "div") ops2
       doc1 |> equals doc2
     }
 
-    test "refactoring merges with name fix" {
-      let ops1 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
+    test "refactoring mergeHistoriess with name fix" {
+      let ops1 = mergeHistories (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
       let doc1 = apply (rcd "div") ops1 
-      let ops2 = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
+      let ops2 = mergeHistories (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
       let doc2 = apply (rcd "div") ops2 
       doc1 |> equals doc2 
     }
@@ -105,28 +104,28 @@ let complexMergeTests =
       doc1 |> equals doc2 
     }
 
-    test "refactoring merges with adding via temp" {
-      let ops1 = merge (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
+    test "refactoring mergeHistoriess with adding via temp" {
+      let ops1 = mergeHistories (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
       let doc1 = apply (rcd "div") ops1 
-      let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerViaTempOps) 
+      let ops2 = mergeHistories (opsCore @ refactorListOps) (opsCore @ addSpeakerViaTempOps) 
       let doc2 = apply (rcd "div") ops2
       doc1 |> equals doc2
     }
 
-    test "refactoring merges with adding two speakers by PBD" {
+    test "refactoring mergeHistoriess with adding two speakers by PBD" {
       let pbdCore = opsCore @ pbdAddInput
-      let ops1 = merge (pbdCore @ refactorListOps) (pbdCore @ pbdAddFirstSpeaker @ pbdAddAnotherSpeaker) 
+      let ops1 = mergeHistories (pbdCore @ refactorListOps) (pbdCore @ pbdAddFirstSpeaker @ pbdAddAnotherSpeaker) 
       let doc1 = apply (rcd "div") ops1 
-      let ops2 = merge (pbdCore @ pbdAddFirstSpeaker @ refactorListOps) (pbdCore @ pbdAddAnotherSpeaker)
+      let ops2 = mergeHistories (pbdCore @ pbdAddFirstSpeaker @ refactorListOps) (pbdCore @ pbdAddAnotherSpeaker)
       let doc2 = apply (rcd "div") ops2
       doc1 |> equals doc2
     }
 
     (*
-    test "adding budget merges with refactoring" {
-      let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
+    test "adding budget mergeHistoriess with refactoring" {
+      let ops1 = mergeHistories (opsCore @ refactorListOps) (opsCore @ opsBudget)
       let doc1 = apply (rcd "div") ops1
-      let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
+      let ops2 = mergeHistories (opsCore @ opsBudget) (opsCore @ refactorListOps)
       let doc2 = apply (rcd "div") ops2
       doc1 |> equals doc2 
     }*)
