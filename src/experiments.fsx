@@ -1,4 +1,4 @@
-#load "parsec.fs" "utils.fs" "doc.fs" "demos.fs"
+#load "parsec.fs" "utils.fs" "doc.fs" "represent.fs" "demos.fs"
 open Tbd
 open Tbd.Doc
 open Tbd.Demos
