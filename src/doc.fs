@@ -178,6 +178,7 @@ type EditKind =
 
 type Edit = 
   { Kind : EditKind 
+    GroupLabel : string
     Dependencies : Selectors list }
 
 // --------------------------------------------------------------------------------------
@@ -852,14 +853,15 @@ let applyToAdded ctx e1 e2 =
       // all edits to this field and then appendfrom this new temp field.
       match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField ] e2 with
       | InScope e2scoped -> 
+          let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = e2scoped.GroupLabel }
           let prefix = [
-            { Kind = Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty"))); Dependencies = []  }
-            { Kind = Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)); Dependencies = []  } ]
+            mkEd <| Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty")))
+            mkEd <| Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)) ]
           let suffix = [
-            { Kind = Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)); Dependencies = []  } ]
+            mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
           let res = [
             e2scoped
-            { Kind = Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )); Dependencies = []  } ]
+            mkEd <| Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
           if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } else 
           res, ctx
       | _ -> [e1], ctx
@@ -893,36 +895,27 @@ let moveBefore ctx e1 e2 =
 // Edit groups
 // --------------------------------------------------------------------------------------
 
-type EditList = 
-  { Groups : Edit list list }
-  member x.Item(i) = x.[i .. i].Groups |> Seq.head |> Seq.head
-  member x.GetSlice(start, finish) =
-    let start = start |> Option.defaultValue 0
-    let finish = finish |> Option.defaultWith (fun () -> x.Length - 1)
-    { Groups = List.sliceNested  start finish x.Groups }
-  member x.Length = 
-    List.sumBy List.length x.Groups
-  member x.Truncate n =
-    { Groups = List.truncateNested n x.Groups }
-  member x.Append eds = 
-    { Groups = x.Groups @ eds.Groups }
-  member x.Hash = 
-    x.Groups |> List.collect id |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) 0
-  member x.EditsByHash(hashToFind) = 
-    let mutable hashSoFar = 0
-    let res = x.Groups |> List.takeWhileNested (fun edit -> 
-      if hashSoFar = hashToFind then false else
-      hashSoFar <- hash (hashSoFar, edit) 
-      true )
-    if hashSoFar = hashToFind then Some { Groups = res } else None
+let hashEditList eds = 
+  eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) 0
+
+let takeByHash hashToFind eds = 
+  let mutable hashSoFar = 0
+  let res = eds |> List.takeWhile (fun edit -> 
+    if hashSoFar = hashToFind then false else
+    hashSoFar <- hash (hashSoFar, edit) 
+    true )
+  if hashSoFar = hashToFind then Some res else None
 
 let applyHistory initial hist =
-  hist.Groups |> List.fold (List.fold apply) initial
+  hist |> List.fold apply initial
   
 let filterDisabledGroups initial hist = 
-  { Groups = hist.Groups |> List.filterWithState (fun state group ->
-      try true, group |> List.fold apply state
-      with ConditionCheckFailed _ -> false, state) initial }
+  hist 
+  |> List.chunkBy (fun ed -> ed.GroupLabel)
+  |> List.filterWithState (fun doc group ->
+      try true, group |> List.fold apply doc
+      with ConditionCheckFailed _ -> false, doc) initial
+  |> List.collect id
 
 let getDependencies ed = 
   match ed.Kind with 
@@ -942,20 +935,20 @@ let filterConflicting modsels eds =
   loop [] modsels eds
 
 let mergeHistories h1 h2 =
-  let shared, (e1s, e2s) = List.sharedPrefixNested h1.Groups h2.Groups
+  let shared, (e1s, e2s) = List.sharedPrefix h1 h2
   let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
 
   //let e1ModSels = e1s |> List.collect id |> List.collect getDependencies
   //let e2NonConflict = filterConflicting e1ModSels e2s
 
   let e2sAfter = 
-    e2s |> List.collectNested (fun e2 ->
+    e2s |> List.collect (fun e2 ->
         //printfn $"Move edit e2: {formatEdit e2}"
         // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
         // (caveat is that the operation can turn it into multiple edits)
         let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
         let res = 
-          List.foldNested (fun e2 e1 -> 
+          List.fold (fun e2 e1 -> 
             //printfn $"    - after e1: {formatEdit e1}"
             //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
             let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
@@ -967,7 +960,7 @@ let mergeHistories h1 h2 =
   //printfn "MERGE HISTORIES"
   //printfn "Before transform: %A" (List.mapNested formatEdit e2s)
   //printfn "After transform: %A" (List.mapNested formatEdit e2sAfter)
-  { Groups = shared @ e1s @ e2sAfter }
+  shared @ e1s @ e2sAfter 
 
 
 

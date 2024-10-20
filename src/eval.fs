@@ -116,13 +116,13 @@ let evaluateRaw doc =
 
 
 let evaluateDoc doc =
-  let eds = [ for ed, deps in evaluateRaw doc -> { Kind = ed; Dependencies = deps } ]
-  { Groups = [eds] }
-
+  let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
+  [ for ed, deps in evaluateRaw doc -> { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
+  
 let evaluateAll doc = 
   let rec loop doc = seq {
     let edits = evaluateDoc doc
-    yield! edits.Groups
+    yield! edits
     let ndoc = applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
-  { Groups = List.ofSeq (loop doc) }
+  List.ofSeq (loop doc)

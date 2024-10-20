@@ -44,6 +44,27 @@ module List =
     | [] -> None
     | x::xs -> loop x xs 
 
+  let sharedPrefix l1 l2 =
+    let rec loop acc l1 l2 =
+      match l1, l2 with 
+      | x1::xs1, x2::xs2 when x1 = x2 -> loop (x1::acc) xs1 xs2
+      | _ -> (List.rev acc), (l1, l2)
+    loop [] l1 l2
+
+  let chunkBy f list = 
+    let rec loop acc gacc gkey list =
+      match list with 
+      | x::xs when f x = gkey -> loop acc (x::gacc) gkey xs
+      | x::xs -> loop ((List.rev gacc)::acc) [x] (f x) xs
+      | [] -> (List.rev gacc)::acc |> List.rev
+    match list with 
+    | x::xs -> loop [] [x] (f x) xs
+    | [] -> []
+
+  // chunkBy snd [1,'a'; 2,'a'; 3,'b'; 4,'c'; 5,'c'; 6,'c'; 7,'d']
+  // |> List.map List.length
+
+    (*
   let rec skipNested n list = 
     match list with 
     | _ when n <= 0 -> list
@@ -128,3 +149,4 @@ module List =
 
   // indexedNested [[0;0;0];[0;0]]
   // sliceNested 3 3 [[1;2];[];[3;4];[];[5;6]]
+  *)

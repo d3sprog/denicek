@@ -22,21 +22,23 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
+let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
+
 // Value edits
-let ap s n = { Dependencies = []; Kind = Value(ListAppend(s, n)) } 
-let apf s sel = { Dependencies = []; Kind = Value(ListAppendFrom(s, sel)) } 
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Dependencies = []; Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
-let add sel f n = { Dependencies = []; Kind = Value(RecordAdd(sel, ffld f, n)) }
+let ap s n = mkEd <| Value(ListAppend(s, n))  
+let apf s sel = mkEd <| Value(ListAppendFrom(s, sel))  
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn))  
+let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
 
 // Shared structural
-let ordS s l = { Dependencies = []; Kind = Shared(StructuralKind, ListReorder(s, l)) } 
-let delrV sel f = { Dependencies = []; Kind = Shared(ValueKind, RecordDelete(sel, f)) }
-let wrS s fld tag = { Dependencies = []; Kind = Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) }
-let wlS s tag = { Dependencies = []; Kind = Shared(StructuralKind, WrapList(tag, s)) }
-let cpS s1 s2 = { Dependencies = []; Kind = Shared(StructuralKind, Copy(s2, s1)) }
-let cpV s1 s2 = { Dependencies = []; Kind = Shared(ValueKind, Copy(s2, s1)) }
-let tagS s t1 t2 = { Dependencies = []; Kind = Shared(StructuralKind, UpdateTag(s, t1, t2)) }
-let uidS s fold fnew = { Dependencies = []; Kind = Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) }
+let ordS s l = mkEd <| Shared(StructuralKind, ListReorder(s, l))  
+let delrV sel f = mkEd <| Shared(ValueKind, RecordDelete(sel, f)) 
+let wrS s fld tag = mkEd <| Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) 
+let wlS s tag = mkEd <| Shared(StructuralKind, WrapList(tag, s)) 
+let cpS s1 s2 = mkEd <| Shared(StructuralKind, Copy(s2, s1)) 
+let cpV s1 s2 = mkEd <| Shared(ValueKind, Copy(s2, s1)) 
+let tagS s t1 t2 = mkEd <| Shared(StructuralKind, UpdateTag(s, t1, t2)) 
+let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
 
 let selectorPart = 
   ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
