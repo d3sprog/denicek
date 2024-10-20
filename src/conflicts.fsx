@@ -1,5 +1,5 @@
 #nowarn "3353"
-#load "utils.fs" "parsec.fs" "doc.fs" "demos.fs"
+#load "utils.fs" "parsec.fs" "doc.fs" "demos.fs" "eval.fs"
 open Tbd
 open Tbd.Doc
 open Tbd.Demos
@@ -101,24 +101,23 @@ opsCore @ opsBudget |> List.fold transformType (TyRecord("div", []))
 // Effect analysis
 // --------------------------------------------------------------------------------------
 
-(*
-let getEffects ed = 
-  match ed with 
-  | Value(PrimitiveEdit(tgt, _)) -> ()
-  | Value(ListAppend(tgt, _)) -> ()
-  | Value(ListAppendFrom(tgt, src)) -> ()
-  | Value(RecordAdd(tgt, fld, _)) -> ()
-  | Value(Check(_, _)) -> ()
-  | Shared(sk, ListReorder(tgt, _)) -> ()
-  | Shared(sk, RecordRenameField(tgt, fold, fnew)) -> ()
-  | Shared(sk, Copy(tgt, src)) -> ()
-  | Shared(sk, WrapRecord(fld, tag, tgt)) -> ()
-  | Shared(sk, WrapList(tag, tgt)) -> ()
-  | Shared(sk, UpdateTag(tgt, told, tnew)) -> ()
-  | Shared(sk, ListDelete(tgt, _)) -> ()
-  | Shared(sk, RecordDelete(tgt, fld)) -> ()
-*)
+type Effect = 
+  | ValueEffect of Selectors
+  | StructureEffect of Selectors
 
+let getEffect ed = 
+  match ed.Kind with 
+  | Value _ 
+  | Shared(ValueKind, _) -> ValueEffect(getTargetSelector ed)
+  | Shared(StructuralKind, _) -> StructureEffect(getTargetSelector ed)
+
+let getDependencies ed = 
+  match ed.Kind with 
+  | Value(ListAppendFrom(_, src)) 
+  | Shared(_, Copy(_, src)) -> src :: ed.Dependencies
+  | _ -> ed.Dependencies
+
+(*
 let e1s = addSpeakerOps
 for e1 in e1s do printfn $"{formatEdit e1}"
 
@@ -133,4 +132,50 @@ for e1 in e1s do
     printfn $"  e1.target = {formatSelector(getTargetSelector e1)}"
     printfn $"  e2 = {formatEdit e2}"
     printfn $"  e2.target = {formatSelector(getTargetSelector e2)}"
+*)
 
+
+let doc = applyHistory (rcd "div") { Groups = [ opsCore @ opsBudget ] }
+let evalEds = doc |> Eval.evaluateAll
+let evalDoc = applyHistory (rcd "div") { Groups = [ opsCore @ opsBudget ] @ evalEds.Groups }
+
+let formatEffect = function
+  | ValueEffect tgt -> $"value of {formatSelector tgt}"
+  | StructureEffect tgt -> $"structure of {formatSelector tgt}"
+ 
+let filterConflicting modsels eds = 
+  let rec loop acc modsels = function 
+    | [] -> List.rev acc
+    | ed::eds ->
+        // Conflict if any dependency depends on any of the modified locations
+        let conflict = getDependencies ed |> List.exists (fun dep -> 
+          List.exists (fun modsel -> includes dep modsel) modsels)
+        if conflict then loop acc ((getTargetSelector ed)::modsels) eds
+        else loop (ed::acc) modsels eds
+  loop [] modsels eds
+
+
+let evalEdsFilter = filterConflicting [!/"/speakers"] (List.collect id evalEds.Groups)
+
+for e in List.collect id evalEds.Groups do
+  printfn $""
+  printfn $"  * {formatEdit e}"
+  printfn $"    modifies: {formatEffect (getEffect e)}"
+  printfn $"    depends: {List.map formatSelector (getDependencies e)}"
+
+for e in evalEdsFilter do
+  printfn $""
+  printfn $"  * {formatEdit e}"
+  printfn $"    modifies: {formatEffect (getEffect e)}"
+  printfn $"    depends: {List.map formatSelector (getDependencies e)}"
+
+
+
+for e in addSpeakerOps do 
+  printfn $""
+  printfn $"  * {formatEdit e}"
+  printfn $"    modifies: {formatEffect (getEffect e)}"
+  printfn $"    depends: {List.map formatSelector (getDependencies e)}"
+
+doc |> select !/"/ultimate/item"
+evalDoc |> select !/"/ultimate/item/result"

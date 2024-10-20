@@ -147,7 +147,7 @@ module Helpers =
     | Record("x-interaction", 
         Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
         Patterns.ListFind "historyhash" (Primitive(Number hash)) ) ->
-        Some(Some (int hash), List.map unrepresent ops)
+        Some(Some (int hash), List.map Represent.unrepresent ops)
     | _ -> None
 
   let getSavedInteractions doc = 
@@ -297,7 +297,7 @@ module Document =
               Shared(ValueKind, RecordDelete(path, "@checked"))
             else
               Value(RecordAdd(path, "@value", Primitive(String el.value)))
-          let edit = { Groups = [[ { Kind = ed } ]] }
+          let edit = { Groups = [[ { Kind = ed; Dependencies = [] } ]] }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits.Append edit)))
     ]
 
@@ -639,9 +639,9 @@ module Commands =
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
 
   // When parsed, returns just a single edit
-  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x }]] )
+  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x; Dependencies = [] }]] )
   // When parsed, returns a sequence of edits
-  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k } ]])
+  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k; Dependencies = [] } ]])
   // Returns potentially mutiple sequences of edits
   // (those have to be merged using the current as shared base)
   let mapEds f = P.map (fun x -> EditRecommendation(f x))
@@ -753,7 +753,7 @@ module Commands =
                   "interactions", List("x-interaction-list", []) ])))
               for op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
-                  represent op)) ] ))
+                  Represent.represent op)) ] ))
              
     // The following are value edits regardless of to what they are applied
     // But it may be useful to apply them to all marked nodes. We use '+' in the notation 
@@ -1237,7 +1237,7 @@ let render trigger state =
       yield! History.renderHistory trigger state
     ]
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
-      let nodes = List.map (List.map represent) state.DocumentState.Edits.Groups
+      let nodes = List.map (List.map Represent.represent) state.DocumentState.Edits.Groups
       text (Serializer.nodesToJsonString nodes)
     ]
   ]
@@ -1296,7 +1296,7 @@ let asyncRequest file =
 
 
 let readJsonOps json = 
-  List.map (List.map unrepresent) (Serializer.nodesFromJsonString json) 
+  List.map (List.map Represent.unrepresent) (Serializer.nodesFromJsonString json) 
 
 let readJson json = 
   readJsonOps json |> fromOperationsList
@@ -1308,10 +1308,10 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base" ]
+  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base"; "todo-remove" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase |] ->
+  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase; todoRemove |] ->
     let demos = 
       [ 
         "conf2", readJson confBase, [
@@ -1328,7 +1328,9 @@ async {
           "budget", { Groups = [opsCore @ opsBudget ] }
         ]
         //"??", fromOperationsList (mergeHistories { Groups = [pbdCore @ refactorListOps] } { Groups = [pbdCore @ pbdAddFirstSpeaker] }).Groups, []
-        "todo", readJson todoBase, []
+        "todo", readJson todoBase, [
+          "remove", { Groups = readJsonOps todoRemove }
+        ]
         "empty", readJson "[]", []
         "counter", fromOperationsList [opsBaseCounter], []
         ]

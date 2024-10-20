@@ -23,20 +23,20 @@ let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
 // Value edits
-let ap s n = { Kind = Value(ListAppend(s, n)) } 
-let apf s sel = { Kind = Value(ListAppendFrom(s, sel)) } 
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
-let add sel f n = { Kind = Value(RecordAdd(sel, ffld f, n)) }
+let ap s n = { Dependencies = []; Kind = Value(ListAppend(s, n)) } 
+let apf s sel = { Dependencies = []; Kind = Value(ListAppendFrom(s, sel)) } 
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; { Dependencies = []; Kind = Value(PrimitiveEdit(sel, "_" + fn)) } 
+let add sel f n = { Dependencies = []; Kind = Value(RecordAdd(sel, ffld f, n)) }
 
 // Shared structural
-let ordS s l = { Kind = Shared(StructuralKind, ListReorder(s, l)) } 
-let delrS sel f = { Kind = Shared(StructuralKind, RecordDelete(sel, f)) }
-let wrS s fld tag = { Kind = Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) }
-let wlS s tag = { Kind = Shared(StructuralKind, WrapList(tag, s)) }
-let cpS s1 s2 = { Kind = Shared(StructuralKind, Copy(s2, s1)) }
-let cpV s1 s2 = { Kind = Shared(ValueKind, Copy(s2, s1)) }
-let tagS s t1 t2 = { Kind = Shared(StructuralKind, UpdateTag(s, t1, t2)) }
-let uidS s fold fnew = { Kind = Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) }
+let ordS s l = { Dependencies = []; Kind = Shared(StructuralKind, ListReorder(s, l)) } 
+let delrV sel f = { Dependencies = []; Kind = Shared(ValueKind, RecordDelete(sel, f)) }
+let wrS s fld tag = { Dependencies = []; Kind = Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) }
+let wlS s tag = { Dependencies = []; Kind = Shared(StructuralKind, WrapList(tag, s)) }
+let cpS s1 s2 = { Dependencies = []; Kind = Shared(StructuralKind, Copy(s2, s1)) }
+let cpV s1 s2 = { Dependencies = []; Kind = Shared(ValueKind, Copy(s2, s1)) }
+let tagS s t1 t2 = { Dependencies = []; Kind = Shared(StructuralKind, UpdateTag(s, t1, t2)) }
+let uidS s fold fnew = { Dependencies = []; Kind = Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) }
 
 let selectorPart = 
   ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
@@ -81,7 +81,7 @@ let addSpeakerViaTempOps =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
     apf (!/ "/speakers") (!/ "/temp")
-    delrS (!/ "/") "temp"
+    delrV (!/ "/") "temp"
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
 
@@ -190,7 +190,7 @@ let pbdAddFirstSpeaker =
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
     apf (!/ "/speakers") (!/ "/temp")
-    delrS (!/ "/") "temp"
+    delrV (!/ "/") "temp"
   ]
 
 // Use existing <input> to add another speaker
@@ -201,7 +201,7 @@ let pbdAddAnotherSpeaker =
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
     apf (!/ "/speakers") (!/ "/temp")
-    delrS (!/ "/") "temp"
+    delrV (!/ "/") "temp"
   ]
   
 
@@ -252,10 +252,10 @@ let opsCounterDec() =
 let opsCounterHndl() = 
   [ yield add (!/ "/inc") "click" (lst "x-event-handler")
     for op in opsCounterInc() ->
-      ap (!/ "/inc/click") (represent op) 
+      ap (!/ "/inc/click") (Represent.represent op) 
     yield add (!/ "/dec") "click" (lst "x-event-handler")
     for op in opsCounterDec() ->
-      ap (!/ "/dec/click") (represent op) ]
+      ap (!/ "/dec/click") (Represent.represent op) ]
 
 
 

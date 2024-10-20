@@ -63,9 +63,11 @@ let (|OpAndArgs|) args =
   let args = Map.ofSeq args
   args.["op"], args.Remove("op")
 
-let rec getEvaluatedResult = function
-  | Record("x-evaluated", Patterns.ListFind "result" r) -> getEvaluatedResult r
-  | v -> v
+let getEvaluatedResult nd =
+  let rec loop acc = function
+    | Record("x-evaluated", Patterns.ListFind "result" r) -> loop (Field "result"::acc) r
+    | v -> List.rev acc, v
+  loop [] nd
 
 let (|EvaluatedResult|) nd = getEvaluatedResult nd
 
@@ -78,15 +80,15 @@ let evaluateBuiltin op (args:Map<string, Node>)=
       let count = List.length >> float
       let f = (dict [ "count", count; "sum", sum ]).[op]
       match args.TryFind "arg" with
-      | Some(EvaluatedResult(List(_, nds))) -> 
-          Primitive(Number(f (List.map getEvaluatedResult nds)))
+      | Some(EvaluatedResult(path, List(_, nds))) -> 
+          Primitive(Number(f (List.map (getEvaluatedResult >> snd) nds))), [(Field "arg")::path]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
   | "plus" | "mul" -> 
       let f = (dict [ "plus",(+); "mul",(*) ]).[op]
       match args.TryFind "left", args.TryFind "right" with
-      | Some(EvaluatedResult(Primitive(Number n1))), Some(EvaluatedResult(Primitive(Number n2))) -> 
-          Primitive(Number(f n1 n2))
+      | Some(EvaluatedResult(p1, Primitive(Number n1))), Some(EvaluatedResult(p2, Primitive(Number n2))) -> 
+          Primitive(Number(f n1 n2)), [(Field "left")::p1; (Field "right")::p2]
       | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
   | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"          
 
@@ -98,14 +100,15 @@ let evaluateRaw doc =
       let it = match select sel doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sel}\n Resulted in {nds}"
       match it with 
       | Reference(p) -> 
-          [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel))
-            Value(RecordAdd(sel, "result", List("empty", []))) // Allow 'slightly clever' case of Copy from doc.fs
-            Shared(ValueKind, Copy(sel @ [Field "result"], p)) ]
+          [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel)), [p]
+            Value(RecordAdd(sel, "result", List("empty", []))), [p] // Allow 'slightly clever' case of Copy from doc.fs
+            Shared(ValueKind, Copy(sel @ [Field "result"], p)), [] ]
 
       | Record("x-formula", allArgs & OpAndArgs(Reference [ Field("$builtins"); Field op ], args)) ->
-          let res = evaluateBuiltin op args
-          [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel))
-            Value(RecordAdd(sel, "result", res)) ]
+          let res, deps = evaluateBuiltin op args
+          let deps = [ for p in deps -> sel @ p ]
+          [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
+            Value(RecordAdd(sel, "result", res)), deps ]          
 
       | Record("x-formula", nds) -> 
           failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"
@@ -113,7 +116,7 @@ let evaluateRaw doc =
 
 
 let evaluateDoc doc =
-  let eds = [ for ed in evaluateRaw doc -> { Kind = ed } ]
+  let eds = [ for ed, deps in evaluateRaw doc -> { Kind = ed; Dependencies = deps } ]
   { Groups = [eds] }
 
 let evaluateAll doc = 

@@ -1,6 +1,7 @@
 ﻿#if INTERACTIVE
 #nowarn "3353"
-#load "../src/utils.fs" "../src/parsec.fs" "../src/doc.fs" "../src/demos.fs"
+#I "../src"
+#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "demos.fs"
 let equals a b = a = b
 #else
 module Tbd.Tests
@@ -12,6 +13,7 @@ open Tbd.Demos
 
 let merge ops1 ops2 = (mergeHistories { Groups = [ops1] } { Groups = [ops2] }).Groups |> List.collect id 
 let apply init ops = applyHistory init { Groups = [ops] }
+let printEdits = List.iter (formatEdit >> printfn " - %s")
 
 (*
 [<Tests>]
@@ -58,8 +60,19 @@ let tests =
   ]
   *)
 [<Tests>]
-let mergeTests =
-  testList "merging" [    
+let basicMergeTests =
+  testList "basic merging" [
+    test "merge rename" {
+      let ops1 = [ uidS [Field "test"] "f1" "f2" ]
+      let ops2 = [ uidS [Field "test"] "f1" "f3" ]
+      merge ops1 ops2 |> equals [ uidS [Field "test"] "f1" "f2"; uidS [Field "test"] "f2" "f3" ]
+      merge ops2 ops1 |> equals [ uidS [Field "test"] "f1" "f3"; uidS [Field "test"] "f3" "f2" ]
+    }
+  ]
+
+[<Tests>]
+let complexMergeTests =
+  testList "complex merging" [    
     test "indexing merges with reordering" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
       let doc1 = apply (rcd "div") ops1 

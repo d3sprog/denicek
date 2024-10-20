@@ -6,10 +6,11 @@
     <Compile Include="parsec.fs" />
     <Compile Include="utils.fs" />
     <Compile Include="doc.fs" />
+		<Compile Include="represent.fs" />
     <Compile Include="eval.fs" />
-    <Compile Include="serializer.fs" />
     <Compile Include="demos.fs" />
     <Compile Include="matcher.fs" />
+    <Compile Include="serializer.fs" />
     <Compile Include="html.fs" />
     <Compile Include="app.fs" />
   </ItemGroup>
