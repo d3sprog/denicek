@@ -67,7 +67,7 @@ let unrepresentCond nd =
 let unrepresent nd = 
   // NOTE: This works if the 'match' is not wrapped inside another expression (e.g. let) otherwise
   // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
-  let ret nd = { Kind = nd; Dependencies = []; GroupLabel = "" }
+  let ret nd = { Kind = nd; Dependencies = []; GroupLabel = ""; Disabled = false }
   match nd with
   // Value edits
   | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd)) ->

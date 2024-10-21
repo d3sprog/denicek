@@ -295,7 +295,7 @@ module Document =
               Shared(ValueKind, RecordDelete(path, "@checked"))
             else
               Value(RecordAdd(path, "@value", Primitive(String el.value)))
-          let edit = { Kind = ed; Dependencies = []; GroupLabel = "" }
+          let edit = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits @ [ edit ])))
     ]
 
@@ -441,7 +441,7 @@ module History =
             trigger(HistoryEvent(ToggleEdit(i, chk)))
         ] []
         h?a [ 
-          "class" => "" +? (i = state.DocumentState.EditIndex, "sel")
+          "class" => "" +? (i = state.DocumentState.EditIndex, "sel") +? (ed.Disabled, "disabled")
           "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(DocumentEvent(SetEditIndex i))
         ] [ 
           yield h?i [ "class" => "fa " + fa ] [] 
@@ -455,6 +455,13 @@ module History =
             yield text $"{k} = "
             yield v
           yield text ")"
+          if ed.Dependencies <> [] then 
+            yield h?br [] [] 
+            yield text "deps=("
+            for i, dep in Seq.indexed ed.Dependencies do
+              if i <> 0 then yield text ", "
+              yield Helpers.renderSelector state trigger dep
+            yield text ")"
         ]
       ]
     let renderv = render ValueKind
@@ -637,9 +644,9 @@ module Commands =
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
 
   // When parsed, returns just a single edit
-  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x; Dependencies = []; GroupLabel = "" }]] )
+  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x; Dependencies = []; GroupLabel = ""; Disabled = false }]] )
   // When parsed, returns a sequence of edits
-  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k; Dependencies = []; GroupLabel = "" } ]])
+  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k; Dependencies = []; GroupLabel = ""; Disabled = false } ]])
   // Returns potentially mutiple sequences of edits
   // (those have to be merged using the current as shared base)
   let mapEds f = P.map (fun x -> EditRecommendation(f x))
@@ -1256,7 +1263,7 @@ let fromOperationsList ops =
     CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
       SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
     HistoryState = { HighlightedSelector = None; 
-      SelectedEdits = Set.empty; Display = false }
+      SelectedEdits = Set.empty; Display = true }
     DemoState = { Demos = None }
   }
 
@@ -1325,6 +1332,13 @@ async {
           "table", opsCore @ refactorListOps
           "budget", opsCore @ opsBudget 
         ]
+        "?1", fromOperationsList (opsCore @ opsBudget), []
+        "?2", 
+          (mergeHistories
+            (opsCore @ opsBudget @ addSpeakerOps)
+            ( let doc = applyHistory (rcd "div") (opsCore @ opsBudget)
+              opsCore @ opsBudget @ Eval.evaluateAll doc ))
+          |> fromOperationsList, []
         "todo", readJson todoBase, [
           "remove", readJsonOps todoRemove 
         ]

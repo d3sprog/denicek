@@ -64,10 +64,10 @@ let (|OpAndArgs|) args =
   args.["op"], args.Remove("op")
 
 let getEvaluatedResult nd =
-  let rec loop acc = function
-    | Record("x-evaluated", Patterns.ListFind "result" r) -> loop (Field "result"::acc) r
-    | v -> List.rev acc, v
-  loop [] nd
+  let rec loop = function
+    | Record("x-evaluated", Patterns.ListFind "result" r) -> loop r
+    | v -> v
+  loop nd
 
 let (|EvaluatedResult|) nd = getEvaluatedResult nd
 
@@ -80,15 +80,15 @@ let evaluateBuiltin op (args:Map<string, Node>)=
       let count = List.length >> float
       let f = (dict [ "count", count; "sum", sum ]).[op]
       match args.TryFind "arg" with
-      | Some(EvaluatedResult(path, List(_, nds))) -> 
-          Primitive(Number(f (List.map (getEvaluatedResult >> snd) nds))), [(Field "arg")::path]
+      | Some(EvaluatedResult(List(_, nds))) -> 
+          Primitive(Number(f (List.map getEvaluatedResult nds))), [Field "arg"]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
   | "plus" | "mul" | "minus" -> 
       let f = (dict [ "plus",(+); "mul",(*); "minus",(-) ]).[op]
       match args.TryFind "left", args.TryFind "right" with
-      | Some(EvaluatedResult(p1, Primitive(Number n1))), Some(EvaluatedResult(p2, Primitive(Number n2))) -> 
-          Primitive(Number(f n1 n2)), [(Field "left")::p1; (Field "right")::p2]
+      | Some(EvaluatedResult(Primitive(Number n1))), Some(EvaluatedResult(Primitive(Number n2))) -> 
+          Primitive(Number(f n1 n2)), [Field "left"; Field "right"]
       | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
   | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"          
 
@@ -106,7 +106,7 @@ let evaluateRaw doc =
 
       | Record("x-formula", allArgs & OpAndArgs(Reference [ Field("$builtins"); Field op ], args)) ->
           let res, deps = evaluateBuiltin op args
-          let deps = [ for p in deps -> sel @ p ]
+          let deps = [ for p in deps -> sel @ [p] ]
           [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
             Value(RecordAdd(sel, "result", res)), deps ]          
 
@@ -117,7 +117,8 @@ let evaluateRaw doc =
 
 let evaluateDoc doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
-  [ for ed, deps in evaluateRaw doc -> { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
+  [ for ed, deps in evaluateRaw doc -> 
+      { Disabled = false; Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
 let evaluateAll doc = 
   let rec loop doc = seq {

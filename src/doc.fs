@@ -179,7 +179,8 @@ type EditKind =
 type Edit = 
   { Kind : EditKind 
     GroupLabel : string
-    Dependencies : Selectors list }
+    Dependencies : Selectors list
+    Disabled : bool }
 
 // --------------------------------------------------------------------------------------
 // Pretty printing
@@ -536,6 +537,7 @@ let rec isStructuralSelector sel =
 
 let apply doc edit =
   match edit.Kind with
+  | _ when edit.Disabled -> doc
 
   // **Value edits** - These do not affect any selectors elsewhere in the document.
   // Add and Append change structure in that they add new items that may have a different
@@ -853,7 +855,7 @@ let applyToAdded ctx e1 e2 =
       // all edits to this field and then appendfrom this new temp field.
       match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField ] e2 with
       | InScope e2scoped -> 
-          let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = e2scoped.GroupLabel }
+          let mkEd ed = { Kind = ed; Dependencies = []; Disabled = false; GroupLabel = e2scoped.GroupLabel }
           let prefix = [
             mkEd <| Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty")))
             mkEd <| Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)) ]
@@ -912,9 +914,14 @@ let applyHistory initial hist =
 let filterDisabledGroups initial hist = 
   hist 
   |> List.chunkBy (fun ed -> ed.GroupLabel)
-  |> List.filterWithState (fun doc group ->
-      try true, group |> List.fold apply doc
-      with ConditionCheckFailed _ -> false, doc) initial
+  |> List.mapWithState (fun doc group ->
+      let keep, state = 
+        try true, group |> List.fold apply doc
+        with ConditionCheckFailed _ -> false, doc
+      let ngroup =
+        if keep then group
+        else group |> List.map (fun ed -> { ed with Disabled = true })
+      ngroup, state) initial
   |> List.collect id
 
 let getDependencies ed = 
@@ -923,23 +930,27 @@ let getDependencies ed =
   | Shared(_, Copy(_, src)) -> src :: ed.Dependencies
   | _ -> ed.Dependencies
   
-let filterConflicting modsels eds = 
-  let rec loop acc modsels = function 
-    | [] -> List.rev acc
-    | ed::eds ->
-        // Conflict if any dependency depends on any of the modified locations
-        let conflict = getDependencies ed |> List.exists (fun dep -> 
-          List.exists (fun modsel -> includes dep modsel) modsels)
-        if conflict then loop acc ((getTargetSelector ed)::modsels) eds
-        else loop (ed::acc) modsels eds
-  loop [] modsels eds
+let filterConflicting = 
+  List.mapWithState (fun modsels ed ->
+    // Conflict if any dependency depends on any of the modified locations
+    let conflict = getDependencies ed |> List.exists (fun dep -> 
+      List.exists (fun modsel -> includes dep modsel) modsels)
+    if conflict then { ed with Disabled = true }, (getTargetSelector ed)::modsels
+    else ed, modsels) 
 
-let mergeHistories h1 h2 =
+type ConflictResolution = 
+  | IgnoreConflicts
+  | RemoveConflicting
+
+let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
   let shared, (e1s, e2s) = List.sharedPrefix h1 h2
   let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
 
-  //let e1ModSels = e1s |> List.collect id |> List.collect getDependencies
-  //let e2NonConflict = filterConflicting e1ModSels e2s
+  let e2s = 
+    if crmode = RemoveConflicting then
+      let e1ModSels = e1s |> List.map getTargetSelector
+      filterConflicting e1ModSels e2s
+    else e2s
 
   let e2sAfter = 
     e2s |> List.collect (fun e2 ->

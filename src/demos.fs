@@ -22,7 +22,7 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
-let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
+let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
 
 // Value edits
 let ap s n = mkEd <| Value(ListAppend(s, n))  

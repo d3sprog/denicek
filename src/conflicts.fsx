@@ -1,5 +1,5 @@
 #nowarn "3353"
-#load "utils.fs" "parsec.fs" "doc.fs" "demos.fs" "eval.fs"
+#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "eval.fs" "demos.fs"
 open Tbd
 open Tbd.Doc
 open Tbd.Demos
@@ -135,9 +135,9 @@ for e1 in e1s do
 *)
 
 
-let doc = applyHistory (rcd "div") { Groups = [ opsCore @ opsBudget ] }
+let doc = applyHistory (rcd "div") (opsCore @ opsBudget)
 let evalEds = doc |> Eval.evaluateAll
-let evalDoc = applyHistory (rcd "div") { Groups = [ opsCore @ opsBudget ] @ evalEds.Groups }
+let evalDoc = applyHistory (rcd "div") (opsCore @ opsBudget @ evalEds)
 
 let formatEffect = function
   | ValueEffect tgt -> $"value of {formatSelector tgt}"
@@ -155,9 +155,9 @@ let filterConflicting modsels eds =
   loop [] modsels eds
 
 
-let evalEdsFilter = filterConflicting [!/"/speakers"] (List.collect id evalEds.Groups)
+let evalEdsFilter = filterConflicting [!/"/speakers"] evalEds
 
-for e in List.collect id evalEds.Groups do
+for e in evalEds do
   printfn $""
   printfn $"  * {formatEdit e}"
   printfn $"    modifies: {formatEffect (getEffect e)}"
@@ -168,7 +168,6 @@ for e in evalEdsFilter do
   printfn $"  * {formatEdit e}"
   printfn $"    modifies: {formatEffect (getEffect e)}"
   printfn $"    depends: {List.map formatSelector (getDependencies e)}"
-
 
 
 for e in addSpeakerOps do 

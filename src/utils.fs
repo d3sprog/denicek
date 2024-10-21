@@ -21,6 +21,12 @@ module List =
       nstate, if res then v::acc else acc) (init, []) 
     |> snd |> List.rev 
 
+  let mapWithState f init list = 
+    list |> List.fold (fun (state, acc) v -> 
+      let res, nstate = f state v
+      nstate, res::acc) (init, []) 
+    |> snd |> List.rev 
+
   // filterWithState (fun i v -> 
   //   if i < 3 && v % 2 = 0 then true, i+1
   //   else false, i) 0 [10 .. 20]
