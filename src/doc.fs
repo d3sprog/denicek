@@ -379,7 +379,7 @@ let withSelectors sels ed =
 
 let tryWithSelectors sels ed = 
   try Some(withSelectors sels ed)
-  with :? System.ArgumentException -> None
+  with _ -> None
 
 let mapSelectors f ed = 
   withSelectors (List.map f (getSelectors ed)) ed

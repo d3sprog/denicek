@@ -278,15 +278,11 @@ module Document =
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" ->
                 yield id.Substring(1) =!> fun _ e ->
                   e.preventDefault()
-                  // Add saved edits to the original document state and merge them with 
-                  // current state so that they can be updated to match new document schema
-                  // TODO: trigger(DocumentEvent(Evaluate(true)))
                   let baseeds = 
                     takeByHash histhash state.DocumentState.Edits 
                     |> Option.defaultValue state.DocumentState.Edits
                   trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
-                  // TODO: trigger(DocumentEvent(Evaluate(true)))
-                  // trigger(DocumentEvent(MoveEditIndex(System.Int32.MaxValue)))
+                  trigger(DocumentEvent(Evaluate(true)))
             | _ -> ()
       | _ -> ()
       if tag = "input" then 
@@ -1310,10 +1306,10 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base"; "todo-remove" ]
+  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "counter-inc" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase; todoRemove |] ->
+  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase; todoRemove; counterInc |] ->
     let demos = 
       [ 
         "conf2", readJson confBase, [
@@ -1329,12 +1325,11 @@ async {
           "table", opsCore @ refactorListOps
           "budget", opsCore @ opsBudget 
         ]
-        //"??", fromOperationsList (mergeHistories [pbdCore @ refactorListOps]  [pbdCore @ pbdAddFirstSpeaker] ).Groups, []
         "todo", readJson todoBase, [
           "remove", readJsonOps todoRemove 
         ]
         "empty", readJson "[]", []
-        "counter", fromOperationsList opsBaseCounter, []
+        "counter", readJson counterInc, []
         ]
     trigger (DemoEvent(LoadDemos demos))
   | _ -> failwith "wrong number of demos" }

@@ -84,8 +84,8 @@ let evaluateBuiltin op (args:Map<string, Node>)=
           Primitive(Number(f (List.map (getEvaluatedResult >> snd) nds))), [(Field "arg")::path]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
-  | "plus" | "mul" -> 
-      let f = (dict [ "plus",(+); "mul",(*) ]).[op]
+  | "plus" | "mul" | "minus" -> 
+      let f = (dict [ "plus",(+); "mul",(*); "minus",(-) ]).[op]
       match args.TryFind "left", args.TryFind "right" with
       | Some(EvaluatedResult(p1, Primitive(Number n1))), Some(EvaluatedResult(p2, Primitive(Number n2))) -> 
           Primitive(Number(f n1 n2)), [(Field "left")::p1; (Field "right")::p2]

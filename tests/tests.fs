@@ -1,13 +1,14 @@
 ﻿#if INTERACTIVE
 #nowarn "3353"
 #I "../src"
-#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "demos.fs"
+#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "eval.fs" "demos.fs"
 let equals a b = a = b
 #else
 module Tbd.Tests
 open Expecto
 let equals a b = Expect.equal a b "Should equal"
 #endif
+open Tbd
 open Tbd.Doc
 open Tbd.Demos
 
@@ -35,29 +36,29 @@ let evalTests =
     }
   ]
 *)
-(*
+
 [<Tests>]
 let tests =
   testList "interaction" [    
     test "counter can increment state" {
       let ops1 = opsBaseCounter 
-      let doc1 = applyAll ops1
+      let doc1 = apply (rcd "div") ops1
       select [Field "counter"; Field "value"] doc1 |> equals [ Primitive(Number 0.0) ]
       
       let ops2 = ops1 @ opsCounterInc
-      let doc2 = applyAll ops2
-      let ops3 = ops2 @ evaluateDoc doc2
-      let doc3 = applyAll ops3
-      select [Field "counter"; Field "value"] doc3 |> equals [ Primitive(Number 1.0) ]
+      let doc2 = apply (rcd "div") ops2
+      let ops3 = ops2 @ Eval.evaluateDoc doc2
+      let doc3 = apply (rcd "div") ops3
+      select [Field "counter"; Field "value"; Field "result"] doc3 |> equals [ Primitive(Number 1.0) ]
 
       let ops4 = ops3 @ opsCounterInc
-      let doc4 = applyAll ops4
-      let ops5 = ops4 @ evaluateDoc doc4
-      let doc5 = applyAll ops5
-      select [Field "counter"; Field "value"] doc5 |> equals [ Primitive(Number 2.0) ]
+      let doc4 = apply (rcd "div") ops4
+      let ops5 = ops4 @ Eval.evaluateDoc doc4
+      let doc5 = apply (rcd "div") ops5
+      select [Field "counter"; Field "value"; Field "result"] doc5 |> equals [ Primitive(Number 2.0) ]
     }
   ]
-  *)
+  
 [<Tests>]
 let basicmergeHistoriesTests =
   testList "basic merging" [
@@ -121,14 +122,13 @@ let complexmergeHistoriesTests =
       doc1 |> equals doc2
     }
 
-    (*
     test "adding budget mergeHistoriess with refactoring" {
       let ops1 = mergeHistories (opsCore @ refactorListOps) (opsCore @ opsBudget)
       let doc1 = apply (rcd "div") ops1
       let ops2 = mergeHistories (opsCore @ opsBudget) (opsCore @ refactorListOps)
       let doc2 = apply (rcd "div") ops2
       doc1 |> equals doc2 
-    }*)
+    }
   ]
 
 

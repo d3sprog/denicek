@@ -235,7 +235,7 @@ let opsBaseCounter =
     add [] "dec" (nds "v" "button" "Decrement")
   ]
 
-let opsCounterInc() = 
+let opsCounterInc = 
   [
     wrS (!/ "/counter/value") "value" "x-formula"
     uidS (!/ "/counter/value") "value" "right"
@@ -243,7 +243,7 @@ let opsCounterInc() =
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
-let opsCounterDec() = 
+let opsCounterDec = 
   [
     wrS (!/ "/counter/value") "value" "x-formula"
     uidS (!/ "/counter/value") "value" "right"
@@ -251,12 +251,12 @@ let opsCounterDec() =
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
-let opsCounterHndl() = 
+let opsCounterHndl = 
   [ yield add (!/ "/inc") "click" (lst "x-event-handler")
-    for op in opsCounterInc() ->
+    for op in opsCounterInc ->
       ap (!/ "/inc/click") (Represent.represent op) 
     yield add (!/ "/dec") "click" (lst "x-event-handler")
-    for op in opsCounterDec() ->
+    for op in opsCounterDec ->
       ap (!/ "/dec/click") (Represent.represent op) ]
 
 
