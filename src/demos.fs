@@ -27,7 +27,7 @@ let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false 
 // Value edits
 let ap s n = mkEd <| Value(ListAppend(s, n))  
 let apf s sel = mkEd <| Value(ListAppendFrom(s, sel))  
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn))  
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn, None))  
 let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
 
 // Shared structural
@@ -91,7 +91,7 @@ let addSpeakerViaTempOps =
 let fixSpeakerNameOps = 
   [
     ed (!/ "/speakers/2/value") "rename Jean" <| function 
-      | (String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
+      | (_, String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
       | _ -> failwith "fixSpeakerNameOps - wrong primitive"
   ]
 
@@ -112,10 +112,10 @@ let refactorListOps =
 
     cpS (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
     ed (!/ "/speakers/body/*/name/contents") "get name" <| function 
-      | String s -> String(s.Substring(0, s.IndexOf(',')))
+      | _, String s -> String(s.Substring(0, s.IndexOf(',')))
       | _ -> failwith "refactorListOps - invalid primitive"
     ed (!/ "/speakers/body/*/email/contents") "get email" <| function
-      | String s -> String(s.Substring(s.IndexOf(',')+1).Trim())
+      | _, String s -> String(s.Substring(s.IndexOf(',')+1).Trim())
       | _ -> failwith "refactorListOps - invalid primitive"
   ]
 

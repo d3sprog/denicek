@@ -22,7 +22,7 @@ let rec matches nd pattern =
             | _ -> nd)
           if not matched then None else
           Some { nd with Expression = Record(ntag, nty, newNds) }
-      | _ ->
+      | _ ->  
           for pnd in pnds do if pnd.ID = "*" then failwith "Only one '*' ID allowed in a pattern!" 
           let pndsLookup = Map.ofList [ for pnd in pnds -> pnd.ID, pnd ]
           let mutable pndsMatched = Map.ofList [ for pnd in pnds -> pnd.ID, false ]

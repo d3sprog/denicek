@@ -48,13 +48,13 @@ let tests =
       
       let ops2 = ops1 @ opsCounterInc
       let doc2 = apply (rcd "div") ops2
-      let ops3 = ops2 @ Eval.evaluateDoc doc2
+      let ops3 = ops2 @ Eval.evaluateOne doc2
       let doc3 = apply (rcd "div") ops3
       select [Field "counter"; Field "value"; Field "result"] doc3 |> equals [ Primitive(Number 1.0) ]
 
       let ops4 = ops3 @ opsCounterInc
       let doc4 = apply (rcd "div") ops4
-      let ops5 = ops4 @ Eval.evaluateDoc doc4
+      let ops5 = ops4 @ Eval.evaluateOne doc4
       let doc5 = apply (rcd "div") ops5
       select [Field "counter"; Field "value"; Field "result"] doc5 |> equals [ Primitive(Number 2.0) ]
     }

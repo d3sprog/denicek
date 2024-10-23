@@ -39,6 +39,7 @@ module P =
   let any = pred (Fixed "?") (fun _ -> true)
   let char c = pred (Fixed (string c)) ((=) c)
   let nonTagChar = pred (Fixed "?") (fun c -> c <> '<' && c <> '[' && c <> ']' && c <> '>')
+  let nonSlashChar = pred (Fixed "?") (fun c -> c <> '/')
 
   let getTemplateRaw p = 
     match p None with Partial t -> t | _ -> failwith "getTemplate: Expected partial"
@@ -145,6 +146,9 @@ module P =
 
   let nonTag = 
     oneOrMore nonTagChar |> map (fun cs -> System.String(Array.ofSeq cs))
+
+  let nonSlash = 
+    oneOrMore nonSlashChar |> map (fun cs -> System.String(Array.ofSeq cs))
 
   let str = 
     oneOrMore any |> map (fun cs -> System.String(Array.ofSeq cs))

@@ -115,14 +115,14 @@ let evaluateRaw doc =
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
 
-let evaluateDoc doc =
+let evaluateOne doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
   [ for ed, deps in evaluateRaw doc -> 
       { Disabled = false; Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
 let evaluateAll doc = 
   let rec loop doc = seq {
-    let edits = evaluateDoc doc
+    let edits = evaluateOne doc
     yield! edits
     let ndoc = applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }

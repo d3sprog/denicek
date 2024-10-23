@@ -13,10 +13,14 @@ open Tbd.Demos
 
 type DocumentState = 
   { Initial : Node 
-    Edits : Edit list
-    EditIndex : int 
-    CurrentDocument : Node 
+    DocumentEdits : Edit list
+    EvaluatedEdits : Edit list
+    EvaluatedBaseHash : int
+    DisplayEditIndex : int 
+    // The following are computed by 'updateDocument'
+    DisplayEdits : Edit list
     FinalHash : int
+    CurrentDocument : Node 
     FinalDocument : Node }
 
 // (2) Edit history panel - state
@@ -146,8 +150,8 @@ module Helpers =
   let (|InteractionNode|_|) = function
     | Record("x-interaction", 
         Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
-        Patterns.ListFind "historyhash" (Primitive(Number hash)) ) ->
-        Some(int hash, List.map Represent.unrepresent ops)
+        Patterns.ListFind "historyhash" (Primitive(String hash)) ) ->
+          Some(System.Convert.ToInt32(hash, 16), List.map Represent.unrepresent ops)
     | _ -> None
 
   let getSavedInteractions doc = 
@@ -162,11 +166,11 @@ module Helpers =
     h?a [
       "href" => "javascript:;"
       "click" =!> fun _ _ -> 
-          match takeByHash hist state.DocumentState.Edits with 
+          match takeUntilHash hist state.DocumentState.DisplayEdits with 
           | Some eds -> trigger(DocumentEvent(SetEditIndex(eds.Length - 1)))
           | _ -> ()
     ] [
-      text (string hist)
+      text (hist.ToString("x"))
     ]
 
   let renderSelector state trigger sel = 
@@ -278,9 +282,8 @@ module Document =
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" ->
                 yield id.Substring(1) =!> fun _ e ->
                   e.preventDefault()
-                  let baseeds = 
-                    takeByHash histhash state.DocumentState.Edits 
-                    |> Option.defaultValue state.DocumentState.Edits
+                  let baseeds = takeUntilHash histhash state.DocumentState.DocumentEdits 
+                  let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
                   trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
                   trigger(DocumentEvent(Evaluate(true)))
             | _ -> ()
@@ -296,7 +299,7 @@ module Document =
             else
               Value(RecordAdd(path, "@value", Primitive(String el.value)))
           let edit = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
-          trigger(DocumentEvent(MergeEdits(state.DocumentState.Edits @ [ edit ])))
+          trigger(DocumentEvent(MergeEdits(state.DocumentState.DocumentEdits @ [ edit ])))
     ]
 
     /// Render source code or preview, depending on what's selected
@@ -359,27 +362,35 @@ module Document =
     
 
   let update appstate state = function
+    | UndoLastEdit when not (List.isEmpty state.EvaluatedEdits) ->
+        let nedits = state.EvaluatedEdits |> List.truncate (state.EvaluatedEdits.Length - 1) 
+        { state with EvaluatedEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }        
+
     | UndoLastEdit ->
-        let nedits = state.Edits |> List.truncate (state.Edits.Length - 1) 
-        { state with Edits = nedits; EditIndex = min state.EditIndex (nedits.Length - 1) }
-    
+        let nedits = state.DocumentEdits |> List.truncate (state.DocumentEdits.Length - 1) 
+        { state with DocumentEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }
+
     | Evaluate all -> 
-        let edits = 
-          if all then state.FinalDocument |> Eval.evaluateAll
-          else state.FinalDocument |> Eval.evaluateDoc
-        let nedits = state.Edits @ edits 
-        { state with Edits = nedits; EditIndex = nedits.Length-1 }
+        let editsAfterEval = takeAfterHash state.EvaluatedBaseHash state.DocumentEdits |> Option.get
+        let updatedEvalEdits = pushEditsThrough RemoveConflicting editsAfterEval state.EvaluatedEdits
+        let relevantEvalEdits = updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
+        let extraEval = if all then Eval.evaluateAll state.FinalDocument else Eval.evaluateOne state.FinalDocument
+        let evalEds = relevantEvalEdits @ extraEval
+        //for ed in evalEds do printfn $"{formatEdit ed} ({ed.Disabled})"
+        { state with 
+            EvaluatedEdits = evalEds
+            EvaluatedBaseHash = state.FinalHash; DisplayEditIndex = System.Int32.MaxValue }
   
     | MergeEdits edits ->
         let edits = filterDisabledGroups state.Initial edits
-        let state = { state with Edits = mergeHistories state.Edits edits } 
-        { state with EditIndex = state.Edits.Length-1 }
+        let state = { state with DocumentEdits = mergeHistories IgnoreConflicts state.DocumentEdits edits } 
+        { state with DisplayEditIndex = state.DocumentEdits.Length + state.EvaluatedEdits.Length - 1 }
   
     | MoveEditIndex d ->
-        { state with EditIndex = max 0 (min (state.Edits.Length - 1) (state.EditIndex + d)) }
+        { state with DisplayEditIndex = max 0 (min (state.DisplayEdits.Length - 1) (state.DisplayEditIndex + d)) }
 
     | SetEditIndex i ->
-        { state with EditIndex = i }
+        { state with DisplayEditIndex = i }
 
 // --------------------------------------------------------------------------------------
 // Edit history panel
@@ -388,9 +399,9 @@ module Document =
 module History = 
   let update appstate state = function
     | ExtendSelection(dir) ->
-        let nsel = set [ appstate.DocumentState.EditIndex; appstate.DocumentState.EditIndex+dir ]
+        let nsel = set [ appstate.DocumentState.DisplayEditIndex; appstate.DocumentState.DisplayEditIndex + dir ]
         let other = 
-          Seq.initInfinite (fun i -> appstate.DocumentState.EditIndex-(i*dir)) 
+          Seq.initInfinite (fun i -> appstate.DocumentState.DisplayEditIndex-(i*dir)) 
           |> Seq.takeWhile (state.SelectedEdits.Contains)
           |> set
         { state with SelectedEdits = nsel + other  }
@@ -406,7 +417,7 @@ module History =
     | SelectNone ->
         { state with SelectedEdits = set [] }
     | SelectAll ->
-        { state with SelectedEdits = set [ 0 .. appstate.DocumentState.Edits.Length - 1 ] }
+        { state with SelectedEdits = set [ 0 .. appstate.DocumentState.DisplayEdits.Length - 1 ] }
 
 
   let rec formatNode state trigger (nd:Node) = 
@@ -430,7 +441,7 @@ module History =
           yield text "}"
         ]
 
-  let renderEdit state trigger (i, ed) = 
+  let renderEdit state trigger (i, (histhash, ed)) = 
     let render sk n fa sel args = 
       h?li [] [ 
         h?input [ 
@@ -441,34 +452,38 @@ module History =
             trigger(HistoryEvent(ToggleEdit(i, chk)))
         ] []
         h?a [ 
-          "class" => "" +? (i = state.DocumentState.EditIndex, "sel") +? (ed.Disabled, "disabled")
+          "class" => "" +? (i = state.DocumentState.DisplayEditIndex, "sel") +? (ed.Disabled, "disabled")
           "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(DocumentEvent(SetEditIndex i))
         ] [ 
           yield h?i [ "class" => "fa " + fa ] [] 
           yield text " "
           yield h?strong [] [ text (if sk = ValueKind then "v." + n else "s." + n) ]
-          yield text " at "
+          yield text " "
           yield Helpers.renderSelector state trigger sel
-          yield text " with ("
-          for i, (k, v) in Seq.indexed args do
-            if i <> 0 then yield text ", "
-            yield text $"{k} = "
-            yield v
+          yield text " ("
+          yield Helpers.renderHistoryHash state trigger histhash
           yield text ")"
-          if ed.Dependencies <> [] then 
-            yield h?br [] [] 
-            yield text "deps=("
-            for i, dep in Seq.indexed ed.Dependencies do
+          if i = state.DocumentState.DisplayEditIndex then
+            yield h?br [] []
+            for i, (k, v) in Seq.indexed args do
               if i <> 0 then yield text ", "
-              yield Helpers.renderSelector state trigger dep
-            yield text ")"
+              yield text $"{k} = "
+              yield v
+            if ed.Dependencies <> [] then 
+              yield h?br [] [] 
+              yield text "deps=("
+              for i, dep in Seq.indexed ed.Dependencies do
+                if i <> 0 then yield text ", "
+                yield Helpers.renderSelector state trigger dep
+              yield text ")"
         ]
       ]
     let renderv = render ValueKind
     match ed.Kind with 
     | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger nd]
     | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderSelector state trigger src]
-    | Value(PrimitiveEdit(sel, fn)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
+    | Value(PrimitiveEdit(sel, fn, None)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
+    | Value(PrimitiveEdit(sel, fn, Some arg)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
     | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger nd; "fld", text f]
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
     | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
@@ -498,7 +513,7 @@ module History =
                   yield text ")"
                 ]
                 yield h?ol [] [
-                  for ied in Seq.rev (Seq.indexed ops) -> 
+                  for ied in Seq.rev (Seq.indexed (withHistoryHash histhash ops)) -> 
                     renderEdit state trigger ied
                 ]
               ]
@@ -518,10 +533,9 @@ module History =
           text " | "
           h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectAll) ] [ text "all" ]
         ]
-        yield h?ol [] [             
-          let groups = 
-            state.DocumentState.Edits |> List.indexed |> List.rev  
-            |> List.chunkBy (fun (_, ed) -> ed.GroupLabel)
+        yield h?ol [] [    
+          let withHashAndIdx = withHistoryHash 0 state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
+          let groups = withHashAndIdx |> List.chunkBy (fun (_, (_, ed)) -> ed.GroupLabel)
           for ieds in groups do
             for ied in ieds do
               yield renderEdit state trigger ied
@@ -746,7 +760,7 @@ module Commands =
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let recordedEds = 
           [ for i in Seq.sort state.HistoryState.SelectedEdits ->
-              state.DocumentState.Edits.[i] ]
+              state.DocumentState.DisplayEdits.[i] ]
         yield command VK "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
@@ -754,7 +768,7 @@ module Commands =
                   Record("x-saved-interactions", [])))
               yield Value(RecordAdd([Field "saved-interactions"], fld, 
                 Record("x-interaction", [ 
-                  "historyhash", Primitive(Number state.DocumentState.FinalHash); 
+                  "historyhash", Primitive(String(state.DocumentState.FinalHash.ToString("x"))); 
                   "interactions", List("x-interaction-list", []) ])))
               for op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
@@ -842,8 +856,8 @@ module Commands =
       if isString nd || isNumber nd then
         for t in transformations do
           yield command sk "las la-at" (t.Label + lbl)
-            ( P.char '@' <*> P.keyword t.Key <*> pAst |> mapEd (fun _ ->
-              Value(PrimitiveEdit(sel, t.Key)) )) 
+            ( P.char '@' <*> P.keyword t.Key <*> pAst <*>> t.Args |> mapEd (fun arg ->
+              Value(PrimitiveEdit(sel, t.Key, arg)) )) 
               
     // Saved interactions - generate nested completions
     // (one for applying to cursor, one for applying to all marked)
@@ -1171,14 +1185,20 @@ module Demos =
 // --------------------------------------------------------------------------------------
 
 let updateDocument docState = 
+  let evalEdits = 
+    if List.isEmpty docState.EvaluatedEdits then [] else
+    match takeUntilHash docState.EvaluatedBaseHash docState.DocumentEdits with 
+    | Some ee -> ee @ docState.EvaluatedEdits
+    | None -> failwith "updateDocument: EvaluatedBaseHash not found"
+  let displayEdits = mergeHistories RemoveConflicting docState.DocumentEdits evalEdits
+  let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
+  let currentDoc = displayEdits.[0 .. displayEditIndex] |> applyHistory docState.Initial  
+  let finalDoc = displayEdits |> applyHistory docState.Initial
+  printfn $"Display: {displayEditIndex}/{displayEdits.Length}, Doc: {docState.DocumentEdits.Length}, Eval: {docState.EvaluatedEdits.Length} (merging {evalEdits.Length})"
   { docState with 
-      CurrentDocument = 
-        docState.Edits.[0 .. docState.EditIndex] |> applyHistory docState.Initial  
-      FinalHash = 
-        hashEditList docState.Edits
-      FinalDocument = 
-        docState.Edits |> applyHistory docState.Initial }
-
+      DisplayEdits = displayEdits; DisplayEditIndex = displayEditIndex
+      CurrentDocument = currentDoc; FinalDocument = finalDoc 
+      FinalHash = hashEditList docState.DocumentEdits }
 
 let rec tryEnterCommand trigger state = 
   match Commands.parseCommand state with
@@ -1186,7 +1206,7 @@ let rec tryEnterCommand trigger state =
       // If we get multiple groups of edits, we append each to the end of the current
       // list of edits and merge them - otherwise they interact badly
       // (e.g. if we remove items at index 0,1,2..., the first edit changes indices)
-      let addToCurrent eds = state.DocumentState.Edits @ eds
+      let addToCurrent eds = state.DocumentState.DocumentEdits @ eds
       let histories = List.map addToCurrent eds
       let merge docState eds = Document.update state docState (MergeEdits(eds))
       let docState = histories |> List.fold merge state.DocumentState
@@ -1243,7 +1263,7 @@ let render trigger state =
       yield! History.renderHistory trigger state
     ]
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
-      let nodes = List.map Represent.represent state.DocumentState.Edits
+      let nodes = List.map Represent.represent state.DocumentState.DocumentEdits
       text (Serializer.nodesToJsonString nodes)
     ]
   ]
@@ -1255,10 +1275,10 @@ let render trigger state =
 
 let fromOperationsList ops = 
   let init = rcd "div"
-  { DocumentState = { Initial = init; Edits = ops; EditIndex = (List.length ops) - 1; 
+  { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
+      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; EvaluatedBaseHash = 0;
       CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
     ViewState = { CursorLocation = [], Before; CursorSelector = []; 
-      // Markers = []; GeneralizedMarkersSelector = None; 
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
     CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
       SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
@@ -1313,32 +1333,29 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "conf-base";"conf-add";"conf-table"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "counter-inc" ]
+  let demos = [ "conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "counter-inc" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| confBase; confAdd; confTable; helloBase; helloSaved; todoBase; todoRemove; counterInc |] ->
+  | [| confBase; confAdd; confRename; confTable; confBudget; helloBase; helloSaved; todoBase; todoRemove; counterInc |] ->
     let demos = 
       [ 
         "conf2", readJson confBase, [
           "add", readJsonOps confAdd 
+          "rename", readJsonOps confRename
           "table", readJsonOps confTable 
+          "budget", readJsonOps confBudget
         ] 
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]
+        (*
         "conf", fromOperationsList opsCore, [
           "ada", opsCore @ addSpeakerOps
           "rename", opsCore @ fixSpeakerNameOps
           "table", opsCore @ refactorListOps
           "budget", opsCore @ opsBudget 
         ]
-        "?1", fromOperationsList (opsCore @ opsBudget), []
-        "?2", 
-          (mergeHistories
-            (opsCore @ opsBudget @ addSpeakerOps)
-            ( let doc = applyHistory (rcd "div") (opsCore @ opsBudget)
-              opsCore @ opsBudget @ Eval.evaluateAll doc ))
-          |> fromOperationsList, []
+        *)
         "todo", readJson todoBase, [
           "remove", readJsonOps todoRemove 
         ]

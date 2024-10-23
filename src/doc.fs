@@ -1,5 +1,7 @@
 module Tbd.Doc
 open Tbd
+open Tbd.Parsec
+open Tbd.Parsec.Operators
 
 type Selector = 
   // Applicable to lists only
@@ -21,21 +23,24 @@ type Node =
   | Primitive of Primitive
   | Reference of Selectors
 
-type Transformation = { Key : string; Label : string; Function : Primitive -> Primitive }
+type Transformation = { Key : string; Label : string; Function : string option * Primitive -> Primitive; Args : Parser<string option> }
 
 let transformations = 
-  [ { Key = "take-first"; Label = "Take first letter of a string"
-      Function = function String s -> String(s.Substring(0, 1)) | p -> p }
-    { Key = "skip-first"; Label = "Skip first letter of a string"
-      Function = function String s -> String(s.Substring(1)) | p -> p }
-    { Key = "before-comma"; Label = "Take substring before comma"
-      Function = function String s when s.Contains(",") -> String(s.Substring(0, s.IndexOf(","))) | p -> p }
-    { Key = "after-comma"; Label = "Take substring after comma"
-      Function = function String s when s.Contains(",") -> String(s.Substring(s.IndexOf(",")+1)) | p -> p }
-    { Key = "upper"; Label = "Turn string into uppercase"
-      Function = function String s -> String(s.ToUpper()) | p -> p }
-    { Key = "lower"; Label = "Turn string into lowercase"
-      Function = function String s -> String(s.ToLower()) | p -> p }
+  [ { Key = "take-first"; Label = "Take first letter of a string"; Args = P.unit None
+      Function = function _, String s -> String(s.Substring(0, 1)) | _, p -> p }
+    { Key = "skip-first"; Label = "Skip first letter of a string"; Args = P.unit None
+      Function = function _, String s -> String(s.Substring(1)) | _, p -> p }
+    { Key = "before-comma"; Label = "Take substring before comma"; Args = P.unit None
+      Function = function _, String s when s.Contains(",") -> String(s.Substring(0, s.IndexOf(","))) | _, p -> p }
+    { Key = "after-comma"; Label = "Take substring after comma"; Args = P.unit None
+      Function = function _, String s when s.Contains(",") -> String(s.Substring(s.IndexOf(",")+1)) | _, p -> p }
+    { Key = "upper"; Label = "Turn string into uppercase"; Args = P.unit None
+      Function = function _, String s -> String(s.ToUpper()) | _, p -> p }
+    { Key = "lower"; Label = "Turn string into lowercase"; Args = P.unit None
+      Function = function _, String s -> String(s.ToLower()) | _, p -> p }
+    { Key = "replace"; Label = "Replace substring using"; 
+      Args = P.char ' ' <*>> P.hole "old" P.nonSlash <<*> P.char '/' <*> P.hole "new" P.nonSlash |> P.map (fun (o, n) -> Some(o + "/" + n))
+      Function = function Some repl, String s -> (let parts = repl.Split('/') in String(s.Replace(parts.[0], parts.[1]))) | _, p -> p }
   ]
 
 let transformationsLookup = System.Collections.Generic.Dictionary<_, _>() 
@@ -164,7 +169,7 @@ type SharedEdit =
   | RecordDelete of Selectors * string
 
 type ValueEdit = 
-  | PrimitiveEdit of Selectors * string
+  | PrimitiveEdit of Selectors * string * string option
   | ListAppend of Selectors * Node
   | ListAppendFrom of Selectors * Selectors
   | RecordAdd of Selectors * string * Node
@@ -203,8 +208,10 @@ let formatString (s:string) =
 let formatEdit ed = 
   let fmt kvd kind args = $"""{formatSharedKind kind}.{kvd}({ String.concat "," args })"""
   match ed.Kind with
-  | Value(PrimitiveEdit(sel, op)) -> 
+  | Value(PrimitiveEdit(sel, op, None)) -> 
       fmt "primitive" ValueKind [formatSelector sel; formatString op]
+  | Value(PrimitiveEdit(sel, op, Some arg)) -> 
+      fmt "primitive" ValueKind [formatSelector sel; formatString op; formatString arg]
   | Value(ListAppend(sel, nd)) -> 
       fmt "listAppend" ValueKind [formatSelector sel; formatNode nd]
   | Value(ListAppendFrom(sel, src)) -> 
@@ -296,7 +303,7 @@ let getTargetSelector ed =
   | Shared(_, ListReorder(s, _)) 
   | Shared(_, UpdateTag(s, _, _)) 
   | Shared(_, Copy(s, _))
-  | Value(PrimitiveEdit(s, _)) 
+  | Value(PrimitiveEdit(s, _, _)) 
   | Value(Check(s, _)) -> s
   // Add selector to the end, pointing at the affected node
   | Shared(_, WrapList(_, s)) 
@@ -317,7 +324,7 @@ let withTargetSelector tgt ed =
   | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(tgt, m)) |> ret
   | Shared(sk, UpdateTag(_, t1, t2)) -> Shared(sk, UpdateTag(tgt, t1, t2)) |> ret
   | Shared(sk, Copy(_, s)) -> Shared(sk, Copy(tgt, s)) |> ret
-  | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(tgt, f)) |> ret
+  | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(tgt, f, arg)) |> ret
   | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
   // Remove added selector, pointing at the affected node
   | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.dropLast tgt)) |> ret
@@ -342,7 +349,7 @@ let getSelectors ed =
   // Selector is already pointing directly at the affected node
   | Shared(_, ListReorder(s, _)) 
   | Shared(_, UpdateTag(s, _, _)) 
-  | Value(PrimitiveEdit(s, _)) 
+  | Value(PrimitiveEdit(s, _, _)) 
   | Value(Check(s, _)) -> [s]
   | Shared(_, Copy(s1, s2)) -> [s1; s2]
   // Pointing at a node that will be modified by the edit
@@ -364,7 +371,7 @@ let withSelectors sels ed =
   // Selector is already pointing directly at the affected node
   | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(List.exactlyOne sels, m)) |> ret
   | Shared(sk, UpdateTag(_, t1, t2)) -> Shared(sk, UpdateTag(List.exactlyOne sels, t1, t2) ) |> ret
-  | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(List.exactlyOne sels, f)) |> ret
+  | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(List.exactlyOne sels, f, arg)) |> ret
   | Value(Check(_, cond)) -> Value(Check(List.exactlyOne sels, cond)) |> ret
   | Shared(sk, Copy(_, _)) -> Shared(sk, Copy(List.head sels, List.exactlyOne (List.tail sels))) |> ret
   // Pointing at a node that will be modified by the edit
@@ -553,10 +560,10 @@ let apply doc edit =
       | cond, nd -> raise (ConditionCheckFailed $"apply.Check Condition ({cond}) failed ({nd})")
       doc
 
-  | Value(PrimitiveEdit(sel, f)) ->
+  | Value(PrimitiveEdit(sel, f, arg)) ->
       replace (fun p el -> 
         match el with 
-        | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] v))
+        | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
   | Value(ListAppend(sel, nd)) ->
@@ -813,7 +820,8 @@ let updateSelectors e1 e2 =
           if conflict then failwith $"CONFLICT!!!\ne1={e1}\ne2={e2}"
           else [e1]
   
-  | Shared(StructuralKind, RecordDelete _) -> failwith "updateSelectors - Detect conflicts - record delete"
+  | Shared(StructuralKind, RecordDelete _) -> 
+      [e1] // failwith "updateSelectors - Detect conflicts - record delete"
 
 
 // Assuming 'e1' and 'e2' happened independently, we want to modify
@@ -900,13 +908,30 @@ let moveBefore ctx e1 e2 =
 let hashEditList eds = 
   eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) 0
 
-let takeByHash hashToFind eds = 
+let withHistoryHash initial eds = 
+  let hashes = eds |> List.scan (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
+  List.zip (List.tail hashes) eds
+
+let takeUntilHash hashToFind eds = 
   let mutable hashSoFar = 0
   let res = eds |> List.takeWhile (fun edit -> 
     if hashSoFar = hashToFind then false else
     hashSoFar <- hash (hashSoFar, edit) 
     true )
   if hashSoFar = hashToFind then Some res else None
+
+let takeAfterHash hashToFind eds = 
+  let mutable hashSoFar = 0
+  let res = eds |> List.skipWhile (fun edit -> 
+    if hashSoFar = hashToFind then false else
+    hashSoFar <- hash (hashSoFar, edit) 
+    true )
+  if hashSoFar = hashToFind then Some res else None
+
+// let eds = ["a"; "b"; "c"]  
+// withHistoryHash 0 eds
+// takeUntilHash -1539880934 eds
+// takeAfterHash -1539880934 eds
 
 let applyHistory initial hist =
   hist |> List.fold apply initial
@@ -942,35 +967,32 @@ type ConflictResolution =
   | IgnoreConflicts
   | RemoveConflicting
 
-let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
-  let shared, (e1s, e2s) = List.sharedPrefix h1 h2
+let pushEditsThrough crmode e1s e2s = 
   let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
-
   let e2s = 
     if crmode = RemoveConflicting then
       let e1ModSels = e1s |> List.map getTargetSelector
       filterConflicting e1ModSels e2s
     else e2s
+  e2s |> List.collect (fun e2 ->
+      //printfn $"Move edit e2: {formatEdit e2}"
+      // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
+      // (caveat is that the operation can turn it into multiple edits)
+      let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
+      let res = 
+        List.fold (fun e2 e1 -> 
+          //printfn $"    - after e1: {formatEdit e1}"
+          //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
+          let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
+          ctx <- nctx
+          e2s ) [e2] e1s 
+      let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
+      //printfn $"""    = [{String.concat ", " (List.map formatEdit res)}]"""
+      res )         
 
-  let e2sAfter = 
-    e2s |> List.collect (fun e2 ->
-        //printfn $"Move edit e2: {formatEdit e2}"
-        // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
-        // (caveat is that the operation can turn it into multiple edits)
-        let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
-        let res = 
-          List.fold (fun e2 e1 -> 
-            //printfn $"    - after e1: {formatEdit e1}"
-            //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
-            let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
-            ctx <- nctx
-            e2s ) [e2] e1s 
-        let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
-        //printfn $"""    = [{String.concat ", " (List.map formatEdit res)}]"""
-        res )         
-  //printfn "MERGE HISTORIES"
-  //printfn "Before transform: %A" (List.mapNested formatEdit e2s)
-  //printfn "After transform: %A" (List.mapNested formatEdit e2sAfter)
+let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
+  let shared, (e1s, e2s) = List.sharedPrefix h1 h2
+  let e2sAfter = pushEditsThrough crmode e1s e2s
   shared @ e1s @ e2sAfter 
 
 

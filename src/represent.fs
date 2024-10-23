@@ -78,8 +78,10 @@ let unrepresent nd =
       Value(RecordAdd(unrepresentSel sel, f, nd)) |> ret
   | Record("x-edit-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
       Value(Check(unrepresentSel tgt, unrepresentCond cond)) |> ret
+  | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op & Finds "arg" arg)) ->
+      Value(PrimitiveEdit(unrepresentSel tgt, op, Some arg)) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
-      Value(PrimitiveEdit(unrepresentSel tgt, op)) |> ret
+      Value(PrimitiveEdit(unrepresentSel tgt, op, None)) |> ret
   // Shared edits
   | Record("x-edit-wraprec", Lookup(Findsk sk & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       Shared(sk, WrapRecord(tag, id, unrepresentSel target)) |> ret
@@ -112,8 +114,10 @@ let represent op =
       rcd "x-edit-add" [ "target", representSel target; "field", ps f; "node", nd ]
   | Value(Check(target, cond)) -> 
       rcd "x-edit-check" [ "target", representSel target; "cond", representCond cond ]
-  | Value(PrimitiveEdit(target, op)) ->
+  | Value(PrimitiveEdit(target, op, None)) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op ]
+  | Value(PrimitiveEdit(target, op, Some arg)) ->
+      rcd "x-edit-primitive" [ "target", representSel target; "op", ps op; "arg", ps arg ]
   // Shared edits
   | Shared(sk, WrapRecord(tag, id, target)) ->
       rcd "x-edit-wraprec" [ "tag", ps tag; "fld", ps id; "target", representSel target; representKind sk ] 
