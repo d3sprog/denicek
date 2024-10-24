@@ -372,7 +372,7 @@ module Document =
 
     | Evaluate all -> 
         let editsAfterEval = takeAfterHash state.EvaluatedBaseHash state.DocumentEdits |> Option.get
-        let updatedEvalEdits = pushEditsThrough RemoveConflicting editsAfterEval state.EvaluatedEdits
+        let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval state.EvaluatedEdits
         let relevantEvalEdits = updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
         let extraEval = if all then Eval.evaluateAll state.FinalDocument else Eval.evaluateOne state.FinalDocument
         let evalEds = relevantEvalEdits @ extraEval
@@ -383,7 +383,21 @@ module Document =
   
     | MergeEdits edits ->
         let edits = filterDisabledGroups state.Initial edits
-        let state = { state with DocumentEdits = mergeHistories IgnoreConflicts state.DocumentEdits edits } 
+        let merged, hashMap = mergeHistories IgnoreConflicts state.DocumentEdits edits
+        
+        // Merge histories produces map that maps hashes of original 'edits' to 
+        // hashes of new edits actually added to the document. We use this to fix
+        // all the historyhashes of saved interactions... (I guess this is a bit hacky?)
+        let doc = applyHistory state.Initial merged
+        let fixhist = 
+          [ for n, oldhash, _ in Helpers.getSavedInteractions doc do
+            if hashMap.ContainsKey(oldhash) then 
+              yield { 
+                Kind = Value(RecordAdd([Field "saved-interactions"; Field n], "historyhash",
+                  Primitive(String(hashMap.[oldhash].ToString("x"))))) 
+                GroupLabel = ""; Dependencies = []; Disabled = false } ]
+                
+        let state = { state with DocumentEdits = merged @ fixhist } 
         { state with DisplayEditIndex = state.DocumentEdits.Length + state.EvaluatedEdits.Length - 1 }
   
     | MoveEditIndex d ->
@@ -1190,7 +1204,7 @@ let updateDocument docState =
     match takeUntilHash docState.EvaluatedBaseHash docState.DocumentEdits with 
     | Some ee -> ee @ docState.EvaluatedEdits
     | None -> failwith "updateDocument: EvaluatedBaseHash not found"
-  let displayEdits = mergeHistories RemoveConflicting docState.DocumentEdits evalEdits
+  let displayEdits = mergeHistoriesSimple RemoveConflicting docState.DocumentEdits evalEdits
   let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
   let currentDoc = displayEdits.[0 .. displayEditIndex] |> applyHistory docState.Initial  
   let finalDoc = displayEdits |> applyHistory docState.Initial
@@ -1198,7 +1212,7 @@ let updateDocument docState =
   { docState with 
       DisplayEdits = displayEdits; DisplayEditIndex = displayEditIndex
       CurrentDocument = currentDoc; FinalDocument = finalDoc 
-      FinalHash = hashEditList docState.DocumentEdits }
+      FinalHash = hashEditList 0 docState.DocumentEdits }
 
 let rec tryEnterCommand trigger state = 
   match Commands.parseCommand state with

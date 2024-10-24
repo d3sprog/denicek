@@ -261,40 +261,6 @@ let withNodeSelectors nd sels =
     | Reference sels -> Reference(next()) 
     | Primitive _ -> nd
   loop nd
-(*
-let getSelectors ed = 
-  match ed.Kind with 
-  | Shared(_, ListReorder(s, _)) 
-  | Shared(_, RecordRenameField(s, _, _)) 
-  | Shared(_, UpdateTag(s, _, _)) 
-  | Shared(_, WrapRecord(_, _, s)) 
-  | Shared(_, WrapList(_, s)) 
-  | Shared(_, ListDelete(s, _))
-  | Shared(_, RecordDelete(s, _))
-  | Value(PrimitiveEdit(s, _)) 
-  | Value(Check(s, _)) -> [s]
-  | Value(ListAppend(s, nd)) 
-  | Value(RecordAdd(s, _, nd)) -> s :: (getNodeSelectors nd)
-  | Value(ListAppendFrom(s1, s2)) 
-  | Shared(_, Copy(s1, s2)) -> [s1; s2]
-
-let withSelectors sels ed =
-  let ret nk = { ed with Kind = nk }
-  match ed.Kind with
-  | Value(ListAppend(_, nd)) -> Value(ListAppend(List.head sels, withNodeSelectors nd (List.tail sels))) |> ret
-  | Value(ListAppendFrom(_, _)) -> Value(ListAppendFrom(List.head sels, List.exactlyOne (List.tail sels))) |> ret
-  | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(List.head sels, s, withNodeSelectors nd (List.tail sels))) |> ret
-  | Value(PrimitiveEdit(_, f)) -> Value(PrimitiveEdit(List.exactlyOne sels, f)) |> ret
-  | Value(Check(_, cond)) -> Value(Check(List.exactlyOne sels, cond)) |> ret
-  | Shared(sk, ListDelete(_, i)) -> Shared(sk, ListDelete(List.exactlyOne sels, i)) |> ret
-  | Shared(sk, RecordDelete(_, f)) -> Shared(sk, RecordDelete(List.exactlyOne sels, f)) |> ret
-  | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(List.exactlyOne sels, m)) |> ret
-  | Shared(sk, WrapRecord(t, f, _)) -> Shared(sk, WrapRecord(t, f, List.exactlyOne sels) ) |> ret
-  | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.exactlyOne sels) ) |> ret
-  | Shared(sk, UpdateTag(_, t1, t2)) -> Shared(sk, UpdateTag(List.exactlyOne sels, t1, t2) ) |> ret
-  | Shared(sk, Copy(_, _)) -> Shared(sk, Copy(List.head sels, List.exactlyOne (List.tail sels))) |> ret
-  | Shared(sk, RecordRenameField(_, o, n)) -> Shared(sk, RecordRenameField(List.exactlyOne sels, o, n) ) |> ret
-*)
 
 /// Target selector points to the affected nodes, after the edit is done (?)
 let getTargetSelector ed = 
@@ -905,8 +871,8 @@ let moveBefore ctx e1 e2 =
 // Edit groups
 // --------------------------------------------------------------------------------------
 
-let hashEditList eds = 
-  eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) 0
+let hashEditList initial eds = 
+  eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
 
 let withHistoryHash initial eds = 
   let hashes = eds |> List.scan (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
@@ -967,33 +933,45 @@ type ConflictResolution =
   | IgnoreConflicts
   | RemoveConflicting
 
-let pushEditsThrough crmode e1s e2s = 
+let pushEditsThrough crmode hashBefore hashAfter e1s e2s = 
   let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
   let e2s = 
     if crmode = RemoveConflicting then
       let e1ModSels = e1s |> List.map getTargetSelector
       filterConflicting e1ModSels e2s
     else e2s
+
+  // TODO: Clean this up so that it does not look so ugly?
+  // (As we push edits 'e2s' through 'e1s', we also compute
+  // map that maps hashes of old edits to hashes of new edits)
+
+  let mutable hashBefore = hashBefore
+  let mutable hashAfter = hashAfter
+  let hashMap = System.Collections.Generic.Dictionary<_, _>()
+
   e2s |> List.collect (fun e2 ->
-      //printfn $"Move edit e2: {formatEdit e2}"
       // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
       // (caveat is that the operation can turn it into multiple edits)
       let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
       let res = 
         List.fold (fun e2 e1 -> 
-          //printfn $"    - after e1: {formatEdit e1}"
-          //printfn "Moving %A before %s" (List.map formatEdit e2) (formatEdit e1)
           let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
           ctx <- nctx
           e2s ) [e2] e1s 
       let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
-      //printfn $"""    = [{String.concat ", " (List.map formatEdit res)}]"""
-      res )         
+
+      hashBefore <- hash(hashBefore, e2)
+      hashAfter <- hashEditList hashAfter res
+      hashMap.Add(hashBefore, hashAfter)
+      res ), hashMap
+
+let pushEditsThroughSimple crmode e1s e2s = 
+  pushEditsThrough crmode 0 0 e1s e2s |> fst
 
 let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
   let shared, (e1s, e2s) = List.sharedPrefix h1 h2
-  let e2sAfter = pushEditsThrough crmode e1s e2s
-  shared @ e1s @ e2sAfter 
+  let e2sAfter, hashMap = pushEditsThrough crmode (hashEditList 0 (shared)) (hashEditList 0 (shared @ e1s)) e1s e2s
+  shared @ e1s @ e2sAfter, hashMap
 
-
-
+let mergeHistoriesSimple crmode h1 h2 = 
+  mergeHistories crmode h1 h2 |> fst
