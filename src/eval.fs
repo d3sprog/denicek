@@ -43,21 +43,26 @@ and (|EvalSiteListChildren|_|) inFormula sels nds =
 
 /// Evaluate references only if they are inside formula
 /// (they may be used for other things in the document, e.g. event handlers)
-and evalSite inFormula sels nd : option<Selectors> =
-  match nd with 
+/// The evaluation site will always be inside formula (it may be nested
+/// formulas) - this returns the most top-level one as the first part of the result
+and evalSite (formulaSel:option<_>) sels nd : option<Selectors * Selectors> =
+  match nd, formulaSel with 
   // Evaluated alread - do not need to look inside
-  | Record("x-evaluated", _) -> None
+  | Record("x-evaluated", _), _ -> None
   // Evaluate references but not outside formula & not builtins 
   // Formula - Call by value - evaluate children first
-  | Record("x-formula", EvalSiteRecordChildren true sels res) -> Some res 
-  | Record("x-formula", _) -> Some(List.rev sels)
-  | Reference(Field "$builtins"::_) -> None
-  | Reference(p) when inFormula -> Some (List.rev sels)
-  | Reference _ -> None
+  | Record("x-formula", children), _ -> 
+      let formulaSel = Option.defaultValue (List.rev sels) formulaSel
+      match evalSiteRecordChildren (Some formulaSel) sels children with 
+      | Some res -> Some res
+      | None -> Some(formulaSel, List.rev sels)
+  | Reference(Field "$builtins"::_), _ -> None
+  | Reference(p), Some(formulaSel) -> Some (formulaSel, List.rev sels)
+  | Reference _, _ -> None
   // Look recursively
-  | Record(_, EvalSiteRecordChildren false sels res) -> Some res
-  | List(_, EvalSiteListChildren false sels res) -> Some res
-  | Primitive _ | List _ | Record _ -> None
+  | Record(_, EvalSiteRecordChildren None sels res), _ -> Some res
+  | List(_, EvalSiteListChildren None sels res), _ -> Some res
+  | (Primitive _ | List _ | Record _), _ -> None
 
 let (|OpAndArgs|) args = 
   let args = Map.ofSeq args
@@ -93,9 +98,9 @@ let evaluateBuiltin op (args:Map<string, Node>)=
   | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"          
 
 let evaluateRaw doc =
-  match evalSite false [] doc with
+  match evalSite None [] doc with
   | None -> []
-  | Some sel ->
+  | Some(formulaSel, sel) ->
       // Evaluation generates value edits - because they change doc structure
       let it = match select sel doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sel}\n Resulted in {nds}"
       match it with 
@@ -106,7 +111,12 @@ let evaluateRaw doc =
 
       | Record("x-formula", allArgs & OpAndArgs(Reference [ Field("$builtins"); Field op ], args)) ->
           let res, deps = evaluateBuiltin op args
-          let deps = [ for p in deps -> sel @ [p] ]
+          // More fine grained dependency would be [ for p in deps -> sel @ [p] ]
+          // but this does not seem to work so we just add dependency on the entire
+          // formula (the most top-level one) - which is safe overapproximation
+          // (value edits can transform the formula, breaking the dependencies)
+          let deps = [ formulaSel ] 
+          printfn $"Formula selector: {formatSelector formulaSel}"
           [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
             Value(RecordAdd(sel, "result", res)), deps ]          
 
@@ -127,3 +137,25 @@ let evaluateAll doc =
     let ndoc = applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
   List.ofSeq (loop doc)
+
+
+/// Push evalauted edits through document edits that were added after the
+/// document was evaluated (we always assume evaluated edits are attached 
+/// on the "side" of main history) and re-evaluate invalidated things.
+let updateEvaluatedEdits all finalDoc evalBaseHash docEdits evalEdits = 
+  let editsAfterEval = takeAfterHash evalBaseHash docEdits |> Option.get
+  let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
+  let relevantEvalEdits = updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
+  let extraEval = if all then evaluateAll finalDoc else evaluateOne finalDoc
+  relevantEvalEdits @ extraEval
+  
+/// The evaluated edits branch off from the doc edits at a given hash.
+/// This merges them with the (possibly updated) document edits to 
+/// get a list of all edits that we should display to the user.
+let updateDisplayEdits evalBaseHash docEdits evalEdits = 
+  let evalEdits = 
+    if List.isEmpty evalEdits then [] else
+    match takeUntilHash evalBaseHash docEdits with 
+    | Some ee -> ee @ evalEdits
+    | None -> failwith "updateDocument: EvaluatedBaseHash not found"
+  mergeHistoriesSimple RemoveConflicting docEdits evalEdits

@@ -807,7 +807,6 @@ type EditMoveState =
   { UniqueTempField : string; PrefixEdits : Edit list; SuffixEdits : Edit list }
 
 let applyToAdded ctx e1 e2 = 
-  //printfn $"applyToAdded\n  * e1={formatEdit e1}\n  * e2={formatEdit e2}"
   match e1.Kind with 
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
   | Value(ListAppend(sel, nd)) -> 
@@ -925,7 +924,7 @@ let filterConflicting =
   List.mapWithState (fun modsels ed ->
     // Conflict if any dependency depends on any of the modified locations
     let conflict = getDependencies ed |> List.exists (fun dep -> 
-      List.exists (fun modsel -> includes dep modsel) modsels)
+      List.exists (fun modsel -> includes dep modsel || includes modsel dep) modsels)
     if conflict then { ed with Disabled = true }, (getTargetSelector ed)::modsels
     else ed, modsels) 
 

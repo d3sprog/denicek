@@ -285,7 +285,6 @@ module Document =
                   let baseeds = takeUntilHash histhash state.DocumentState.DocumentEdits 
                   let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
                   trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
-                  trigger(DocumentEvent(Evaluate(true)))
             | _ -> ()
       | _ -> ()
       if tag = "input" then 
@@ -371,14 +370,10 @@ module Document =
         { state with DocumentEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }
 
     | Evaluate all -> 
-        let editsAfterEval = takeAfterHash state.EvaluatedBaseHash state.DocumentEdits |> Option.get
-        let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval state.EvaluatedEdits
-        let relevantEvalEdits = updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
-        let extraEval = if all then Eval.evaluateAll state.FinalDocument else Eval.evaluateOne state.FinalDocument
-        let evalEds = relevantEvalEdits @ extraEval
-        //for ed in evalEds do printfn $"{formatEdit ed} ({ed.Disabled})"
         { state with 
-            EvaluatedEdits = evalEds
+            EvaluatedEdits = 
+              Eval.updateEvaluatedEdits all state.FinalDocument 
+                state.EvaluatedBaseHash state.DocumentEdits state.EvaluatedEdits
             EvaluatedBaseHash = state.FinalHash; DisplayEditIndex = System.Int32.MaxValue }
   
     | MergeEdits edits ->
@@ -1199,16 +1194,10 @@ module Demos =
 // --------------------------------------------------------------------------------------
 
 let updateDocument docState = 
-  let evalEdits = 
-    if List.isEmpty docState.EvaluatedEdits then [] else
-    match takeUntilHash docState.EvaluatedBaseHash docState.DocumentEdits with 
-    | Some ee -> ee @ docState.EvaluatedEdits
-    | None -> failwith "updateDocument: EvaluatedBaseHash not found"
-  let displayEdits = mergeHistoriesSimple RemoveConflicting docState.DocumentEdits evalEdits
+  let displayEdits = Eval.updateDisplayEdits docState.EvaluatedBaseHash docState.DocumentEdits docState.EvaluatedEdits
   let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
   let currentDoc = displayEdits.[0 .. displayEditIndex] |> applyHistory docState.Initial  
   let finalDoc = displayEdits |> applyHistory docState.Initial
-  printfn $"Display: {displayEditIndex}/{displayEdits.Length}, Doc: {docState.DocumentEdits.Length}, Eval: {docState.EvaluatedEdits.Length} (merging {evalEdits.Length})"
   { docState with 
       DisplayEdits = displayEdits; DisplayEditIndex = displayEditIndex
       CurrentDocument = currentDoc; FinalDocument = finalDoc 

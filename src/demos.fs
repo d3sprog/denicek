@@ -33,12 +33,14 @@ let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n))
 // Shared structural
 let ordS s l = mkEd <| Shared(StructuralKind, ListReorder(s, l))  
 let delrV sel f = mkEd <| Shared(ValueKind, RecordDelete(sel, f)) 
+let wrV s fld tag = mkEd <| Shared(ValueKind, WrapRecord(ffld fld, tag, s)) 
 let wrS s fld tag = mkEd <| Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) 
 let wlS s tag = mkEd <| Shared(StructuralKind, WrapList(tag, s)) 
 let cpS s1 s2 = mkEd <| Shared(StructuralKind, Copy(s2, s1)) 
 let cpV s1 s2 = mkEd <| Shared(ValueKind, Copy(s2, s1)) 
 let tagS s t1 t2 = mkEd <| Shared(StructuralKind, UpdateTag(s, t1, t2)) 
 let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
+let uidV s fold fnew = mkEd <| Shared(ValueKind, RecordRenameField(s, fold, ffld fnew)) 
 
 let selectorPart = 
   ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
@@ -237,27 +239,36 @@ let opsBaseCounter =
 
 let opsCounterInc = 
   [
-    wrS (!/ "/counter/value") "value" "x-formula"
-    uidS (!/ "/counter/value") "value" "right"
+    wrV (!/ "/counter/value") "value" "x-formula"
+    uidV (!/ "/counter/value") "value" "right"
     add (!/ "/counter/value") "left" (pn 1)
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterDec = 
   [
-    wrS (!/ "/counter/value") "value" "x-formula"
-    uidS (!/ "/counter/value") "value" "right"
+    wrV (!/ "/counter/value") "value" "x-formula"
+    uidV (!/ "/counter/value") "value" "right"
     add (!/ "/counter/value") "left" (pn -1)
     add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
-let opsCounterHndl = 
-  [ yield add (!/ "/inc") "click" (lst "x-event-handler")
+let opsCounterHndl baseList = 
+  [ 
+    yield add (!/"/") "saved-interactions" (rcd "x-saved-interactions")
+    yield add (!/"/saved-interactions") "increment" (rcd "x-interaction")
+    yield add (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
+    yield add (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
     for op in opsCounterInc ->
-      ap (!/ "/inc/click") (Represent.represent op) 
-    yield add (!/ "/dec") "click" (lst "x-event-handler")
+      ap (!/ "/saved-interactions/increment/interactions") (Represent.represent op) 
+    yield add (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
+
+    yield add (!/"/saved-interactions") "decrement" (rcd "x-interaction")
+    yield add (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
+    yield add (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
     for op in opsCounterDec ->
-      ap (!/ "/dec/click") (Represent.represent op) ]
+      ap (!/ "/saved-interactions/decrement/interactions") (Represent.represent op) 
+    yield add (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) ]
 
 
 
