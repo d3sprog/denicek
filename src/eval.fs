@@ -116,7 +116,6 @@ let evaluateRaw doc =
           // formula (the most top-level one) - which is safe overapproximation
           // (value edits can transform the formula, breaking the dependencies)
           let deps = [ formulaSel ] 
-          printfn $"Formula selector: {formatSelector formulaSel}"
           [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
             Value(RecordAdd(sel, "result", res)), deps ]          
 
@@ -142,20 +141,7 @@ let evaluateAll doc =
 /// Push evalauted edits through document edits that were added after the
 /// document was evaluated (we always assume evaluated edits are attached 
 /// on the "side" of main history) and re-evaluate invalidated things.
-let updateEvaluatedEdits all finalDoc evalBaseHash docEdits evalEdits = 
-  let editsAfterEval = takeAfterHash evalBaseHash docEdits |> Option.get
+let updateEvaluatedEdits oldDocEdits newDocEdits evalEdits = 
+  let editsAfterEval = List.skip (List.length oldDocEdits) newDocEdits
   let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
-  let relevantEvalEdits = updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
-  let extraEval = if all then evaluateAll finalDoc else evaluateOne finalDoc
-  relevantEvalEdits @ extraEval
-  
-/// The evaluated edits branch off from the doc edits at a given hash.
-/// This merges them with the (possibly updated) document edits to 
-/// get a list of all edits that we should display to the user.
-let updateDisplayEdits evalBaseHash docEdits evalEdits = 
-  let evalEdits = 
-    if List.isEmpty evalEdits then [] else
-    match takeUntilHash evalBaseHash docEdits with 
-    | Some ee -> ee @ evalEdits
-    | None -> failwith "updateDocument: EvaluatedBaseHash not found"
-  mergeHistoriesSimple RemoveConflicting docEdits evalEdits
+  updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)

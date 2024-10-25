@@ -96,27 +96,28 @@ let evalTests =
 
     // Even more elaborate case where we click, evaluate, click again, re-evaluate
     test "counter can invalidate after reevaluating" {
-      let currentOps = 
+      let currentOps1 = 
         opsBaseCounter @ opsCounterInc @ opsCounterHndl (opsBaseCounter @ opsCounterInc)      
-      let currentOps, _ = 
+      let currentOps2, _ = 
         mergeHistories ConflictResolution.IgnoreConflicts
-          currentOps (opsBaseCounter @ opsCounterInc @ opsCounterInc)
-      let currentDoc = apply (rcd "div") currentOps
+          currentOps1 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
+      let currentDoc1 = apply (rcd "div") currentOps2
       
-      let evalOps = Eval.evaluateAll currentDoc
-      let evalHash = hashEditList 0 currentOps
-      let currentDoc = apply (rcd "div") (currentOps @ evalOps)
-      select (!/"/counter/value/result") currentDoc |> equals [Primitive(Number 2.0)]
+      let evalOps1 = Eval.evaluateAll currentDoc1
+      let currentDoc2 = apply (rcd "div") (currentOps2 @ evalOps1)
+      select (!/"/counter/value/result") currentDoc2 |> equals [Primitive(Number 2.0)]
 
-      let currentOps, _ = 
+      let currentOps3, _ = 
         mergeHistories ConflictResolution.IgnoreConflicts
-          currentOps (opsBaseCounter @ opsCounterInc @ opsCounterInc)
-      let displayOps = Eval.updateDisplayEdits evalHash currentOps evalOps
-      let currentDoc = apply (rcd "div") displayOps
-      
-      let evalOpsMore = Eval.evaluateAll currentDoc
-      let finalDoc = apply (rcd "div") (displayOps @ evalOpsMore)
-      select (!/"/counter/value/result") finalDoc |> equals [Primitive(Number 3.0)]
+          currentOps2 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
+      let evalOps2 = Eval.updateEvaluatedEdits currentOps2 currentOps3 evalOps1
+      let currentDoc3 = apply (rcd "div") (currentOps3 @ evalOps2)
+      selectTag (!/"/counter/value") currentDoc3 |> equals (Some "x-formula")
+      select (!/"/counter/value/result") currentDoc3 |> equals []
+
+      let evalOps3 = evalOps2 @ Eval.evaluateAll currentDoc3
+      let currentDoc4 = apply (rcd "div") (currentOps3 @ evalOps3)
+      select (!/"/counter/value/result") currentDoc4 |> equals [Primitive(Number 3.0)]
     }
   ]
 

@@ -15,7 +15,6 @@ type DocumentState =
   { Initial : Node 
     DocumentEdits : Edit list
     EvaluatedEdits : Edit list
-    EvaluatedBaseHash : int
     DisplayEditIndex : int 
     // The following are computed by 'updateDocument'
     DisplayEdits : Edit list
@@ -370,16 +369,15 @@ module Document =
         { state with DocumentEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }
 
     | Evaluate all -> 
+        let extraEval = if all then Eval.evaluateAll state.FinalDocument else Eval.evaluateOne state.FinalDocument
         { state with 
-            EvaluatedEdits = 
-              Eval.updateEvaluatedEdits all state.FinalDocument 
-                state.EvaluatedBaseHash state.DocumentEdits state.EvaluatedEdits
-            EvaluatedBaseHash = state.FinalHash; DisplayEditIndex = System.Int32.MaxValue }
+            EvaluatedEdits = state.EvaluatedEdits @ extraEval              
+            DisplayEditIndex = System.Int32.MaxValue }
   
     | MergeEdits edits ->
         let edits = filterDisabledGroups state.Initial edits
         let merged, hashMap = mergeHistories IgnoreConflicts state.DocumentEdits edits
-        
+
         // Merge histories produces map that maps hashes of original 'edits' to 
         // hashes of new edits actually added to the document. We use this to fix
         // all the historyhashes of saved interactions... (I guess this is a bit hacky?)
@@ -391,8 +389,11 @@ module Document =
                 Kind = Value(RecordAdd([Field "saved-interactions"; Field n], "historyhash",
                   Primitive(String(hashMap.[oldhash].ToString("x"))))) 
                 GroupLabel = ""; Dependencies = []; Disabled = false } ]
+
+        
+        let evaluated = Eval.updateEvaluatedEdits state.DocumentEdits (merged @ fixhist) state.EvaluatedEdits
                 
-        let state = { state with DocumentEdits = merged @ fixhist } 
+        let state = { state with DocumentEdits = merged @ fixhist; EvaluatedEdits = evaluated } 
         { state with DisplayEditIndex = state.DocumentEdits.Length + state.EvaluatedEdits.Length - 1 }
   
     | MoveEditIndex d ->
@@ -1194,7 +1195,7 @@ module Demos =
 // --------------------------------------------------------------------------------------
 
 let updateDocument docState = 
-  let displayEdits = Eval.updateDisplayEdits docState.EvaluatedBaseHash docState.DocumentEdits docState.EvaluatedEdits
+  let displayEdits = docState.DocumentEdits @ docState.EvaluatedEdits
   let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
   let currentDoc = displayEdits.[0 .. displayEditIndex] |> applyHistory docState.Initial  
   let finalDoc = displayEdits |> applyHistory docState.Initial
@@ -1279,7 +1280,7 @@ let render trigger state =
 let fromOperationsList ops = 
   let init = rcd "div"
   { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
-      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; EvaluatedBaseHash = 0;
+      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; 
       CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
     ViewState = { CursorLocation = [], Before; CursorSelector = []; 
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
