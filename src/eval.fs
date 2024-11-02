@@ -56,8 +56,8 @@ and evalSite (formulaSel:option<_>) sels nd : option<Selectors * Selectors> =
       match evalSiteRecordChildren (Some formulaSel) sels children with 
       | Some res -> Some res
       | None -> Some(formulaSel, List.rev sels)
-  | Reference(Field "$builtins"::_), _ -> None
-  | Reference(p), Some(formulaSel) -> Some (formulaSel, List.rev sels)
+  | Reference(Absolute, Field "$builtins"::_ ), _ -> None
+  | Reference _, Some(formulaSel) -> Some (formulaSel, List.rev sels)
   | Reference _, _ -> None
   // Look recursively
   | Record(_, EvalSiteRecordChildren None sels res), _ -> Some res
@@ -89,6 +89,15 @@ let evaluateBuiltin op (args:Map<string, Node>)=
           Primitive(Number(f (List.map getEvaluatedResult nds))), [Field "arg"]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
+  | "equals" -> 
+      match args.TryFind "left", args.TryFind "right" with
+      | Some(EvaluatedResult(Primitive(p1))), Some(EvaluatedResult(Primitive(p2))) -> 
+          Primitive(String(if p1 = p2 then "true" else "false")), [Field "left"; Field "right"]
+      | _ -> 
+          // NOTE: This also works on references that failed to evaluate 
+          // (and so left/right is <empty> list added by Reference evaluation)
+          Primitive(String("false")), [Field "left"; Field "right"]
+
   | "plus" | "mul" | "minus" -> 
       let f = (dict [ "plus",(+); "mul",(*); "minus",(-) ]).[op]
       match args.TryFind "left", args.TryFind "right" with
@@ -104,12 +113,13 @@ let evaluateRaw doc =
       // Evaluation generates value edits - because they change doc structure
       let it = match select sel doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sel}\n Resulted in {nds}"
       match it with 
-      | Reference(p) -> 
+      | Reference(kind, p) ->
+          let p = resolveReference kind p sel
           [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel)), [p]
             Value(RecordAdd(sel, "result", List("empty", []))), [p] // Allow 'slightly clever' case of Copy from doc.fs
             Shared(ValueKind, Copy(sel @ [Field "result"], p)), [] ]
 
-      | Record("x-formula", allArgs & OpAndArgs(Reference [ Field("$builtins"); Field op ], args)) ->
+      | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, [ Field("$builtins"); Field op ]), args)) ->
           let res, deps = evaluateBuiltin op args
           // More fine grained dependency would be [ for p in deps -> sel @ [p] ]
           // but this does not seem to work so we just add dependency on the entire

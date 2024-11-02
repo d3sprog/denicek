@@ -11,6 +11,7 @@ let selToJson = function
   | Tag t -> box ("#" + t)
   | Index n -> box n
   | All -> box "*"
+  | DotDot -> box ".."
 
 let rec nodeToJson = function
   | Primitive(String s) -> box s
@@ -25,8 +26,9 @@ let rec nodeToJson = function
         "tag", box tag
         "nodes", box [| for n, nd in nds -> [| box n; nodeToJson nd |] |]
       ]
-  | Reference(sels) -> JsInterop.createObj [ 
+  | Reference(kind, sels) -> JsInterop.createObj [ 
         "kind", box "reference" 
+        "refkind", if kind = Absolute then box "absolute" else box "relative"
         "selectors", box [| for s in sels -> selToJson s |]
       ]
 
@@ -44,6 +46,7 @@ let selFromJson o =
   elif jsTypeof o = "string" then 
     let s = unbox<string> o
     if s = "*" then All
+    elif s = ".." then DotDot
     elif s.StartsWith("#") then Tag(s.[1..])
     else Field(s)
   else failwith $"selFromJson - unexpected object {o}"
@@ -53,7 +56,10 @@ let rec nodeFromJson o =
   elif jsTypeof o = "number" then Primitive(Number(unbox o))
   elif o?kind = "list" then List(o?tag, [ for o in unbox<obj[]> o?nodes -> nodeFromJson o ])
   elif o?kind = "record" then Record(o?tag, [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
-  elif o?kind = "reference" then Reference [ for o in unbox<obj[]> o?selectors -> selFromJson o ]
+  elif o?kind = "reference" then 
+    Reference
+      ( (if o?refkind = "relative" then Relative else Absolute),
+        [ for o in unbox<obj[]> o?selectors -> selFromJson o ] )
   else failwith $"nodeFromJson - unexpected object: {o}"
 
 let nodesToJson nds = box [| for nd in nds -> nodeToJson nd |]

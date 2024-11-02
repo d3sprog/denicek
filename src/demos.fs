@@ -15,7 +15,7 @@ let ffld f =
 // Node construction
 let rcd tag = Record(tag, [])
 let lst tag = List(tag, [])
-let ref sel = Reference(sel)
+let ref sel = Reference(Absolute, sel)
 let ps s = Primitive(String s)
 let pn n = Primitive(Number n)
 let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
@@ -42,20 +42,24 @@ let tagS s t1 t2 = mkEd <| Shared(StructuralKind, UpdateTag(s, t1, t2))
 let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
 let uidV s fold fnew = mkEd <| Shared(ValueKind, RecordRenameField(s, fold, ffld fnew)) 
 
-let selectorPart = 
-  ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
-  (P.char '*' |> P.map (fun _ -> All)) <|>
-  (P.num |> P.map Index) <|>
-  ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
+let selPart = 
+  ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
+    (P.char '*' |> P.map (fun _ -> All)) <|>
+    (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
+    (P.num |> P.map Index) <|>
+    ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag) ) |> P.hole "sel"
+  
+let refHoleBase = 
+    (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
+    (P.char '/' |> P.map (fun xs -> Absolute, [] )) <|>
+    (P.char '.' <*>> P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Relative, xs)) 
 
-let selector = 
-  (P.oneOrMore (P.char '/' <*>> selectorPart)) <|>
-  (P.char '/' |> P.map (fun _ -> []))
+let refHole = (refHoleBase <<*> P.char '/') <|> refHoleBase
 
 let runOrFail p s = 
-  match P.run p s with Parsed(r, []) -> r | e -> failwith $"Parsing failed {e}"
+  match P.run p s with Parsed(r, []) -> r | e -> failwith $"Parsing of {s} failed {e}"
 let (!/) s = 
-  runOrFail selector s
+  snd (runOrFail refHole s)
 
 // --------------------------------------------------------------------------------------
 // Conference planning demo

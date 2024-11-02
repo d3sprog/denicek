@@ -172,7 +172,7 @@ module Helpers =
       text (hist.ToString("x"))
     ]
 
-  let renderSelector state trigger sel = 
+  let renderReference state trigger kind sel = 
     let selected = state.HistoryState.HighlightedSelector = Some sel
     h?a [ 
       "href" => "javascript:;"
@@ -180,8 +180,12 @@ module Helpers =
       "mouseover" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector(Some sel)))
       "mouseout" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector None))
     ] [ 
-      text (formatSelector sel)
+      if kind = ReferenceKind.Absolute then yield text "/"
+      yield text (formatSelector sel)
     ]
+
+  let renderSelector state trigger sel = 
+    renderReference state trigger Absolute sel
 
   let generalizeToStructuralSelector sels = 
     sels |> List.map (function Index _ | Tag _ -> All | s -> s)
@@ -256,7 +260,7 @@ module Document =
           | Record(_, nds) -> 
               for f, a in nds do
                 yield loop (path @ [Field f]) ["id", f] a
-          | Reference(sel) -> yield Helpers.renderSelector state trigger sel
+          | Reference(kind, sel) -> yield Helpers.renderReference state trigger kind sel
           | Primitive(String s) -> yield text s
           | Primitive(Number n) -> yield text (string n)              
         ]
@@ -277,8 +281,8 @@ module Document =
       | Record(_, nds) -> 
           for nd in nds do
             match nd with 
-            | id, Reference(Select state.DocumentState.CurrentDocument 
-                    [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" ->
+            | id, Reference(kind, Select state.DocumentState.CurrentDocument 
+                    [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" -> 
                 yield id.Substring(1) =!> fun _ e ->
                   e.preventDefault()
                   let baseeds = takeUntilHash histhash state.DocumentState.DocumentEdits 
@@ -351,7 +355,7 @@ module Document =
             for f, a in nds do
               if not (f.StartsWith("@")) then
                 yield loop (path @ [Field f]) (pid ++ f) a
-        | Reference(sel) -> yield Helpers.renderSelector state trigger sel
+        | Reference(kind, sel) -> yield Helpers.renderReference state trigger kind sel
         | Primitive(String s) -> yield text s
         | Primitive(Number n) -> yield text (string n)        
       ]
@@ -434,7 +438,7 @@ module History =
     match nd with 
     | Primitive(Number n) -> text (string n)
     | Primitive(String s) -> text s
-    | Reference(sel) -> Helpers.renderSelector state trigger sel
+    | Reference(kind, sel) -> Helpers.renderReference state trigger kind sel
     | List(tag, nds) -> h?span [] [
           yield text "["
           for i, nd in Seq.indexed nds do 
@@ -656,13 +660,18 @@ module Commands =
   
   // Parser for selectors 
   let selPart = 
-    ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
-    (P.char '*' |> P.map (fun _ -> All)) <|>
-    (P.num |> P.map Index) <|>
-    ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag)
-  let refHole = 
-    (P.oneOrMoreEnd (P.char '/' <*>> P.hole "sel" selPart)) <|>
-    (P.char '/' |> P.map (fun _ -> []))
+    ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
+      (P.char '*' |> P.map (fun _ -> All)) <|>
+      (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
+      (P.num |> P.map Index) <|>
+      ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag) ) |> P.hole "sel"
+  
+  let refHoleBase = 
+    (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
+    (P.char '/' |> P.map (fun xs -> Absolute, [] )) <|>
+    (P.char '.' <*>> P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Relative, xs)) 
+    
+  let refHole = (refHoleBase <<*> P.char '/') <|> refHoleBase
         
   let recordTag = P.char '<' <*>> tagHole <<*> P.char '>'
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
@@ -1105,6 +1114,7 @@ module View =
           | Record(t, _) | List(t, _) -> yield h?strong [] [ text t ]
           | _ -> ()
           match s with 
+          | DotDot -> failwith "renderLocationInfo: Expected normalized reference"
           | Index i -> yield text $"[{i}]"
           | Tag t -> yield text $"[#{t}]"
           | All -> yield text $"[*]"
@@ -1119,7 +1129,7 @@ module View =
         | List(t, _) -> text $"{pf} list {t}"
         | Primitive(String s) -> text $"{pf} string '{s}'"
         | Primitive(Number n) -> text $"{pf} number '{n}'"
-        | Reference r -> text $"{pf} reference '{r}'"
+        | Reference(k, r) -> text $"{pf} reference '{r}'"
       ]
     ]
 
@@ -1337,10 +1347,10 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "counter-inc" ]
+  let demos = [ "conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "todo-cond"; "counter-inc" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| confBase; confAdd; confRename; confTable; confBudget; helloBase; helloSaved; todoBase; todoRemove; counterInc |] ->
+  | [| confBase; confAdd; confRename; confTable; confBudget; helloBase; helloSaved; todoBase; todoRemove; todoCond; counterInc |] ->
     let demos = 
       [ 
         "conf2", readJson confBase, [
@@ -1362,6 +1372,7 @@ async {
         *)
         "todo", readJson todoBase, [
           "remove", readJsonOps todoRemove 
+          "cond", readJsonOps todoCond
         ]
         "empty", readJson "[]", []
         "counter", readJson counterInc, []

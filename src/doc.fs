@@ -10,6 +10,9 @@ type Selector =
   | Tag of string
   // Applicable to records only
   | Field of string
+  // Only used for relative references, should be gone
+  // by the time we want to do anything useful with this
+  | DotDot
 
 type Selectors = Selector list
 
@@ -17,11 +20,13 @@ type Primitive =
   | Number of float
   | String of string
 
+type ReferenceKind = Absolute | Relative
+
 type Node = 
   | Record of string * list<string * Node>
   | List of string * list<Node>
   | Primitive of Primitive
-  | Reference of Selectors
+  | Reference of ReferenceKind * Selectors
 
 type Transformation = { Key : string; Label : string; Function : string option * Primitive -> Primitive; Args : Parser<string option> }
 
@@ -192,9 +197,9 @@ type Edit =
 // --------------------------------------------------------------------------------------
 
 let formatSelector = 
-  List.map (function All -> "*" | Tag t -> $"<{t}>" | Index i -> string i | Field f -> f)
+  List.map (function 
+    | All -> "*" | DotDot -> ".." | Tag t -> $"<{t}>" | Index i -> string i | Field f -> f)
   >> String.concat "/"
-  >> (+) "/"
 
 let formatNode nd = 
   sprintf "%A" nd
@@ -248,7 +253,7 @@ let formatEdit ed =
 let rec getNodeSelectors = function
   | Record(_, nds) -> List.collect getNodeSelectors (List.map snd nds)
   | List(_, nds) -> List.collect getNodeSelectors nds
-  | Reference sels -> [sels]
+  | Reference(_, sels) -> [sels]
   | Primitive _ -> []
 
 let withNodeSelectors nd sels = 
@@ -258,7 +263,7 @@ let withNodeSelectors nd sels =
     match nd with 
     | Record(tag,  nds) -> Record(tag, List.map (fun (n, nd) -> n, loop nd) nds)
     | List(tag,  nds) -> List(tag, List.map loop nds)
-    | Reference sels -> Reference(next()) 
+    | Reference(kind, sels) -> Reference(kind, next()) 
     | Primitive _ -> nd
   loop nd
 
@@ -394,6 +399,19 @@ let removeSelectorPrefix p1 p2 =
     | _ -> None
   loop [] p1 p2
   
+
+let resolveReference kind ref baseSels = 
+  let rec normalize acc sel = 
+    match sel, acc with 
+    | DotDot::sel, _::acc -> normalize acc sel
+    | DotDot::_, [] -> failwith "resolveReference: Reference to outside of document!"
+    | s::sel, _ -> normalize (s::acc) sel
+    | [], _ -> List.rev acc
+  if kind = Relative then normalize [] (baseSels @ ref)
+  else normalize [] ref
+
+// resolveReference Relative [DotDot; Field "x"] [Index 0; Field "z"] 
+
 // --------------------------------------------------------------------------------------
 // Helpes for transforming edits when merging / applying
 // --------------------------------------------------------------------------------------
@@ -507,6 +525,7 @@ let rec isStructuralSelector sel =
   | [] -> true
   | Index _::_ -> false
   | (All | Tag _ | Field _)::sel -> isStructuralSelector sel
+  | DotDot::_ -> failwith "isStructuralSelector: Unresolved relative reference"
 
 let apply doc edit =
   match edit.Kind with
@@ -917,8 +936,8 @@ let filterDisabledGroups initial hist =
 let getDependencies ed = 
   match ed.Kind with 
   | Value(ListAppendFrom(_, src)) 
-  | Shared(_, Copy(_, src)) -> src :: ed.Dependencies
-  | _ -> ed.Dependencies
+  | Shared(_, Copy(_, src)) ->  getTargetSelector ed :: src :: ed.Dependencies
+  | _ -> getTargetSelector ed :: ed.Dependencies
   
 let filterConflicting = 
   List.mapWithState (fun modsels ed ->
