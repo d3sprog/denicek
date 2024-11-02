@@ -315,7 +315,7 @@ let getTargetSelectorPrefixes eds =
   List.sort (List.ofSeq sels)
 
 // Selector pointing to the affected node, at a location where it is before the edit
-let getSelectors ed = 
+let getAllSelectors inNodes ed = 
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
   | Shared(_, ListReorder(s, _)) 
@@ -327,14 +327,14 @@ let getSelectors ed =
   | Shared(_, WrapRecord(_, _, s)) 
   | Shared(_, WrapList(_, s)) -> [s]
   | Value(ListAppend(s, nd)) 
-  | Value(RecordAdd(s, _, nd)) -> s :: (getNodeSelectors nd)
+  | Value(RecordAdd(s, _, nd)) -> s :: (if inNodes then getNodeSelectors nd else [])
   | Value(ListAppendFrom(s1, s2)) -> [s1; s2]
   // Add selector pointing to the previously existing thing 
   | Shared(_, RecordDelete(s, fld)) 
   | Shared(_, RecordRenameField(s, fld, _)) -> [s @ [Field fld]]
   | Shared(_, ListDelete(s, idx)) -> [s @ [Index idx]]
 
-let withSelectors sels ed =
+let withAllSelectors inNodes sels ed =
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withTargetSelector - expected selector ending with a field"
   let getLastIndex tgt = match List.last tgt with Index i -> i | _ -> failwith "withTargetSelector - expected selector ending with an index"
   let ret nk = { ed with Kind = nk }
@@ -348,20 +348,26 @@ let withSelectors sels ed =
   // Pointing at a node that will be modified by the edit
   | Shared(sk, WrapRecord(t, f, _)) -> Shared(sk, WrapRecord(t, f, List.exactlyOne sels) ) |> ret
   | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.exactlyOne sels) ) |> ret
-  | Value(ListAppend(_, nd)) -> Value(ListAppend(List.head sels, withNodeSelectors nd (List.tail sels))) |> ret
-  | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(List.head sels, s, withNodeSelectors nd (List.tail sels))) |> ret
+  | Value(ListAppend(_, nd)) -> Value(ListAppend(List.head sels, if inNodes then withNodeSelectors nd (List.tail sels) else nd)) |> ret
+  | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(List.head sels, s, if inNodes then withNodeSelectors nd (List.tail sels) else nd)) |> ret
   | Value(ListAppendFrom(_, _)) -> Value(ListAppendFrom(List.head sels, List.exactlyOne (List.tail sels))) |> ret
   // Add selector pointing to the previously existing thing 
   | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast (List.exactlyOne sels), getLastIndex (List.exactlyOne sels))) |> ret
   | Shared(sk, RecordDelete(_, f)) -> Shared(sk, RecordDelete(List.dropLast (List.exactlyOne sels), getLastField (List.exactlyOne sels))) |> ret
   | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(List.dropLast (List.exactlyOne sels), getLastField (List.exactlyOne sels), n) ) |> ret
 
+let getSelectors = getAllSelectors false
+let withSelectors = withAllSelectors false
+
 let tryWithSelectors sels ed = 
+  // Here we do not want to look inside added nodes because otherwise
+  // it is impossible to scope any edits adding references
   try Some(withSelectors sels ed)
   with _ -> None
 
 let mapSelectors f ed = 
-  withSelectors (List.map f (getSelectors ed)) ed
+  // Here it may be useful to transform selectors inside added nodes too
+  withAllSelectors true (List.map f (getAllSelectors true ed)) ed
 
 /// If 'p1' is prefix of 'p2', return the rest of 'p2'.
 /// This also computes 'more specific prefix' which is a version

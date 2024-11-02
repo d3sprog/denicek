@@ -17,6 +17,22 @@ let merge h1 h2 = mergeHistories IgnoreConflicts h1 h2 |> fst
 let printEdits = List.iter (formatEdit >> printfn " - %s")
 let selectTag sel doc = match select sel doc with [List(t, _)] | [Record(t, _)] -> Some t | _ -> None 
 
+
+[<Tests>]
+let adhocTests =
+  testList "ad hoc tests" [
+    test "scopeEdit can scope edit that adds unrelated reference" {
+      let actual = 
+        scopeEdit
+          (!/"/items/*")
+          (!/"/$uniquetemp_7")
+          { Kind = Value(RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot])))
+            GroupLabel = ""; Dependencies = []; Disabled = false }
+      ( match actual with InScope _ -> "inscope" | _ -> "" )
+      |> equals "inscope"
+    }
+]
+
 [<Tests>]
 let evalTests =
   testList "interaction and evaluation" [    
