@@ -67,7 +67,11 @@ let unrepresentCond nd =
 let unrepresent nd = 
   // NOTE: This works if the 'match' is not wrapped inside another expression (e.g. let) otherwise
   // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
-  let ret nd = { Kind = nd; Dependencies = []; GroupLabel = ""; Disabled = false }
+  let ret ed = 
+    let res = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
+    match nd with 
+    | Record(_, Lookup (Finds "hash" hash)) -> res, Some (System.Convert.ToInt32(hash, 16))
+    | _ -> res, None
   match nd with
   // Value edits
   | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd)) ->
@@ -101,9 +105,13 @@ let unrepresent nd =
       Shared(sk, UpdateTag(unrepresentSel tgt, otag, ntag)) |> ret
   | _ -> failwith $"unrepresent - Missing case for: {nd}"
 
-let represent op = 
+let represent (hash:int option) op = 
   let ps v = Primitive(String v)
   let pn i = Primitive(Number i)
+  let rcd k args = 
+    match hash with 
+    | Some hash -> rcd k (args @ ["hash", ps (hash.ToString("x"))])
+    | None -> rcd k args
   match op.Kind with 
   // Value edits
   | Value(ListAppend(target, nd)) ->
@@ -135,4 +143,3 @@ let represent op =
       rcd "x-edit-listreorder" [ "target", representSel target; "perm", representIntList perm; representKind sk ]
   | Shared(sk, UpdateTag(target, otag, ntag)) ->
       rcd "x-edit-updatetag" [ "target", representSel target; "old", ps otag; "new", ps ntag; representKind sk ]
-

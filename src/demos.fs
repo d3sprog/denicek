@@ -264,14 +264,14 @@ let opsCounterHndl baseList =
     yield add (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
     for op in opsCounterInc ->
-      ap (!/ "/saved-interactions/increment/interactions") (Represent.represent op) 
+      ap (!/ "/saved-interactions/increment/interactions") (Represent.represent None op) 
     yield add (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
 
     yield add (!/"/saved-interactions") "decrement" (rcd "x-interaction")
     yield add (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
     for op in opsCounterDec ->
-      ap (!/ "/saved-interactions/decrement/interactions") (Represent.represent op) 
+      ap (!/ "/saved-interactions/decrement/interactions") (Represent.represent None op) 
     yield add (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) ]
 
 

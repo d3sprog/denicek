@@ -684,8 +684,7 @@ let apply doc edit =
         // Slightly clever in that we can copy multiple source nodes into a single target list node
         // (this is needed for evaluation of arguments - see eval.fs)
         | [List(t, _)] -> [List(t, srcNodes)] 
-        | [tgt] -> failwith $"apply.Copy - Single target {formatSelector sel} but multiple source nodes from {formatSelector src}. Target={formatNode tgt}"; 
-        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, tgt nodes: {tgtNodes.Length} "
+        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
         if matches p sel then Some(next())
@@ -898,15 +897,15 @@ let moveBefore ctx e1 e2 =
 let hashEditList initial eds = 
   eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
 
-let withHistoryHash initial eds = 
-  let hashes = eds |> List.scan (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
+let withHistoryHash initial (f:_ -> Edit) eds = 
+  let hashes = eds |> List.scan (fun hashSoFar edit -> hash (hashSoFar, f edit)) initial
   List.zip (List.tail hashes) eds
 
-let takeUntilHash hashToFind eds = 
+let takeUntilHash hashToFind (f:_ -> Edit) eds = 
   let mutable hashSoFar = 0
   let res = eds |> List.takeWhile (fun edit -> 
     if hashSoFar = hashToFind then false else
-    hashSoFar <- hash (hashSoFar, edit) 
+    hashSoFar <- hash (hashSoFar, f edit) 
     true )
   if hashSoFar = hashToFind then Some res else None
 
@@ -957,8 +956,9 @@ type ConflictResolution =
   | IgnoreConflicts
   | RemoveConflicting
 
+let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
+
 let pushEditsThrough crmode hashBefore hashAfter e1s e2s = 
-  let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
   let e2s = 
     if crmode = RemoveConflicting then
       let e1ModSels = e1s |> List.map getTargetSelector
@@ -984,9 +984,10 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
           e2s ) [e2] e1s 
       let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
 
+      let resHashed = withHistoryHash hashAfter id res
       hashBefore <- hash(hashBefore, e2)
       hashAfter <- hashEditList hashAfter res
-      hashMap.Add(hashBefore, hashAfter)
+      hashMap.Add(hashBefore, (hashAfter, resHashed))
       res ), hashMap
 
 let pushEditsThroughSimple crmode e1s e2s = 
