@@ -209,11 +209,24 @@ module Helpers =
     let lbl = prefix + "." + System.Guid.NewGuid().ToString("N")
     [ for ed in eds -> { ed with GroupLabel = lbl } ]
 
+  let applySavedInteraction t doc target prefix condOpt ops = 
+    [ for markerSel in expandWildcards target doc do
+        let apply = 
+          match condOpt with 
+          | Some(condKind, condSel) ->
+              let condSel = resolveReference condKind condSel markerSel
+              match select condSel doc with [Primitive(String "true")] -> true | _ -> false
+          | _ -> true
+        let eds = replacePrefixInEdits prefix markerSel ops |> withUniqueGroupLabel t 
+        if apply then yield eds ]
+
 // --------------------------------------------------------------------------------------
 // Document and its history 
 // --------------------------------------------------------------------------------------
 
 module Document =
+  open Tbd.Patterns
+
   let (++) s1 s2 = if s1 <> "" then s1 + "_" + s2 else s2
   
   let getTag nd = 
@@ -284,19 +297,39 @@ module Document =
 
     /// Event handlers specified as reference attributes and special "change" event for inputs
     let getEventHandlers nd tag path = [
+
+      let makeHandler (id:string) histhash opsf = 
+        id.Substring(1) =!> fun _ e ->
+          let opss = opsf ()
+          e.preventDefault()
+          let baseeds = takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
+          let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
+          for ops in opss do
+            // TODO: Maybe this does the same thing as 'EditRecommendation' case in 'tryEnterCommand'?
+            trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
+
       match nd with 
       | Record(_, nds) -> 
           for nd in nds do
             match nd with 
+            | id, Record("x-handler", Lookup(
+                Find "interactions" (Reference(_, Select state.DocumentState.CurrentDocument 
+                  [Helpers.InteractionNode(histhash, ops) ])) &
+                Find "target" (Reference(_, targetSel)) &
+                Find "condition" (Reference(condKind, condSel)) &
+                Find "prefix" prefixNd )) when id.StartsWith "@" -> 
+                let ops() = 
+                  let prefixSel = Represent.unrepresentSel prefixNd
+                  Helpers.applySavedInteraction (id.Substring(0)) 
+                    state.DocumentState.CurrentDocument targetSel prefixSel 
+                      (Some(condKind, condSel)) (List.map snd ops)
+                yield makeHandler id state.DocumentState.FinalHash ops // Use final hash here
             | id, Reference(kind, Select state.DocumentState.CurrentDocument 
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" -> 
-                yield id.Substring(1) =!> fun _ e ->
-                  e.preventDefault()
-                  let baseeds = takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
-                  let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
-                  trigger(DocumentEvent(MergeEdits(baseeds @ List.map snd ops)))
+                yield makeHandler id histhash (fun () -> [List.map snd ops])
             | _ -> ()
       | _ -> ()
+
       if tag = "input" then 
         yield "change" =!> fun el _ ->
           let el = unbox<Browser.Types.HTMLInputElement> el
@@ -693,9 +726,10 @@ module Commands =
   let refHoleBase = 
     (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
     (P.char '/' |> P.map (fun xs -> Absolute, [] )) <|>
-    (P.char '.' <*>> P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Relative, xs)) 
+    (P.char '.' <*>> P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Relative, xs)) <|>
+    (P.keyword ".." <*>> P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Relative, DotDot::xs))
     
-  let refHole = (refHoleBase <<*> P.char '/') <|> refHoleBase
+  let refHole = P.hole "/sel" (refHoleBase <<*> P.char '/') <|> refHoleBase
         
   let recordTag = P.char '<' <*>> tagHole <<*> P.char '>'
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
@@ -909,11 +943,12 @@ module Commands =
         ( P.keyword $"@{t}" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix; text " with condition"])
+                  ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
+                    Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) 
                 yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
                   ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
-                    [ for markerSel in expandWildcards genSel doc ->
-                        Helpers.replacePrefixInEdits prefix markerSel ops 
-                        |> Helpers.withUniqueGroupLabel t ] )) ]
+                    Helpers.applySavedInteraction t doc genSel prefix None ops ))  ]
         ))
       yield command VK "las la-at" ("Apply " + t + " to current (user)")
         ( P.keyword $"@{t}*" |> P.map (fun _ -> 
@@ -1233,8 +1268,8 @@ let updateDocument docState =
     [ for e in docState.DocumentEdits do yield { Edit = e; Evaluated = false }
       for e in docState.EvaluatedEdits do yield { Edit = e; Evaluated = true } ]
   let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
-  let currentDoc = try displayEdits.[0 .. displayEditIndex] |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with _ -> rcd "root"
-  let finalDoc = try displayEdits |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with _ -> rcd "root"
+  let currentDoc = try displayEdits.[0 .. displayEditIndex] |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
+  let finalDoc = try displayEdits |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
   { docState with 
       DisplayEdits = displayEdits; DisplayEditIndex = displayEditIndex
       CurrentDocument = currentDoc; FinalDocument = finalDoc 
@@ -1388,15 +1423,7 @@ async {
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]
-        (*
-        "conf", fromOperationsList opsCore, [
-          "ada", opsCore @ addSpeakerOps
-          "rename", opsCore @ fixSpeakerNameOps
-          "table", opsCore @ refactorListOps
-          "budget", opsCore @ opsBudget 
-        ]
-        *)
-        "todo", readJson todoBase, [
+        "todo", readJson todoBase, [  
           "remove", readJsonOps todoRemove 
           "cond", readJsonOps todoCond
         ]

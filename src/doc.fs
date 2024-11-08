@@ -381,7 +381,7 @@ let removeSelectorPrefix p1 p2 =
     // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
     // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
     | Index(i)::p1, All::p2 ->
-        failwith "removeSelectorPrefix - Index/All - arguably error %"
+        None //failwith "removeSelectorPrefix - Index/All - arguably error %"
       //  loop (Index(i)::specPref) p1 p2
     //| Index(_)::_ | All(_::)
     //| Tag(t)::p1, All::p2 | All::p1, Tag(t)::p2 -> loop (Tag(t)::specPref) p1 p2
@@ -457,6 +457,7 @@ let decrementSelectorsAfterDel selDelete idel selOther =
     | MatchingFirst(s, selOther, selDelete) -> s::(decafter selDelete selOther)
     | TooSpecific(s) -> failwith $"decrementSelectorsAfterDel - Too specific selector {s} matched against Any"
     | IncompatibleFirst() -> selOther
+    | DotDot::_, _ -> selOther // TODO: Implement this 
     | _ -> failwith $"decrementSelectorsAfterDel - Missing case: {selOther} vs. {selDelete}"
   decafter selDelete selOther
  

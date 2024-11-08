@@ -213,6 +213,26 @@ let pbdAddAnotherSpeaker =
   ]
   
 
+// --------------------------------------------------------------------------------------
+// TODO list
+// --------------------------------------------------------------------------------------
+
+let todoBaseOps = 
+  [
+    add [] "items" (lst "ul")
+  ]
+
+let todoAddOps work = 
+  [ 
+    add [] "temp" (ps work)
+    ap (!/"/items") (rcd "li")
+    add (!/"/items/0") "entry" (rcd "label")
+    add (!/"/items/0/entry") "done" (rcd "input")
+    add (!/"/items/0/entry/done") "@type" (ps "checkbox")
+    add (!/"/items/0/entry") "work" (ps "")
+    cpV (!/"/temp") (!/"/items/0/entry/work")
+    delrV [] "temp"
+  ]
 
 // --------------------------------------------------------------------------------------
 // Leftovers

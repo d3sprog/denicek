@@ -1,13 +1,11 @@
 module Tbd.Represent
 open Tbd.Doc
+open Tbd.Patterns
 
 // --------------------------------------------------------------------------------------
 // Representing edits as nodes
 // --------------------------------------------------------------------------------------
   
-let (|Lookup|) args = dict args
-let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
-  if d.ContainsKey k then Some(d.[k]) else None
 let (|Finds|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 
   match d.TryGetValue(k) with true, Primitive(String s) -> Some s | _ -> None
 let (|Findn|_|) k (d:System.Collections.Generic.IDictionary<_, Node>) = 

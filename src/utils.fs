@@ -4,6 +4,9 @@ module Patterns =
   let (|As|) v i = (v, i)
   let (|Last|_|) l = match List.rev l with x::xs -> Some x | _ -> None
   let (|ListFind|_|) k = List.tryFind (fst >> (=) k) >> Option.map snd
+  let (|Lookup|) args = dict args
+  let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, _>) = 
+    if d.ContainsKey k then Some(d.[k]) else None
 
 module List = 
 
