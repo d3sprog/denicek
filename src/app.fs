@@ -42,6 +42,7 @@ type ViewState =
   { CursorLocation : Cursor
     CursorSelector : Selectors
     ViewSourceSelector : Selectors option
+    ProvenanceSelectors : Selectors list 
     GeneralizedStructuralSelector : Selectors }
 
 // (4) Command toolbox - state
@@ -110,6 +111,7 @@ type CursorMove =
 type ViewEvent = 
   | MoveCursor of CursorMove
   | ToggleViewSource
+  | ToggleProvenanceHighlight
 
 // (4) Command toolbox - events
 type CopySource = CurrentNode | MarkedNode
@@ -214,7 +216,7 @@ module Helpers =
         let apply = 
           match condOpt with 
           | Some(condKind, condSel) ->
-              let condSel = resolveReference condKind condSel markerSel
+              let condSel = resolveReference markerSel (condKind, condSel)
               match select condSel doc with [Primitive(String "true")] -> true | _ -> false
           | _ -> true
         let eds = replacePrefixInEdits prefix markerSel ops |> withUniqueGroupLabel t 
@@ -239,6 +241,8 @@ module Document =
   let isPlainTextNode = function
     | Reference _ | Primitive _ | Primitive _ -> true | _ -> false
   let isListNode = function List _ -> true | _ -> false
+  let provenanceSel state path = 
+    state.ViewState.ProvenanceSelectors |> List.exists (fun sel -> matches sel path)
   let generalizedSel state path = 
     matches state.ViewState.GeneralizedStructuralSelector path
   let cursorBefore state path =
@@ -260,6 +264,7 @@ module Document =
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
           +? (generalizedSel state path, "gensel")
+          +? (provenanceSel state path, "hiprov")
       ] [
         h?div ["class" => "treetag" ] [
           yield text "<"
@@ -316,13 +321,14 @@ module Document =
                 Find "interactions" (Reference(_, Select state.DocumentState.CurrentDocument 
                   [Helpers.InteractionNode(histhash, ops) ])) &
                 Find "target" (Reference(_, targetSel)) &
-                Find "condition" (Reference(condKind, condSel)) &
+                Find "condition" condNd &
                 Find "prefix" prefixNd )) when id.StartsWith "@" -> 
                 let ops() = 
                   let prefixSel = Represent.unrepresentSel prefixNd
+                  let condSel = Represent.unrepresentSel condNd
                   Helpers.applySavedInteraction (id.Substring(0)) 
                     state.DocumentState.CurrentDocument targetSel prefixSel 
-                      (Some(condKind, condSel)) (List.map snd ops)
+                      (Some(Relative, condSel)) (List.map snd ops)
                 yield makeHandler id state.DocumentState.FinalHash ops // Use final hash here
             | id, Reference(kind, Select state.DocumentState.CurrentDocument 
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" -> 
@@ -372,6 +378,7 @@ module Document =
           +? (cursorBefore state path, "cursor cursor-before")
           +? (cursorAfter state path, "cursor cursor-after")
           +? (generalizedSel state path, "gensel")
+          +? (provenanceSel state path, "hiprov")
         yield! getEventHandlers nd tag path
         yield! rcdattrs ]
       
@@ -627,18 +634,34 @@ type Shortcut =
 
 module Shortcuts =
   let shortcuts = [
-    { Key = "d"
-      Header = "Delete the current document node"
-      IconCode = "las la-trash"
-      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!x"); EnterCommand ] }
-    { Key = "c"
-      Header = "Copy the current document node"
-      IconCode = "las la-copy"
-      Events = [ CommandEvent(CopyNode CurrentNode) ] }
     { Key = "b"
       Header = "Copy marked document node(s)"
       IconCode = "las la-copy"
       Events = [ CommandEvent(CopyNode MarkedNode) ] }
+    { Key = "c"
+      Header = "Copy the current document node"
+      IconCode = "las la-copy"
+      Events = [ CommandEvent(CopyNode CurrentNode) ] }
+    { Key = "d"
+      Header = "Delete the current document node"
+      IconCode = "las la-trash"
+      Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!x"); EnterCommand ] }
+    { Key = "e"
+      Header = "Evaluate all formulas"
+      IconCode = "las la-play"
+      Events = [ DocumentEvent(Evaluate(true)) ] }
+    { Key = "h"
+      Header = "Toggle edit history view"
+      IconCode = "las la-history"
+      Events = [ HistoryEvent(ToggleEditHistory) ] }
+    { Key = "p"
+      Header = "Toggle formula provenance view"
+      IconCode = "las la-database"
+      Events = [ ViewEvent(ToggleProvenanceHighlight) ] }
+    { Key = "u"
+      Header = "Toggle source code view"
+      IconCode = "las la-code"
+      Events = [ ViewEvent(ToggleViewSource) ] }
     { Key = "v"
       Header = "Paste copied at the current node"
       IconCode = "las la-paste"
@@ -647,22 +670,10 @@ module Shortcuts =
       Header = "Paste copied at marked nodes"
       IconCode = "las la-paste"
       Events = [ CommandEvent(CancelCommand); CommandEvent(TypeCommand "!v"); EnterCommand ] }
-    { Key = "e"
-      Header = "Evaluate all formulas"
-      IconCode = "las la-play"
-      Events = [ DocumentEvent(Evaluate(true)) ] }
     { Key = "z"
       Header = "Undo last edit"
       IconCode = "las la-undo-alt"
       Events = [ DocumentEvent(UndoLastEdit) ] }
-    { Key = "u"
-      Header = "Toggle source code view"
-      IconCode = "las la-code"
-      Events = [ ViewEvent(ToggleViewSource) ] }
-    { Key = "h"
-      Header = "Toggle edit history view"
-      IconCode = "las la-history"
-      Events = [ HistoryEvent(ToggleEditHistory) ] }
   ]
 
 // --------------------------------------------------------------------------------------
@@ -939,6 +950,8 @@ module Commands =
     // (one for applying to cursor, one for applying to all marked)
     for t, _, ops in Helpers.getSavedInteractions doc do
       let ops = List.map snd ops
+      yield command SK "las la-at" ("Apply " + t)
+        ( P.keyword $"@{t}!" |> mapEds (fun _ -> [ops]) )
       yield command SK "las la-at" ("Apply " + t + " to marked (user)")
         ( P.keyword $"@{t}" |> P.map (fun _ -> 
             NestedRecommendation [
@@ -1093,7 +1106,6 @@ module Commands =
     | CopyNode(CurrentNode) ->
         { state with CopySource = Some appstate.ViewState.CursorSelector } 
     | CopyNode(MarkedNode) ->
-        //{ state with CopySource = appstate.ViewState.GeneralizedMarkersSelector } 
         { state with CopySource = Some appstate.ViewState.GeneralizedStructuralSelector } 
     
 // --------------------------------------------------------------------------------------
@@ -1193,6 +1205,18 @@ module View =
     ]
 
   let rec update appstate state = function
+    | ToggleProvenanceHighlight ->
+        match state.ProvenanceSelectors with 
+        | _::_ -> { state with ProvenanceSelectors = [] }
+        | [] ->
+            let nds = select state.CursorSelector appstate.DocumentState.CurrentDocument
+            let collectSels = fold (fun _ nd st ->
+              match nd with 
+              | Reference(_, sels) -> sels::st
+              | _ -> st) 
+            let allSels = List.fold collectSels [] nds
+            { state with ProvenanceSelectors = allSels }
+
     | ToggleViewSource ->
         match state.ViewSourceSelector with 
         | None -> { state with ViewSourceSelector = Some state.CursorSelector }
@@ -1353,7 +1377,7 @@ let fromOperationsList ops =
   { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
       EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; 
       CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
-    ViewState = { CursorLocation = [], Before; CursorSelector = []; 
+    ViewState = { CursorLocation = [], Before; CursorSelector = []; ProvenanceSelectors = [];
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
     CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
       SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }

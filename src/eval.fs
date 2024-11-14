@@ -114,7 +114,7 @@ let evaluateRaw doc =
       let it = match select sel doc with [it] -> it | nds -> failwith $"evaluate: Ambiguous evaluation site: {sel}\n Resulted in {nds}"
       match it with 
       | Reference(kind, p) ->
-          let p = resolveReference kind p sel
+          let p = resolveReference sel (kind, p)
           [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel)), [p]
             Value(RecordAdd(sel, "result", List("empty", []))), [p] // Allow 'slightly clever' case of Copy from doc.fs
             Shared(ValueKind, Copy(sel @ [Field "result"], p)), [] ]

@@ -12,7 +12,6 @@ open Tbd
 open Tbd.Doc
 open Tbd.Demos
 
-let apply init ops = applyHistory init ops
 let merge h1 h2 = mergeHistories IgnoreConflicts h1 h2 |> fst
 let printEdits = List.iter (formatEdit >> printfn " - %s")
 let selectTag sel doc = match select sel doc with [List(t, _)] | [Record(t, _)] -> Some t | _ -> None 
@@ -90,19 +89,19 @@ let evalTests =
     // (i.e. as if you were always doing this by hand repeatedly)
     test "counter can increment state" {
       let ops1 = opsBaseCounter 
-      let doc1 = apply (rcd "div") ops1
+      let doc1 = applyHistory (rcd "div") ops1
       select [Field "counter"; Field "value"] doc1 |> equals [ Primitive(Number 0.0) ]
       
       let ops2 = ops1 @ opsCounterInc
-      let doc2 = apply (rcd "div") ops2
+      let doc2 = applyHistory (rcd "div") ops2
       let ops3 = ops2 @ Eval.evaluateOne doc2
-      let doc3 = apply (rcd "div") ops3
+      let doc3 = applyHistory (rcd "div") ops3
       select [Field "counter"; Field "value"; Field "result"] doc3 |> equals [ Primitive(Number 1.0) ]
 
       let ops4 = ops3 @ opsCounterInc
-      let doc4 = apply (rcd "div") ops4
+      let doc4 = applyHistory (rcd "div") ops4
       let ops5 = ops4 @ Eval.evaluateOne doc4
-      let doc5 = apply (rcd "div") ops5
+      let doc5 = applyHistory (rcd "div") ops5
       select [Field "counter"; Field "value"; Field "result"] doc5 |> equals [ Primitive(Number 2.0) ]
     }
 
@@ -118,9 +117,9 @@ let evalTests =
         mergeHistories ConflictResolution.IgnoreConflicts
           currentOps (opsBaseCounter @ opsCounterInc @ opsCounterInc)
 
-      let docUnevaluated = apply (rcd "div") currentOps
+      let docUnevaluated = applyHistory (rcd "div") currentOps
       let opsEvaluated = currentOps @ Eval.evaluateAll docUnevaluated
-      let docEvaluated = apply (rcd "div") opsEvaluated
+      let docEvaluated = applyHistory (rcd "div") opsEvaluated
       select [Field "counter"; Field "value"; Field "result"] docEvaluated |> equals [ Primitive(Number 3.0) ]
     }
 
@@ -131,29 +130,29 @@ let evalTests =
       let currentOps2, _ = 
         mergeHistories ConflictResolution.IgnoreConflicts
           currentOps1 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
-      let currentDoc1 = apply (rcd "div") currentOps2
+      let currentDoc1 = applyHistory (rcd "div") currentOps2
       
       let evalOps1 = Eval.evaluateAll currentDoc1
-      let currentDoc2 = apply (rcd "div") (currentOps2 @ evalOps1)
+      let currentDoc2 = applyHistory (rcd "div") (currentOps2 @ evalOps1)
       select (!/"/counter/value/result") currentDoc2 |> equals [Primitive(Number 2.0)]
 
       let currentOps3, _ = 
         mergeHistories ConflictResolution.IgnoreConflicts
           currentOps2 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
       let evalOps2 = Eval.updateEvaluatedEdits currentOps2 currentOps3 evalOps1
-      let currentDoc3 = apply (rcd "div") (currentOps3 @ evalOps2)
+      let currentDoc3 = applyHistory (rcd "div") (currentOps3 @ evalOps2)
       selectTag (!/"/counter/value") currentDoc3 |> equals (Some "x-formula")
       select (!/"/counter/value/result") currentDoc3 |> equals []
 
       let evalOps3 = evalOps2 @ Eval.evaluateAll currentDoc3
-      let currentDoc4 = apply (rcd "div") (currentOps3 @ evalOps3)
+      let currentDoc4 = applyHistory (rcd "div") (currentOps3 @ evalOps3)
       select (!/"/counter/value/result") currentDoc4 |> equals [Primitive(Number 3.0)]
     }
   ]
 
   
 [<Tests>]
-let basicmergeTests =
+let basicMergeTests =
   testList "basic merging" [
     test "merge rename" {
       let ops1 = [ uidS [Field "test"] "f1" "f2" ]
@@ -164,66 +163,108 @@ let basicmergeTests =
   ]
 
 [<Tests>]
-let complexmergeTests =
+let complexMergeTests =
   testList "complex merging" [    
     test "indexing merges with reordering" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps)
-      let doc2 = apply (rcd "div") ops2 
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2
     }
 
     test "refactoring merges with adding" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
-      let doc2 = apply (rcd "div") ops2
+      let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
 
     test "refactoring merges with name fix" {
       let ops1 = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
-      let doc2 = apply (rcd "div") ops2 
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2 
     }
 
     test "adding speaker directly and via temp is the same" {
       let ops1 = opsCore @ addSpeakerViaTempOps 
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = opsCore @ addSpeakerOps 
-      let doc2 = apply (rcd "div") ops2 
+      let doc2 = applyHistory (rcd "div") ops2 
       doc1 |> equals doc2 
     }
 
     test "refactoring merges with adding via temp" {
       let ops1 = merge (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerViaTempOps) 
-      let doc2 = apply (rcd "div") ops2
+      let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
 
     test "refactoring merges with adding two speakers by PBD" {
       let pbdCore = opsCore @ pbdAddInput
       let ops1 = merge (pbdCore @ refactorListOps) (pbdCore @ pbdAddFirstSpeaker @ pbdAddAnotherSpeaker) 
-      let doc1 = apply (rcd "div") ops1 
+      let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (pbdCore @ pbdAddFirstSpeaker @ refactorListOps) (pbdCore @ pbdAddAnotherSpeaker)
-      let doc2 = apply (rcd "div") ops2
+      let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
 
     test "adding budget merges with refactoring" {
       let ops1 = merge (opsCore @ refactorListOps) (opsCore @ opsBudget)
-      let doc1 = apply (rcd "div") ops1
+      let doc1 = applyHistory (rcd "div") ops1
       let ops2 = merge (opsCore @ opsBudget) (opsCore @ refactorListOps)
-      let doc2 = apply (rcd "div") ops2
+      let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2 
     }
   ]
 
+[<Tests>]
+let referenceUpdateTests =
+  let mkEd ed = 
+    { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
 
+  let doc0 = Record("div", [
+    "first", Reference(Relative, [DotDot; Field "things"; Index 0; Field "lbl"])
+    "things", List("ul", [  
+      Record("li", ["lbl", Primitive(String "abc"); 
+        "ref1", Reference(Relative, [DotDot; Field "lbl"]); 
+        "ref2", Reference(Relative, [DotDot; DotDot; DotDot; Field "first"]) ])
+      Record("li", ["lbl", Primitive(String "def"); 
+        "ref1", Reference(Relative, [DotDot; Field "error"; DotDot; Field "lbl"]);
+        "ref2", Reference(Relative, [DotDot; DotDot; Index 0; Field "lbl"])])
+    ])
+  ])
+
+
+  testList "reference updating" [
+    test "move copy before wrap" {
+      let ed = 
+        moveBefore { UniqueTempField = "xx"; PrefixEdits = []; SuffixEdits = [] }
+          (mkEd (Shared(ValueKind, Copy(!/"/temp/lbl/desc", !/"/form/input/@value"))))
+          (mkEd (Shared(StructuralKind, WrapRecord("comp", "span", !/"/items/*/condition"))))
+      ()    
+    }
+    test "wrap record" {
+      let doc1 = 
+        Shared(StructuralKind, WrapRecord("list", "section", [Field "things"]))
+        |> mkEd |> apply doc0 
+
+      select [Field "first"] doc1 
+      |> equals [ Reference(Relative, [DotDot; Field "things"; Field "list"; Index 0; Field "lbl"]) ]
+      select [Field "things"; Field "list"; Index 0; Field "ref1"] doc1 
+      |> equals [ Reference(Relative, [DotDot; Field "lbl"]) ]
+      select [Field "things"; Field "list"; Index 0; Field "ref2"] doc1 
+      |> equals [ Reference(Relative, [DotDot; DotDot; DotDot; DotDot; Field "first"]) ]
+      select [Field "things"; Field "list"; Index 1; Field "ref1"] doc1 
+      |> equals [ Reference(Relative, [DotDot; Field "lbl"]) ]
+      select [Field "things"; Field "list"; Index 1; Field "ref2"] doc1 
+      |> equals [ Reference(Relative, [DotDot; DotDot; Index 0; Field "lbl"]) ]
+    }
+  ]
 
 
