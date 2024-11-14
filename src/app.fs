@@ -181,20 +181,20 @@ module Helpers =
       text (hist.ToString("x"))
     ]
 
-  let renderReference state trigger kind sel = 
-    let selected = state.HistoryState.HighlightedSelector = Some sel
+  let renderReference state trigger (baseSel, ref) = 
+    let absSel = resolveReference baseSel ref
+    let selected = state.HistoryState.HighlightedSelector = Some absSel
     h?a [ 
       "href" => "javascript:;"
       "class" => "selector" +? (selected, "selsel")
-      "mouseover" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector(Some sel)))
+      "mouseover" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector(Some absSel)))
       "mouseout" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector None))
     ] [ 
-      if kind = ReferenceKind.Absolute then yield text "/"
-      yield text (formatSelector sel)
+      yield text (formatReference ref)
     ]
 
-  let renderSelector state trigger sel = 
-    renderReference state trigger Absolute sel
+  let renderAbsoluteReference state trigger sel = 
+    renderReference state trigger ([], (Absolute, sel))
 
   let generalizeToStructuralSelector sels = 
     sels |> List.map (function Index _ | Tag _ -> All | s -> s)
@@ -285,7 +285,7 @@ module Document =
           | Record(_, nds) -> 
               for f, a in nds do
                 yield loop (path @ [Field f]) ["id", f] a
-          | Reference(kind, sel) -> yield Helpers.renderReference state trigger kind sel
+          | Reference(kind, sel) -> yield Helpers.renderReference state trigger (path, (kind, sel))
           | Primitive(String s) -> yield text s
           | Primitive(Number n) -> yield text (string n)              
         ]
@@ -402,7 +402,7 @@ module Document =
             for f, a in nds do
               if not (f.StartsWith("@")) then
                 yield loop (path @ [Field f]) (pid ++ f) a
-        | Reference(kind, sel) -> yield Helpers.renderReference state trigger kind sel
+        | Reference(kind, sel) -> yield Helpers.renderReference state trigger (path, (kind, sel))
         | Primitive(String s) -> yield text s
         | Primitive(Number n) -> yield text (string n)        
       ]
@@ -493,16 +493,16 @@ module History =
         { state with SelectedEdits = set [ 0 .. appstate.DocumentState.DisplayEdits.Length - 1 ] }
 
 
-  let rec formatNode state trigger (nd:Node) = 
+  let rec formatNode state trigger path (nd:Node) = 
     match nd with 
     | Primitive(Number n) -> text (string n)
     | Primitive(String s) -> text s
-    | Reference(kind, sel) -> Helpers.renderReference state trigger kind sel
+    | Reference(kind, sel) -> Helpers.renderReference state trigger (path, (kind, sel))
     | List(tag, nds) -> h?span [] [
           yield text "["
           for i, nd in Seq.indexed nds do 
             if i <> 0 then yield text ", "
-            yield formatNode state trigger nd
+            yield formatNode state trigger path nd
           yield text "]"
         ]
     | Record(tag, nds) -> h?span [] [
@@ -510,7 +510,7 @@ module History =
           for i, (f, nd) in Seq.indexed nds do 
             if i <> 0 then yield text ", "
             yield text $"{f}="
-            yield formatNode state trigger nd
+            yield formatNode state trigger path nd
           yield text "}"
         ]
 
@@ -536,7 +536,7 @@ module History =
           yield text " "
           yield h?strong [] [ text (if sk = ValueKind then "v." + n else "s." + n) ]
           yield text " "
-          yield Helpers.renderSelector state trigger sel
+          yield Helpers.renderAbsoluteReference state trigger sel
           yield h?span ["style" => "color:black"] [ text " (" ]
           yield Helpers.renderHistoryHash state trigger histhash
           yield h?span ["style" => "color:black"] [ text ") " ]
@@ -551,22 +551,22 @@ module History =
               yield text "deps=("
               for i, dep in Seq.indexed ed.Edit.Dependencies do
                 if i <> 0 then yield text ", "
-                yield Helpers.renderSelector state trigger dep
+                yield Helpers.renderAbsoluteReference state trigger dep
               yield text ")"
         ]
       ]
     let renderv = render ValueKind
     match ed.Edit.Kind with 
-    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger nd]
-    | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderSelector state trigger src]
+    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger sel nd]
+    | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderAbsoluteReference state trigger src]
     | Value(PrimitiveEdit(sel, fn, None)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
     | Value(PrimitiveEdit(sel, fn, Some arg)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
-    | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger nd; "fld", text f]
+    | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger sel nd; "fld", text f]
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
     | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
     | Value(Check(sel, EqualsTo(String s))) -> renderv "check" "fa-circle-check" sel ["=", text s]
     | Shared(sk, ListReorder(sel, perm)) -> render sk "reorder" "fa-list-ol" sel ["perm", text (string perm)]
-    | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", Helpers.renderSelector state trigger src]
+    | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | Shared(sk, WrapRecord(id, tg, sel)) -> render sk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
     | Shared(sk, WrapList(tg, sel)) -> render sk "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
     | Shared(sk, UpdateTag(sel, t1, t2)) -> render sk "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
@@ -584,7 +584,7 @@ module History =
             for k, histhash, ops in saved ->
               h?li [] [ 
                 yield h?p [] [ 
-                  yield Helpers.renderSelector state trigger [Field "saved-interactions"; Field k] 
+                  yield Helpers.renderAbsoluteReference state trigger [Field "saved-interactions"; Field k] 
                   yield text " (" 
                   yield Helpers.renderHistoryHash state trigger (int histhash)
                   yield text ")"
@@ -956,10 +956,10 @@ module Commands =
         ( P.keyword $"@{t}" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix; text " with condition"])
+                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix; text " with condition"])
                   ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
                     Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) 
-                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                yield commandh SK "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc genSel prefix None ops ))  ]
         ))
@@ -967,7 +967,7 @@ module Commands =
         ( P.keyword $"@{t}*" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield commandh VK "las la-at" (fun state -> [text "Using current as "; Helpers.renderSelector state trigger prefix])
+                yield commandh VK "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
                     [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
         ))
