@@ -4,5 +4,5 @@ open Tbd.Tests
 
 [<EntryPoint>]
 let main argv =
-    //Tests.runTestsInAssemblyWithCLIArgs [] argv
-    Tests.runTestsWithCLIArgs [] argv referenceUpdateTests
+    Tests.runTestsInAssemblyWithCLIArgs [] argv
+    //Tests.runTestsWithCLIArgs [] argv referenceUpdateTests

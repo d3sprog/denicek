@@ -307,10 +307,13 @@ module Document =
         id.Substring(1) =!> fun _ e ->
           let opss = opsf ()
           e.preventDefault()
+          // TODO: Maybe this does the same thing as 'EditRecommendation' case in 'tryEnterCommand'?
           let baseeds = takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
           let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
           for ops in opss do
-            // TODO: Maybe this does the same thing as 'EditRecommendation' case in 'tryEnterCommand'?
+            // Use uniq ID to distinguish those edits from those occurring in the past
+            // (without this, they will be treated as being the same and merged as no-op)
+            let ops = ops |> Helpers.withUniqueGroupLabel id
             trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
 
       match nd with 
@@ -502,7 +505,7 @@ module History =
           yield text "["
           for i, nd in Seq.indexed nds do 
             if i <> 0 then yield text ", "
-            yield formatNode state trigger path nd
+            yield formatNode state trigger (path @ [Index i]) nd
           yield text "]"
         ]
     | Record(tag, nds) -> h?span [] [
@@ -510,7 +513,7 @@ module History =
           for i, (f, nd) in Seq.indexed nds do 
             if i <> 0 then yield text ", "
             yield text $"{f}="
-            yield formatNode state trigger path nd
+            yield formatNode state trigger (path @ [Field f]) nd
           yield text "}"
         ]
 
@@ -848,6 +851,7 @@ module Commands =
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
         let editsWithHash = state.DocumentState.DocumentEdits |> withHistoryHash 0 id 
         let recordedEds = [ for i in Seq.sort state.HistoryState.SelectedEdits -> editsWithHash.[i] ]
+        let hashBefore = match Seq.min state.HistoryState.SelectedEdits with 0 -> 0 | i -> fst editsWithHash.[i - 1]
         yield command VK "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
@@ -855,7 +859,7 @@ module Commands =
                   Record("x-saved-interactions", [])))
               yield Value(RecordAdd([Field "saved-interactions"], fld, 
                 Record("x-interaction", [ 
-                  "historyhash", Primitive(String(state.DocumentState.FinalHash.ToString("x"))); 
+                  "historyhash", Primitive(String(hashBefore.ToString("x"))); 
                   "interactions", List("x-interaction-list", []) ])))
               for hash, op in recordedEds ->
                 Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 

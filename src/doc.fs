@@ -55,6 +55,16 @@ for t in transformations do transformationsLookup.[t.Key] <- t.Function
 // Elements, Selectors, Paths
 // --------------------------------------------------------------------------------------
 
+let resolveReference baseSels (kind, ref) = 
+  let rec normalize acc sel = 
+    match sel, acc with 
+    | DotDot::sel, _::acc -> normalize acc sel
+    | DotDot::_, [] -> failwith "resolveReference: Reference to outside of document!"
+    | s::sel, _ -> normalize (s::acc) sel
+    | [], _ -> List.rev acc
+  if kind = Relative then normalize [] (baseSels @ ref)
+  else normalize [] ref
+
 let replace f nd = 
   let rec loop path nd =
     match f path nd with 
@@ -104,8 +114,8 @@ let rec includes p1 p2 =
   | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> includes p1 p2
   | _ -> false
 
-let includesReference p1 (p2base, (p2kind, p2sels)) =
-  failwith "todo"
+let includesReference p1 (p2base, p2ref) =
+  includes p1 (resolveReference p2base p2ref)
 
 let select sel doc = 
   doc |> fold (fun p value st -> 
@@ -425,16 +435,6 @@ let removeSelectorPrefix p1 p2 =
     | _ -> None
   loop [] p1 p2
   
-let resolveReference baseSels (kind, ref) = 
-  let rec normalize acc sel = 
-    match sel, acc with 
-    | DotDot::sel, _::acc -> normalize acc sel
-    | DotDot::_, [] -> failwith "resolveReference: Reference to outside of document!"
-    | s::sel, _ -> normalize (s::acc) sel
-    | [], _ -> List.rev acc
-  if kind = Relative then normalize [] (baseSels @ ref)
-  else normalize [] ref
-
 // --------------------------------------------------------------------------------------
 // Helpes for transforming edits when merging / applying
 // --------------------------------------------------------------------------------------
@@ -488,9 +488,20 @@ let decrementSelectorsAfterDel selDelete idel refOther =
     | MatchingFirst(s, selOther, selDelete) -> s::(decafter selDelete selOther)
     | TooSpecific(s) -> failwith $"decrementSelectorsAfterDel - Too specific selector {s} matched against Any"
     | IncompatibleFirst() -> selOther
-    | DotDot::_, _ -> selOther // TODO: Implement this 
     | _ -> failwith $"decrementSelectorsAfterDel - Missing case: {selOther} vs. {selDelete}"
   transformBasedReference refOther (fun selOther -> decafter selDelete selOther)
+
+/// Returns a modified version of 'selOther' to match
+/// item append at selAppend (by incrementing indices of affected selectors)
+let incrementSelectorsAfterIns selAppend refOther = 
+  let rec incafter selAppend selOther =
+    match selOther, selAppend with 
+    | Index(io)::selOther, [] -> Index(io + 1)::selOther
+    | MatchingFirst(s, selOther, selDelete) -> s::(incafter selDelete selOther)
+    | TooSpecific(s) -> failwith $"incrementSelectorsAfterIns - Too specific selector {s} matched against Any"
+    | IncompatibleFirst() -> selOther
+    | _ -> failwith $"incrementSelectorsAfterIns - Missing case: {selOther} vs. {selAppend}"
+  transformBasedReference refOther (fun selOther -> incafter selAppend selOther)
  
 /// Returns a modified version of 'selOther' to match
 /// reordering of indices 'ord' at location specified by 'selReord'
@@ -741,24 +752,41 @@ let apply doc edit =
 // Merge
 // --------------------------------------------------------------------------------------
 
-type ScopingResult = AllOutOfScope | TargetOutOfScope | SourceOutOfScope | InScope of Edit
+type ScopingResult = 
+  // All selectors were in the specified scope and have been changed as required
+  | InScope of Edit
+  // All selectors were outside of the specified scope - no change to edit
+  | AllOutOfScope 
+  // Target was out of scope, but source selectors may be in scope 
+  | TargetOutOfScope 
+  // Target was in scope, but source outside - if the transform did not do 
+  // something invalid, we can return rescoped edit (leaving original source)
+  // (this can be None if 'tryWithSelectors' fails because the scoping affected
+  // selector that must have stayed the same because it is a part of edit)
+  | SourceOutOfScope of Edit option 
 
 let tryScopeSelectors f edit = 
   let sels = getSelectors edit 
-  let nsels = sels |> List.choose f
-  let neditOpt = tryWithSelectors nsels edit
-  let ntarget = f (getTargetSelector edit) 
-  match neditOpt, ntarget with 
+  let scopedSels = 
+    List.choose f sels 
+  let fullyScopedEditOpt = 
+    tryWithSelectors scopedSels edit
+  let scopedTargetSel = 
+    f (getTargetSelector edit) 
+  let partiallyScopedEdit () = 
+    tryWithSelectors (sels |> List.map (fun s -> defaultArg (f s) s)) edit
+
+  match fullyScopedEditOpt, scopedTargetSel with 
   // None of the selectors satisfied the condition
-  | _ when nsels.Length = 0 -> AllOutOfScope
+  | _ when scopedSels.Length = 0 -> AllOutOfScope
   // All selectors satisfied the condition
-  | Some nedit, _ when nsels.Length = sels.Length -> InScope nedit 
+  | Some nedit, _ when scopedSels.Length = sels.Length -> InScope nedit 
   // Target selector did not satisfy the condition
   | _, None -> TargetOutOfScope
   // Either just source selectors did not satisfy the condition
   // or 'tryWithSelectors' failed because the scoping would create
   // invalid selector (e.g., drop field name from Delete edit)
-  | _ -> SourceOutOfScope
+  | _, Some _ -> SourceOutOfScope(partiallyScopedEdit())
 
 let scopeEdit oldBase newBase edit = 
   edit |> tryScopeSelectors (fun s -> 
@@ -810,6 +838,10 @@ let copyEdit e1 srcSel tgtSel =
 //
 let updateSelectors e1 e2 = 
   match e2.Kind with 
+  | Value(ListAppend(sel, _)) ->
+      //[mapReferences (incrementSelectorsAfterIns sel) e1]
+      [e1]
+
   // Value edits do not affect other selectors
   | Value(_)
   | Shared(ValueKind, _) -> [e1]
@@ -864,28 +896,17 @@ type EditMoveState =
   { UniqueTempField : string; PrefixEdits : Edit list; SuffixEdits : Edit list }
 
 let applyToAdded ctx e1 e2 = 
+  let mkEd ed = { Kind = ed; Dependencies = []; Disabled = false; GroupLabel = e2.GroupLabel }
+
   match e1.Kind with 
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
-  | Value(ListAppend(sel, nd)) -> 
-      match scopeEdit (sel @ [All]) [] e2 with
-      | InScope e2scoped ->
-          let nnd = apply nd e2scoped
-          [ { e1 with Kind = Value(ListAppend(sel, nnd)) }], ctx
-      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
-      | SourceOutOfScope -> 
-          // TODO: If we have a more elaborate transform, we can probably do this
-          // (e.g., store 'nd' somewhere in doc, transform it & ListAppendFrom)
-          failwith "applyToAdded: Source out of scope (TODO)" 
-
-
   | Value(ListAppendFrom(sel, src)) -> 
       // A naive implementation is to scope e2 to 'src' and then return [e2scoped; e1] 
       // This mutates the source in-place in the document - which works for my demos
       // but it is not correct in general. Instead, we create temp field, apply
       // all edits to this field and then appendfrom this new temp field.
-      match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField ] e2 with
+      match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField] e2 with
       | InScope e2scoped -> 
-          let mkEd ed = { Kind = ed; Dependencies = []; Disabled = false; GroupLabel = e2scoped.GroupLabel }
           let prefix = [
             mkEd <| Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty")))
             mkEd <| Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)) ]
@@ -894,13 +915,34 @@ let applyToAdded ctx e1 e2 =
           let res = [
             e2scoped
             mkEd <| Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
-          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } else 
-          res, ctx
+          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
+          else res, ctx
       | _ -> [e1], ctx
+
+  | Value(ListAppend(sel, nd)) -> 
+      // The same trick as above - but here, we set the added node as a value of a temp field
+      // and then transform the field - and turn Append to AppendFrom (to be done at the end).
+      match scopeEdit (sel @ [All]) [] e2 with
+      | InScope e2scoped ->
+          let nnd = apply nd e2scoped
+          [ { e1 with Kind = Value(ListAppend(sel, nnd)) }], ctx
+      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+      | SourceOutOfScope None -> failwith "todo - think about this"
+      | SourceOutOfScope (Some _) -> 
+          let e2scoped = match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField] e2 with SourceOutOfScope (Some e) -> e | _ -> failwith "applyToAdded: should not happen"
+          let prefix = [
+            mkEd <| Value(RecordAdd([], ctx.UniqueTempField, nd)) ]
+          let suffix = [
+            mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
+          let res = [
+            e2scoped
+            mkEd <| Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
+          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
+          else res, ctx
 
   | Value(RecordAdd(sel, fld, nd)) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
-      | InScope _ | SourceOutOfScope -> 
+      | InScope _ | SourceOutOfScope _ -> 
           // TODO: This is conflict, because e2 was doing something with a 
           // record field and e1 is now replacing it with a new thing.
           // We can let 'e1' win (return [e1]) or 'e2' win (return [])
@@ -909,7 +951,7 @@ let applyToAdded ctx e1 e2 =
 
   | Shared(_, Copy(sel, src)) -> 
       match scopeEdit sel src e2 with
-      | InScope _ | SourceOutOfScope -> 
+      | InScope _ | SourceOutOfScope _ -> 
           // TODO: Same conflict as in the case of RecordAdd - with same options.
           [e1], ctx
       | AllOutOfScope | TargetOutOfScope -> [e1], ctx

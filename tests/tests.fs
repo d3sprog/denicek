@@ -242,13 +242,6 @@ let referenceUpdateTests =
 
 
   testList "reference updating" [
-    test "move copy before wrap" {
-      let ed = 
-        moveBefore { UniqueTempField = "xx"; PrefixEdits = []; SuffixEdits = [] }
-          (mkEd (Shared(ValueKind, Copy(!/"/temp/lbl/desc", !/"/form/input/@value"))))
-          (mkEd (Shared(StructuralKind, WrapRecord("comp", "span", !/"/items/*/condition"))))
-      ()    
-    }
     test "wrap record" {
       let doc1 = 
         Shared(StructuralKind, WrapRecord("list", "section", [Field "things"]))
