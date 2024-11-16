@@ -114,6 +114,19 @@ let rec includes p1 p2 =
   | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> includes p1 p2
   | _ -> false
 
+/// Is 'p1' prefix of 'p2' 
+/// (unlike 'includes', this does not match if p1=/123 and p2=/*)
+let rec includesStrict p1 p2 = 
+  match p1, p2 with 
+  | [], _ -> true
+  | _, [] -> false
+  | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includesStrict p1 p2
+  | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includesStrict p1 p2
+  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && includesStrict p1 p2
+  | All::p1, Index(_)::p2 -> includesStrict p1 p2
+  | All::p1, Tag(_)::p2 -> includesStrict p1 p2
+  | _ -> false
+
 let includesReference p1 (p2base, p2ref) =
   includes p1 (resolveReference p2base p2ref)
 
@@ -1028,6 +1041,7 @@ let filterConflicting =
     if conflict then { ed with Disabled = true }, (getTargetSelector ed)::modsels
     else ed, modsels) 
 
+
 type ConflictResolution = 
   | IgnoreConflicts
   | RemoveConflicting
@@ -1070,8 +1084,38 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
 let pushEditsThroughSimple crmode e1s e2s = 
   pushEditsThrough crmode 0 0 e1s e2s |> fst
 
+
+
+  (*
+type Effect = 
+  | ValueEffect
+  | StructureEffect 
+
+let getEffect ed = 
+  match ed.Kind with 
+  | Value _ 
+  | Shared(ValueKind, _) -> ValueEffect, getTargetSelector ed
+  | Shared(StructuralKind, _) -> StructureEffect, getTargetSelector ed
+let addEffect effs (kindEff, selEff) = 
+  List.exists (fun (k, e) -> includesStrict e selEff)
+
+  effs |> Set.fi
+
+let getEffects eds =
+  set (List.map getEffect eds)
+
+*)
 let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
   let shared, (e1s, e2s) = List.sharedPrefix h1 h2
+
+  (*
+  let e1eff = getEffects e1s
+  let e2eff = getEffects e2s
+  printfn "E1 (BASE) EFFECTS"
+  for eff in e1eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
+  printfn "E2 (MERGE) EFFECTS"
+  for eff in e2eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
+  *)
   let e2sAfter, hashMap = pushEditsThrough crmode (hashEditList 0 (shared)) (hashEditList 0 (shared @ e1s)) e1s e2s
   shared @ e1s @ e2sAfter, hashMap
 

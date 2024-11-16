@@ -28,6 +28,7 @@ let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false 
 let apV s n = mkEd <| Shared(ValueKind, ListAppend(s, n))  
 let apS s n = mkEd <| Shared(StructuralKind, ListAppend(s, n))  
 let apfV s sel = mkEd <| Shared(ValueKind, ListAppendFrom(s, sel))  
+let apfS s sel = mkEd <| Shared(StructuralKind, ListAppendFrom(s, sel))  
 let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn, None))  
 let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
 
@@ -80,7 +81,7 @@ let opsCore =
 // Add <li> and reorder items
 let addSpeakerOps = 
   [ 
-    apV (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    apS (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
 
@@ -89,7 +90,7 @@ let addSpeakerViaTempOps =
   [
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apfV (!/ "/speakers") (!/ "/temp")
+    apfS (!/ "/speakers") (!/ "/temp")
     delrV (!/ "/") "temp"
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]

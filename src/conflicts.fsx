@@ -66,10 +66,10 @@ let transformType typ ed =
   | Value(RecordAdd(tgt, fld, nd)) -> 
       transformRecordPart tgt typ (fun t flds -> TyRecord(t, flds @ [fld, typeOfNode nd]))
 
-  | Value(ListAppend(tgt, nd)) -> 
+  | Shared(StructuralKind, ListAppend(tgt, nd)) -> 
       transformListPart tgt typ (fun t ty -> TyList(t, commonType ty (typeOfNode nd)))
 
-  | Value(ListAppendFrom(tgt, src)) -> 
+  | Shared(StructuralKind, ListAppendFrom(tgt, src)) -> 
       transformListPart tgt typ (fun t ty -> TyList(t, commonType ty (getTypePart src typ)))
 
   | Shared(StructuralKind, RecordRenameField(tgt, fold, fnew)) -> 
@@ -102,20 +102,38 @@ opsCore @ opsBudget |> List.fold transformType (TyRecord("div", []))
 // --------------------------------------------------------------------------------------
 
 type Effect = 
-  | ValueEffect of Selectors
-  | StructureEffect of Selectors
+  | ValueEffect 
+  | StructureEffect 
 
 let getEffect ed = 
   match ed.Kind with 
   | Value _ 
-  | Shared(ValueKind, _) -> ValueEffect(getTargetSelector ed)
-  | Shared(StructuralKind, _) -> StructureEffect(getTargetSelector ed)
+  | Shared(ValueKind, _) -> ValueEffect, getTargetSelector ed
+  | Shared(StructuralKind, _) -> StructureEffect, getTargetSelector ed
+
+let getEffects eds =
+  set (List.map getEffect eds)
 
 let getDependencies ed = 
   match ed.Kind with 
-  | Value(ListAppendFrom(_, src)) 
+  | Shared(_, ListAppendFrom(_, src)) 
   | Shared(_, Copy(_, src)) -> src :: ed.Dependencies
   | _ -> ed.Dependencies
+
+let addEffect effs (kindEff, selEff) = 
+  List.exists (fun (k, e) -> includesStrict e selEff)
+
+  effs |> Set.fi
+
+let e1eff = getEffects addSpeakerOps
+let e2eff = getEffects refactorListOps
+for e in addSpeakerOps do printfn $"{formatEdit e}"
+for e in refactorListOps do printfn $"{formatEdit e}"
+
+printfn "E1 (BASE) EFFECTS"
+for eff in e1eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
+printfn "E2 (MERGE) EFFECTS"
+for eff in e2eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
 
 (*
 let e1s = addSpeakerOps
