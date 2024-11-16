@@ -311,7 +311,7 @@ module Document =
           let baseeds = takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
           let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
           for ops in opss do
-            // Use uniq ID to distinguish those edits from those occurring in the past
+            // Use unique ID to distinguish those edits from those occurring in the past
             // (without this, they will be treated as being the same and merged as no-op)
             let ops = ops |> Helpers.withUniqueGroupLabel id
             trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
@@ -435,7 +435,19 @@ module Document =
         // Merge histories produces map that maps original edits to  new edits.
         // We use this to fix all the saved interactions... (I guess this is a bit hacky?
         // The alternative would be to keep git-like tree and merge in more complex ways.)
-        let fixhist = 
+        let fixhist =             
+          // Because we are appending edits before those that we are replaying
+          // (this makes it possible to replay edits to list items on top of new items)
+          // we also need to rename unique IDs in selectors to avoid clashes
+          let dict = System.Collections.Generic.Dictionary<_, _>()
+          let renameUniqueSelector =
+            let unique() = "$uniquetemp_" + hash(System.Guid.NewGuid()).ToString("x")
+            function 
+              | Field(f)::sel when f.StartsWith("$uniquetemp_") ->
+                  if not (dict.ContainsKey(f)) then let nk = unique() in dict.Add(f, nk); dict.Add(nk, nk)
+                  Field(dict.[f])::sel
+              | sel -> sel               
+
           let doc = applyHistory state.Initial merged
           let mked ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
           [ for n, oldhash, ops in Helpers.getSavedInteractions doc do
@@ -443,7 +455,7 @@ module Document =
             if hashMap.ContainsKey(oldhash) then 
               let nhash = Primitive(String((fst hashMap.[oldhash]).ToString("x")))
               yield Value(RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash))
-            
+
             // Update the operations to new ones - if they have changed,
             // replace the interactions list in the saved interactions
             let newOps = 
@@ -453,7 +465,9 @@ module Document =
             if newOps <> ops then
               yield Value(RecordAdd([Field "saved-interactions"; Field n], "interactions", List("x-interaction-list", [])))
               for hash, op in newOps ->
-                Value(ListAppend([Field "saved-interactions"; Field n; Field "interactions"], 
+                let op = withSelectors (List.map renameUniqueSelector (getSelectors op)) op
+                let op = withTargetSelector (renameUniqueSelector (getTargetSelector op)) op                
+                Shared(ValueKind, ListAppend([Field "saved-interactions"; Field n; Field "interactions"], 
                   Represent.represent (Some hash) op)) ]
           |> List.map mked
         let merged = merged @ fixhist
@@ -560,14 +574,14 @@ module History =
       ]
     let renderv = render ValueKind
     match ed.Edit.Kind with 
-    | Value(ListAppend(sel, nd)) -> renderv "append" "fa-at" sel ["node", formatNode state trigger sel nd]
-    | Value(ListAppendFrom(sel, src)) -> renderv "appfrom" "fa-paperclip" sel ["node", Helpers.renderAbsoluteReference state trigger src]
     | Value(PrimitiveEdit(sel, fn, None)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
     | Value(PrimitiveEdit(sel, fn, Some arg)) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
     | Value(RecordAdd(sel, f, nd)) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger sel nd; "fld", text f]
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
     | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
     | Value(Check(sel, EqualsTo(String s))) -> renderv "check" "fa-circle-check" sel ["=", text s]
+    | Shared(sk, ListAppend(sel, nd)) -> render sk "append" "fa-at" sel ["node", formatNode state trigger sel nd]
+    | Shared(sk, ListAppendFrom(sel, src)) -> render sk "appfrom" "fa-paperclip" sel ["node", Helpers.renderAbsoluteReference state trigger src]
     | Shared(sk, ListReorder(sel, perm)) -> render sk "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | Shared(sk, WrapRecord(id, tg, sel)) -> render sk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
@@ -862,7 +876,7 @@ module Commands =
                   "historyhash", Primitive(String(hashBefore.ToString("x"))); 
                   "interactions", List("x-interaction-list", []) ])))
               for hash, op in recordedEds ->
-                Value(ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
+                Shared(ValueKind, ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
                   Represent.represent (Some hash) op)) ] ))
              
     // The following are value edits regardless of to what they are applied
@@ -909,19 +923,19 @@ module Commands =
         | Some src ->
             yield command sk "las la-paste" ("Add copied node to " + cl)
               ( anonAssignment <*>> P.keyword "!v" |> mapEd (fun _ ->
-                Value(ListAppendFrom(sel, src)) ))
+                Shared(sk, ListAppendFrom(sel, src)) ))
         yield command sk "las la-id-card" ("Add record item to " + cl)
           ( anonAssignment <*>> recordTag |> mapEd (fun (tag) ->
-            Value(ListAppend(sel, Record(tag, []))) ))
+            Shared(sk, ListAppend(sel, Record(tag, []))) ))
         yield command sk "las la-list" ("Add list item to " + cl)
           ( anonAssignment <*>> listTag |> mapEd (fun (tag) ->
-            Value(ListAppend(sel, List(tag, []))) ))
+            Shared(sk, ListAppend(sel, List(tag, []))) ))
         yield command sk "las la-hashtag" ("Add numerical item to " + cl)
           ( anonAssignment <*>> numHole |> mapEd (fun (num) ->
-            Value(ListAppend(sel, Primitive(Number (int num)))) ))
+            Shared(sk, ListAppend(sel, Primitive(Number (int num)))) ))
         yield command sk "las la-font" ("Add string item to " + cl)
           ( anonAssignment <*>> strHole |> mapEd (fun (str) ->
-            Value(ListAppend(sel, Primitive(String str))) ))
+            Shared(sk, ListAppend(sel, Primitive(String str))) ))
       | _ -> ()
       
     // Checks that current node has value / is non-empty
@@ -1364,6 +1378,10 @@ let render trigger state =
       ]
       yield! Commands.renderContext state trigger
       yield! History.renderHistory trigger state
+    ]
+    h?script [ "type" => "application/json"; "id" => "serialized-selection" ] [
+      let nodes = state.HistoryState.SelectedEdits |> Seq.map (fun i -> Represent.represent None state.DocumentState.DocumentEdits.[i])
+      text (Serializer.nodesToJsonString nodes)
     ]
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
       let nodes = state.DocumentState.DocumentEdits |> List.map (Represent.represent None)

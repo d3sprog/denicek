@@ -19,21 +19,7 @@ let selectTag sel doc = match select sel doc with [List(t, _)] | [Record(t, _)] 
 
 [<Tests>]
 let adhocTests =
-  testList "ad hoc tests" [
-    (*
-    TODO: This way of recording add-item interaction does not currently work
-    (partly because of "applyToAdded: Source out of scope (TODO)" error and partly
-    because we would have to use histhash for saved-interactions from a point
-    before the edits - now we use just after and so replay really overwrites 0th item).
-    
-    test "merging two appends" {
-      let ops1 = todoBaseOps @ todoAddOps "First work"
-      let ops2 = todoBaseOps @ todoAddOps "Second work"
-      let merged = merge ops1 ops2
-      let doc = applyHistory (rcd "div") merged
-        
-    }
-    *)
+  testList "ad hoc tests" [       
     test "scopeEdit can scope edit that adds unrelated reference" {
       let actual = 
         scopeEdit
@@ -165,6 +151,15 @@ let basicMergeTests =
 [<Tests>]
 let complexMergeTests =
   testList "complex merging" [    
+    test "merging two appends with edits inside list item" {
+      let ops1 = todoBaseOps @ todoAddOps "First work"
+      let ops2 = todoBaseOps @ todoAddOps "Second work"
+      let merged = merge ops1 ops2
+      let doc = applyHistory (rcd "div") merged
+      select (!/"/items/0/entry/work") doc |> equals [Primitive (String "First work")]
+      select (!/"/items/1/entry/work") doc |> equals [Primitive (String "Second work")]        
+    }
+
     test "indexing merges with reordering" {
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ fixSpeakerNameOps)
       let doc1 = applyHistory (rcd "div") ops1 

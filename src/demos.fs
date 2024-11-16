@@ -25,8 +25,9 @@ let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
 
 // Value edits
-let ap s n = mkEd <| Value(ListAppend(s, n))  
-let apf s sel = mkEd <| Value(ListAppendFrom(s, sel))  
+let apV s n = mkEd <| Shared(ValueKind, ListAppend(s, n))  
+let apS s n = mkEd <| Shared(StructuralKind, ListAppend(s, n))  
+let apfV s sel = mkEd <| Shared(ValueKind, ListAppendFrom(s, sel))  
 let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn, None))  
 let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
 
@@ -71,15 +72,15 @@ let opsCore =
     add [] "t1" (nds "value" "h1" "Programming conference 2023")
     add [] "t2" (nds "value" "h2" "Speakers")
     add [] "speakers" (lst "ul")
-    ap (!/ "/speakers") (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
-    ap (!/ "/speakers") (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
-    ap (!/ "/speakers") (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
+    apV (!/ "/speakers") (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
+    apV (!/ "/speakers") (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
+    apV (!/ "/speakers") (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
 
 // Add <li> and reorder items
 let addSpeakerOps = 
   [ 
-    ap (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    apV (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
 
@@ -88,7 +89,7 @@ let addSpeakerViaTempOps =
   [
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apf (!/ "/speakers") (!/ "/temp")
+    apfV (!/ "/speakers") (!/ "/temp")
     delrV (!/ "/") "temp"
     ordS (!/ "/speakers") [3; 0; 1; 2] 
   ]
@@ -164,8 +165,8 @@ let opsBudget =
     // NOTE: Construct things in a way where all structural edits (wrapping)
     // are applied to the entire list using All (this should be required!)
     // because otherwise we may end up with inconsistent structures
-    ap (!/ "/totals") (ps "Refreshments: ") 
-    ap (!/ "/totals") (ps "Speaker travel: ") 
+    apV (!/ "/totals") (ps "Refreshments: ") 
+    apV (!/ "/totals") (ps "Speaker travel: ") 
     wrS (!/ "/totals/*") "label" "li"    
     add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
     add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
@@ -197,7 +198,7 @@ let pbdAddFirstSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apf (!/ "/speakers") (!/ "/temp")
+    apfV (!/ "/speakers") (!/ "/temp")
     delrV (!/ "/") "temp"
   ]
 
@@ -208,7 +209,7 @@ let pbdAddAnotherSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apf (!/ "/speakers") (!/ "/temp")
+    apfV (!/ "/speakers") (!/ "/temp")
     delrV (!/ "/") "temp"
   ]
   
@@ -225,7 +226,7 @@ let todoBaseOps =
 let todoAddOps work = 
   [ 
     add [] "temp" (ps work)
-    ap (!/"/items") (rcd "li")
+    apS (!/"/items") (rcd "li")
     add (!/"/items/0") "entry" (rcd "label")
     add (!/"/items/0/entry") "done" (rcd "input")
     add (!/"/items/0/entry/done") "@type" (ps "checkbox")
@@ -284,14 +285,14 @@ let opsCounterHndl baseList =
     yield add (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
     for op in opsCounterInc ->
-      ap (!/ "/saved-interactions/increment/interactions") (Represent.represent None op) 
+      apV (!/ "/saved-interactions/increment/interactions") (Represent.represent None op) 
     yield add (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
 
     yield add (!/"/saved-interactions") "decrement" (rcd "x-interaction")
     yield add (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
     for op in opsCounterDec ->
-      ap (!/ "/saved-interactions/decrement/interactions") (Represent.represent None op) 
+      apV (!/ "/saved-interactions/decrement/interactions") (Represent.represent None op) 
     yield add (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) ]
 
 

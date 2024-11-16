@@ -185,11 +185,11 @@ type SharedEdit =
   | UpdateTag of Selectors * string * string
   | ListDelete of Selectors * int
   | RecordDelete of Selectors * string
+  | ListAppend of Selectors * Node
+  | ListAppendFrom of Selectors * Selectors
 
 type ValueEdit = 
   | PrimitiveEdit of Selectors * string * string option
-  | ListAppend of Selectors * Node
-  | ListAppendFrom of Selectors * Selectors
   | RecordAdd of Selectors * string * Node
   | Check of Selectors * Condition
 
@@ -233,10 +233,6 @@ let formatEdit ed =
       fmt "primitive" ValueKind [formatSelector sel; formatString op]
   | Value(PrimitiveEdit(sel, op, Some arg)) -> 
       fmt "primitive" ValueKind [formatSelector sel; formatString op; formatString arg]
-  | Value(ListAppend(sel, nd)) -> 
-      fmt "listAppend" ValueKind [formatSelector sel; formatNode nd]
-  | Value(ListAppendFrom(sel, src)) -> 
-      fmt "listAppendFrom" ValueKind [formatSelector sel; formatSelector src]
   | Value(RecordAdd(sel, n, nd)) -> 
       fmt "recordAdd" ValueKind [formatSelector sel; formatString n; formatNode nd]
   | Value(Check(sel, NonEmpty)) -> 
@@ -245,6 +241,10 @@ let formatEdit ed =
       fmt "check" ValueKind [formatSelector sel; "equals"; formatString s]
   | Value(Check(sel, EqualsTo (Number n))) -> 
       fmt "check" ValueKind [formatSelector sel; "equals"; string n]
+  | Shared(sk, ListAppend(sel, nd)) -> 
+      fmt "listAppend" sk [formatSelector sel; formatNode nd]
+  | Shared(sk, ListAppendFrom(sel, src)) -> 
+      fmt "listAppendFrom" sk [formatSelector sel; formatSelector src]
   | Shared(sk, ListReorder(sel, ord)) -> 
       fmt "listReorder" sk [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
   | Shared(sk, RecordRenameField(sel, o, n)) -> 
@@ -302,8 +302,8 @@ let getTargetSelector ed =
   | Value(Check(s, _)) -> s
   // Add selector to the end, pointing at the affected node
   | Shared(_, WrapList(_, s)) 
-  | Value(ListAppend(s, _))
-  | Value(ListAppendFrom(s, _)) -> s @ [All]
+  | Shared(_, ListAppend(s, _))
+  | Shared(_, ListAppendFrom(s, _)) -> s @ [All]
   | Shared(_, ListDelete(s, i)) -> s @ [Index i]
   | Shared(_, RecordRenameField(s, id, _)) 
   | Shared(_, RecordDelete(s, id))
@@ -323,8 +323,8 @@ let withTargetSelector tgt ed =
   | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
   // Remove added selector, pointing at the affected node
   | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.dropLast tgt)) |> ret
-  | Value(ListAppend(_, nd)) -> Value(ListAppend(List.dropLast tgt, nd)) |> ret
-  | Value(ListAppendFrom(_, src)) -> Value(ListAppendFrom(List.dropLast tgt, src)) |> ret
+  | Shared(sk, ListAppend(_, nd)) -> Shared(sk, ListAppend(List.dropLast tgt, nd)) |> ret
+  | Shared(sk, ListAppendFrom(_, src)) -> Shared(sk, ListAppendFrom(List.dropLast tgt, src)) |> ret
   | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast tgt, getLastIndex tgt)) |> ret
   | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(List.dropLast tgt, getLastField tgt, n)) |> ret
   | Shared(sk, RecordDelete(_, _)) -> Shared(sk, RecordDelete(List.dropLast tgt, getLastField tgt)) |> ret
@@ -350,9 +350,9 @@ let getAllReferences inNodes ed =
   // Pointing at a node that will be modified by the edit
   | Shared(_, WrapRecord(_, _, s)) 
   | Shared(_, WrapList(_, s)) -> [[], (Absolute, s)]
-  | Value(ListAppend(s, nd)) 
+  | Shared(_, ListAppend(s, nd)) 
   | Value(RecordAdd(s, _, nd)) -> ([], (Absolute, s)) :: (if inNodes then getNodeReferences s nd else [])
-  | Value(ListAppendFrom(s1, s2)) -> [[], (Absolute, s1); [], (Absolute, s2)]
+  | Shared(_, ListAppendFrom(s1, s2)) -> [[], (Absolute, s1); [], (Absolute, s2)]
   // Add selector pointing to the previously existing thing 
   | Shared(_, RecordDelete(s, fld)) 
   | Shared(_, RecordRenameField(s, fld, _)) -> [[], (Absolute, s @ [Field fld])]
@@ -374,9 +374,9 @@ let withAllReferences inNodes refs ed =
   // Pointing at a node that will be modified by the edit
   | Shared(sk, WrapRecord(t, f, _)) -> Shared(sk, WrapRecord(t, f, oneAbsolute refs) ) |> ret
   | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, oneAbsolute refs) ) |> ret
-  | Value(ListAppend(_, nd)) -> Value(ListAppend(headAbsolute refs, if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
+  | Shared(sk, ListAppend(_, nd)) -> Shared(sk, ListAppend(headAbsolute refs, if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
   | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(headAbsolute refs, s, if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
-  | Value(ListAppendFrom(_, _)) -> Value(ListAppendFrom(headAbsolute refs, oneAbsolute (List.tail refs))) |> ret
+  | Shared(sk, ListAppendFrom(_, _)) -> Shared(sk, ListAppendFrom(headAbsolute refs, oneAbsolute (List.tail refs))) |> ret
   // Add selector pointing to the previously existing thing 
   | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast (oneAbsolute refs), getLastIndex (oneAbsolute refs))) |> ret
   | Shared(sk, RecordDelete(_, f)) -> Shared(sk, RecordDelete(List.dropLast (oneAbsolute refs), getLastField (oneAbsolute refs))) |> ret
@@ -584,6 +584,9 @@ let apply doc edit =
   // Add and Append change structure in that they add new items that may have a different
   // shape. This is allowed at runtime, but it may break code referring to newly added
   // things. We could check this using some kind of type system.
+  //
+  // Note that ListAppend/ListAppendFrom can be structural operations, but this has no
+  // effect here (as here they add things to the end) - this only has effects when merging
 
   | Value(Check(sel, cond)) ->
       match cond, select sel doc with 
@@ -600,13 +603,13 @@ let apply doc edit =
         | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
-  | Value(ListAppend(sel, nd)) ->
+  | Shared(_, ListAppend(sel, nd)) ->
       replace (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [nd]))
         | _ -> None ) doc
 
-  | Value(ListAppendFrom(sel, src)) ->
+  | Shared(_, ListAppendFrom(sel, src)) ->
       replace (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [selectSingle src doc]))
@@ -728,7 +731,7 @@ let apply doc edit =
         // Slightly clever in that we can copy multiple source nodes into a single target list node
         // (this is needed for evaluation of arguments - see eval.fs)
         | [List(t, _)] -> [List(t, srcNodes)] 
-        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
+        | tgtNodes -> [Primitive(String "????")] //failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
         if matches p sel then Some(next())
@@ -838,16 +841,15 @@ let copyEdit e1 srcSel tgtSel =
 //
 let updateSelectors e1 e2 = 
   match e2.Kind with 
-  | Value(ListAppend(sel, _)) ->
-      //[mapReferences (incrementSelectorsAfterIns sel) e1]
-      [e1]
-
   // Value edits do not affect other selectors
   | Value(_)
   | Shared(ValueKind, _) -> [e1]
   
   // For structural edits, transform the selectors in the
   // other edit in a way corresponding to the edit
+  | Shared(StructuralKind, ListAppend(sel, _)) 
+  | Shared(StructuralKind, ListAppendFrom(sel, _)) ->
+      [mapReferences (incrementSelectorsAfterIns sel) e1]
   | Shared(StructuralKind, ListDelete(sel, idel)) ->
       [mapReferences (decrementSelectorsAfterDel sel idel) e1]
   | Shared(StructuralKind, WrapRecord(id, _, sel)) ->             
@@ -900,7 +902,7 @@ let applyToAdded ctx e1 e2 =
 
   match e1.Kind with 
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
-  | Value(ListAppendFrom(sel, src)) -> 
+  | Shared(sk, ListAppendFrom(sel, src)) -> 
       // A naive implementation is to scope e2 to 'src' and then return [e2scoped; e1] 
       // This mutates the source in-place in the document - which works for my demos
       // but it is not correct in general. Instead, we create temp field, apply
@@ -914,18 +916,18 @@ let applyToAdded ctx e1 e2 =
             mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
           let res = [
             e2scoped
-            mkEd <| Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
+            mkEd <| Shared(sk, ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
           if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
           else res, ctx
       | _ -> [e1], ctx
 
-  | Value(ListAppend(sel, nd)) -> 
+  | Shared(sk, ListAppend(sel, nd)) -> 
       // The same trick as above - but here, we set the added node as a value of a temp field
       // and then transform the field - and turn Append to AppendFrom (to be done at the end).
       match scopeEdit (sel @ [All]) [] e2 with
       | InScope e2scoped ->
           let nnd = apply nd e2scoped
-          [ { e1 with Kind = Value(ListAppend(sel, nnd)) }], ctx
+          [ { e1 with Kind = Shared(sk, ListAppend(sel, nnd)) }], ctx
       | AllOutOfScope | TargetOutOfScope -> [e1], ctx
       | SourceOutOfScope None -> failwith "todo - think about this"
       | SourceOutOfScope (Some _) -> 
@@ -936,7 +938,7 @@ let applyToAdded ctx e1 e2 =
             mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
           let res = [
             e2scoped
-            mkEd <| Value(ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
+            mkEd <| Shared(sk, ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
           if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
           else res, ctx
 
@@ -1014,7 +1016,7 @@ let filterDisabledGroups initial hist =
 
 let getDependencies ed = 
   match ed.Kind with 
-  | Value(ListAppendFrom(_, src)) 
+  | Shared(_, ListAppendFrom(_, src)) 
   | Shared(_, Copy(_, src)) ->  getTargetSelector ed :: src :: ed.Dependencies
   | _ -> getTargetSelector ed :: ed.Dependencies
   
@@ -1057,7 +1059,7 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
           ctx <- nctx
           e2s ) [e2] e1s 
       let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
-
+      
       let resHashed = withHistoryHash hashAfter id res
       hashBefore <- hash(hashBefore, e2)
       hashAfter <- hashEditList hashAfter res

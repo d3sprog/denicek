@@ -26,6 +26,7 @@ let representSel sel =
   List("x-selectors", 
     [ for s in sel ->
         match s with 
+        | DotDot -> Primitive(String "..")
         | All -> Primitive(String "*")
         | Tag t -> Primitive(String("#" + t))
         | Index n -> Primitive(Number n)
@@ -35,6 +36,7 @@ let unrepresentSel expr =
   match expr with 
   | List("x-selectors", sels) ->
       sels |> List.map (function 
+        | Primitive(String "..") -> DotDot
         | Primitive(String "*") -> All 
         | Primitive(String s) when s.Length <> 0 && s.[0] = '#' -> Field (s.Substring(1))
         | Primitive(String s) -> Field s
@@ -72,10 +74,6 @@ let unrepresent nd =
     | _ -> res, None
   match nd with
   // Value edits
-  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd)) ->
-      Value(ListAppend(unrepresentSel sel, nd)) |> ret
-  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src)) ->
-      Value(ListAppendFrom(unrepresentSel sel, unrepresentSel src)) |> ret
   | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd)) ->
       Value(RecordAdd(unrepresentSel sel, f, nd)) |> ret
   | Record("x-edit-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
@@ -85,6 +83,10 @@ let unrepresent nd =
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
       Value(PrimitiveEdit(unrepresentSel tgt, op, None)) |> ret
   // Shared edits
+  | Record("x-edit-append", Lookup (Findsk sk & Find "target" sel & Find "node" nd)) ->
+      Shared(sk, ListAppend(unrepresentSel sel, nd)) |> ret
+  | Record("x-edit-appendfrom", Lookup (Findsk sk & Find "target" sel & Find "src" src)) ->
+      Shared(sk, ListAppendFrom(unrepresentSel sel, unrepresentSel src)) |> ret
   | Record("x-edit-wraprec", Lookup(Findsk sk & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       Shared(sk, WrapRecord(tag, id, unrepresentSel target)) |> ret
   | Record("x-edit-renamefld", Lookup (Findsk sk & Find "target" sel & Finds "old" fold & Finds "new" fnew)) ->
@@ -112,10 +114,6 @@ let represent (hash:int option) op =
     | None -> rcd k args
   match op.Kind with 
   // Value edits
-  | Value(ListAppend(target, nd)) ->
-      rcd "x-edit-append" [ "target", representSel target; "node", nd ]
-  | Value(ListAppendFrom(target, src)) ->
-      rcd "x-edit-appendfrom" [ "target", representSel target; "src", representSel src ]
   | Value(RecordAdd(target, f, nd)) ->
       rcd "x-edit-add" [ "target", representSel target; "field", ps f; "node", nd ]
   | Value(Check(target, cond)) -> 
@@ -125,6 +123,10 @@ let represent (hash:int option) op =
   | Value(PrimitiveEdit(target, op, Some arg)) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op; "arg", ps arg ]
   // Shared edits
+  | Shared(sk, ListAppend(target, nd)) ->
+      rcd "x-edit-append" [ "target", representSel target; "node", nd; representKind sk ]
+  | Shared(sk, ListAppendFrom(target, src)) ->
+      rcd "x-edit-appendfrom" [ "target", representSel target; "src", representSel src; representKind sk ]
   | Shared(sk, WrapRecord(tag, id, target)) ->
       rcd "x-edit-wraprec" [ "tag", ps tag; "fld", ps id; "target", representSel target; representKind sk ] 
   | Shared(sk, RecordRenameField(target, fold, fnew)) ->
