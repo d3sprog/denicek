@@ -28,7 +28,6 @@ let representSel sel =
         match s with 
         | DotDot -> Primitive(String "..")
         | All -> Primitive(String "*")
-        | Tag t -> Primitive(String("#" + t))
         | Index n -> Primitive(Number n)
         | Field f -> Primitive(String f) ])
 
@@ -82,6 +81,8 @@ let unrepresent nd =
       Value(PrimitiveEdit(unrepresentSel tgt, op, Some arg)) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
       Value(PrimitiveEdit(unrepresentSel tgt, op, None)) |> ret
+  | Record("x-edit-updatetag", Lookup (Find "target" tgt & Finds "new" ntag)) ->
+      Value(UpdateTag(unrepresentSel tgt, ntag)) |> ret
   // Shared edits
   | Record("x-edit-append", Lookup (Findsk sk & Find "target" sel & Find "node" nd)) ->
       Shared(sk, ListAppend(unrepresentSel sel, nd)) |> ret
@@ -101,8 +102,6 @@ let unrepresent nd =
       Shared(sk, WrapList(tag, unrepresentSel tgt)) |> ret
   | Record("x-edit-listreorder", Lookup (Findsk sk & Find "target" tgt & Find "perm" perm)) ->
       Shared(sk, ListReorder(unrepresentSel tgt, unrepresentIntList perm)) |> ret
-  | Record("x-edit-updatetag", Lookup (Findsk sk & Find "target" tgt & Finds "old" otag & Finds "new" ntag)) ->
-      Shared(sk, UpdateTag(unrepresentSel tgt, otag, ntag)) |> ret
   | _ -> failwith $"unrepresent - Missing case for: {nd}"
 
 let represent (hash:int option) op = 
@@ -122,6 +121,8 @@ let represent (hash:int option) op =
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op ]
   | Value(PrimitiveEdit(target, op, Some arg)) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op; "arg", ps arg ]
+  | Value(UpdateTag(target, ntag)) ->
+      rcd "x-edit-updatetag" [ "target", representSel target; "new", ps ntag ]
   // Shared edits
   | Shared(sk, ListAppend(target, nd)) ->
       rcd "x-edit-append" [ "target", representSel target; "node", nd; representKind sk ]
@@ -141,5 +142,3 @@ let represent (hash:int option) op =
       rcd "x-edit-wraplist" [ "target", representSel target; "tag", ps tag; representKind sk ]
   | Shared(sk, ListReorder(target, perm)) ->
       rcd "x-edit-listreorder" [ "target", representSel target; "perm", representIntList perm; representKind sk ]
-  | Shared(sk, UpdateTag(target, otag, ntag)) ->
-      rcd "x-edit-updatetag" [ "target", representSel target; "old", ps otag; "new", ps ntag; representKind sk ]

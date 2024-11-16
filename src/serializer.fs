@@ -8,7 +8,6 @@ open Fable.Core
 
 let selToJson = function
   | Field f -> box f
-  | Tag t -> box ("#" + t)
   | Index n -> box n
   | All -> box "*"
   | DotDot -> box ".."
@@ -47,7 +46,6 @@ let selFromJson o =
     let s = unbox<string> o
     if s = "*" then All
     elif s = ".." then DotDot
-    elif s.StartsWith("#") then Tag(s.[1..])
     else Field(s)
   else failwith $"selFromJson - unexpected object {o}"
 

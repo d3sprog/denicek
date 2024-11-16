@@ -40,7 +40,7 @@ let wrS s fld tag = mkEd <| Shared(StructuralKind, WrapRecord(ffld fld, tag, s))
 let wlS s tag = mkEd <| Shared(StructuralKind, WrapList(tag, s)) 
 let cpS s1 s2 = mkEd <| Shared(StructuralKind, Copy(s2, s1)) 
 let cpV s1 s2 = mkEd <| Shared(ValueKind, Copy(s2, s1)) 
-let tagS s t1 t2 = mkEd <| Shared(StructuralKind, UpdateTag(s, t1, t2)) 
+let tagV s t = mkEd <| Value(UpdateTag(s, t)) 
 let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
 let uidV s fold fnew = mkEd <| Shared(ValueKind, RecordRenameField(s, fold, ffld fnew)) 
 
@@ -48,8 +48,7 @@ let selPart =
   ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
     (P.char '*' |> P.map (fun _ -> All)) <|>
     (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
-    (P.num |> P.map Index) <|>
-    ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag) ) |> P.hole "sel"
+    (P.num |> P.map Index) ) |> P.hole "sel"
   
 let refHoleBase = 
     (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
@@ -110,8 +109,8 @@ let refactorListOps =
     wrS (!/ "/speakers/*/name") "contents" "td"
     
     add (!/ "/speakers/*") "email" (nds "contents" "td" "")
-    tagS (!/ "/speakers/*") "li" "tr"
-    tagS (!/ "/speakers") "ul" "tbody"
+    tagV (!/ "/speakers/*") "tr"
+    tagV (!/ "/speakers") "tbody"
     
     wrS (!/ "/speakers") "body" "table"
     add (!/ "/speakers") "head" (rcd "thead")

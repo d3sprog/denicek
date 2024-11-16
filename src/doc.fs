@@ -7,7 +7,6 @@ type Selector =
   // Applicable to lists only
   | All
   | Index of int 
-  | Tag of string
   // Applicable to records only
   | Field of string
   // Only used for relative references, should be gone
@@ -97,9 +96,7 @@ let rec matches p1 p2 =
   | [], _ | _, [] -> false
   | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && matches p1 p2
   | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && matches p1 p2
-  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && matches p1 p2
   | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> matches p1 p2
-  | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> matches p1 p2
   | _ -> false
 
 /// Is 'p1' prefix of 'p2' 
@@ -109,9 +106,7 @@ let rec includes p1 p2 =
   | _, [] -> false
   | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includes p1 p2
   | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includes p1 p2
-  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && includes p1 p2
   | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> includes p1 p2
-  | Tag(_)::p1, All::p2 | All::p1, Tag(_)::p2 -> includes p1 p2
   | _ -> false
 
 /// Is 'p1' prefix of 'p2' 
@@ -122,9 +117,7 @@ let rec includesStrict p1 p2 =
   | _, [] -> false
   | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includesStrict p1 p2
   | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includesStrict p1 p2
-  | Tag(t1)::p1, Tag(t2)::p2 -> t1 = t2 && includesStrict p1 p2
   | All::p1, Index(_)::p2 -> includesStrict p1 p2
-  | All::p1, Tag(_)::p2 -> includesStrict p1 p2
   | _ -> false
 
 let includesReference p1 (p2base, p2ref) =
@@ -141,9 +134,6 @@ let trace sel doc =
     | List(_, els), (Index(i) as s)::sel -> 
         if i < 0 || i >= els.Length then ()
         else yield! loop ((nd, s)::trace) sel els.[i]
-    | List(_, els), (Tag(t) as s)::sel -> 
-        let els = els |> List.filter (function Record(t2, _) | List(t2, _) -> t2 = t | _ -> false)
-        for el in els do yield! loop ((nd, s)::trace) sel el
     | List(_, els), (All as s)::sel -> 
         for el in els do yield! loop ((nd, s)::trace) sel el
     | Record(_, els), (Field(f) as s)::sel -> 
@@ -164,13 +154,6 @@ let expandWildcards sel doc =
         loop (List.map (fun acc -> s::acc) acc) sel (snd (List.find (fst >> (=) f) els))
     | List(_, els), (Index(i) as s)::sel -> 
         loop (List.map (fun acc -> s::acc) acc) sel els.[i]
-    | List(_, els), (Tag(t) as s)::sel -> 
-        List.concat [
-          for i, nd in Seq.indexed els do
-            match nd with 
-            | Record(t2, _) | List(t2, _) when t2 = t ->
-                loop (List.map (fun acc -> (Index i)::acc) acc) sel nd
-            | _ -> () ]
     | List(_, els), (All as s)::sel -> 
         List.concat [
           for i, nd in Seq.indexed els do
@@ -195,13 +178,13 @@ type SharedEdit =
   | Copy of Selectors * Selectors
   | WrapRecord of id:string * tag:string * target:Selectors
   | WrapList of tag:string * target:Selectors
-  | UpdateTag of Selectors * string * string
   | ListDelete of Selectors * int
   | RecordDelete of Selectors * string
   | ListAppend of Selectors * Node
   | ListAppendFrom of Selectors * Selectors
 
 type ValueEdit = 
+  | UpdateTag of Selectors * string
   | PrimitiveEdit of Selectors * string * string option
   | RecordAdd of Selectors * string * Node
   | Check of Selectors * Condition
@@ -224,7 +207,7 @@ type Edit =
 
 let formatSelector = 
   List.map (function 
-    | All -> "*" | DotDot -> ".." | Tag t -> $"<{t}>" | Index i -> string i | Field f -> f)
+    | All -> "*" | DotDot -> ".." | Index i -> string i | Field f -> f)
   >> String.concat "/"
 
 let formatReference (kind, sel) =
@@ -254,6 +237,8 @@ let formatEdit ed =
       fmt "check" ValueKind [formatSelector sel; "equals"; formatString s]
   | Value(Check(sel, EqualsTo (Number n))) -> 
       fmt "check" ValueKind [formatSelector sel; "equals"; string n]
+  | Value(UpdateTag(sel, tagNew)) -> 
+      fmt "updateTag" ValueKind [formatSelector sel; formatString tagNew]
   | Shared(sk, ListAppend(sel, nd)) -> 
       fmt "listAppend" sk [formatSelector sel; formatNode nd]
   | Shared(sk, ListAppendFrom(sel, src)) -> 
@@ -268,8 +253,6 @@ let formatEdit ed =
       fmt "wrapRec" sk [formatSelector sel; formatString id; formatString tag]
   | Shared(sk, WrapList(tag, sel)) -> 
       fmt "wrapList" sk [formatSelector sel; formatString tag]
-  | Shared(sk, UpdateTag(sel, tagOld, tagNew)) -> 
-      fmt "updateTag" sk [formatSelector sel; formatString tagOld; formatString tagNew]
   | Shared(sk, ListDelete(sel, i)) -> 
       fmt "listDelete" sk [formatSelector sel; string i]
   | Shared(sk, RecordDelete(sel, f)) -> 
@@ -309,8 +292,8 @@ let getTargetSelector ed =
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
   | Shared(_, ListReorder(s, _)) 
-  | Shared(_, UpdateTag(s, _, _)) 
   | Shared(_, Copy(s, _))
+  | Value(UpdateTag(s, _)) 
   | Value(PrimitiveEdit(s, _, _)) 
   | Value(Check(s, _)) -> s
   // Add selector to the end, pointing at the affected node
@@ -330,8 +313,8 @@ let withTargetSelector tgt ed =
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
   | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(tgt, m)) |> ret
-  | Shared(sk, UpdateTag(_, t1, t2)) -> Shared(sk, UpdateTag(tgt, t1, t2)) |> ret
   | Shared(sk, Copy(_, s)) -> Shared(sk, Copy(tgt, s)) |> ret
+  | Value(UpdateTag(_, t)) -> Value(UpdateTag(tgt, t)) |> ret
   | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(tgt, f, arg)) |> ret
   | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
   // Remove added selector, pointing at the affected node
@@ -356,7 +339,7 @@ let getAllReferences inNodes ed =
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
   | Shared(_, ListReorder(s, _)) 
-  | Shared(_, UpdateTag(s, _, _)) 
+  | Value(UpdateTag(s, _)) 
   | Value(PrimitiveEdit(s, _, _)) 
   | Value(Check(s, _)) -> [[], (Absolute, s)]
   | Shared(_, Copy(s1, s2)) -> [[], (Absolute, s1); [], (Absolute, s2)]
@@ -380,7 +363,7 @@ let withAllReferences inNodes refs ed =
   match ed.Kind with
   // Selector is already pointing directly at the affected node
   | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(oneAbsolute refs, m)) |> ret
-  | Shared(sk, UpdateTag(_, t1, t2)) -> Shared(sk, UpdateTag(oneAbsolute refs, t1, t2) ) |> ret
+  | Value(UpdateTag(_, t)) -> Value(UpdateTag(oneAbsolute refs, t) ) |> ret
   | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(oneAbsolute refs, f, arg)) |> ret
   | Value(Check(_, cond)) -> Value(Check(oneAbsolute refs, cond)) |> ret
   | Shared(sk, Copy(_, _)) -> Shared(sk, Copy(headAbsolute refs, oneAbsolute (List.tail refs))) |> ret
@@ -420,7 +403,6 @@ let removeSelectorPrefix p1 p2 =
     match p1, p2 with 
     | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::specPref) p1 p2
     | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::specPref) p1 p2
-    | Tag(t1)::p1, Tag(t2)::p2 when t1 = t2 -> loop (Tag(t1)::specPref) p1 p2
     // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
     // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
     | Index(i)::p1, All::p2 ->
@@ -458,23 +440,19 @@ let (|MatchingFirst|_|) = function
   | Field(fo)::selOther, Field(fr)::selWrap when fo = fr -> Some(Field(fo), selOther, selWrap)
   | Index(io)::selOther, Index(ir)::selWrap when io = ir -> Some(Index(io), selOther, selWrap)
   | Index(io)::selOther, All::selWrap -> Some(Index(io), selOther, selWrap)
-  | Tag(tgo)::selOther, Tag(tgr)::selWrap when tgo = tgr -> Some(Tag(tgo), selOther, selWrap)
-  | Tag(tgo)::selOther, All::selWrap -> Some(Tag(tgo), selOther, selWrap)
   | _ -> None
 
 let (|IncompatibleFirst|_|) = function
   | Field(f1)::_, Field(f2)::_ when f1 <> f2 -> Some()
   | Index(i1)::_, Index(i2)::_ when i1 <> i2 -> Some()
-  | Tag(t1)::_, Tag(t2)::_ when t1 <> t2 -> Some()
-  | (All|Index _|Tag _|Field _)::_, []
-  | (All|Index _|Tag _)::_, Field(_)::_ 
-  | Field(_)::_, (All|Index _|Tag _)::_ -> Some()
+  | (All|Index _|Field _)::_, []
+  | (All|Index _)::_, Field(_)::_ 
+  | Field(_)::_, (All|Index _)::_ -> Some()
   | [], _ -> Some()
   | _ -> None
 
 let (|TooSpecific|_|) = function
-  | All::_,  (s & Index _)::_ 
-  | All::_, (s & Tag _)::_ -> Some(s)
+  | All::_,  (s & Index _)::_ -> Some(s)
   | _ -> None 
 
 // Base can only be specific (no Alls) but absolute can be general.
@@ -553,18 +531,6 @@ let wrapListSelectors selWrap refOther =
   transformBasedReference refOther (fun selOther -> wrapsels selOther selWrap)
 
 /// Returns a modified version of 'selOther' to match
-/// the tag rename done at location specified by 'selUpd'
-let updateTagSelectors tagOld tagNew selUpd refOther =
-  let rec wrapsels selOther selUpd =
-    match selOther, selUpd with 
-    | Tag(t)::selOther, [] when t = tagOld -> Tag(tagNew)::selOther // interesting case here
-    | MatchingFirst(s, selOther, selUpd) -> s::(wrapsels selOther selUpd)
-    | TooSpecific(s) -> failwith $"updateTagSelectors - Too specific selector {s} matched against Any"
-    | IncompatibleFirst() -> selOther
-    | _ -> failwith $"updateTagSelectors - Missing case: {selOther} vs. {selUpd}"
-  transformBasedReference refOther (fun selOther -> wrapsels selOther selUpd)
-
-/// Returns a modified version of 'selOther' to match
 /// the changed field ID at location specified by 'selReord'
 let renameFieldSelectors fold fnew selRename refOther =
   let rec reidsels selOther selRename =
@@ -586,7 +552,7 @@ let rec isStructuralSelector sel =
   match sel with 
   | [] -> true
   | Index _::_ -> false
-  | (All | Tag _ | Field _)::sel -> isStructuralSelector sel
+  | (All | Field _)::sel -> isStructuralSelector sel
   | DotDot::_ -> failwith "isStructuralSelector: Unresolved relative reference"
 
 let apply doc edit =
@@ -634,6 +600,13 @@ let apply doc edit =
         | Record(tag, nds) when matches p sel -> 
             let nds = nds |> List.filter (fun (k, _) -> k <> fld)
             Some(Record(tag, nds @ [fld, nd]))
+        | _ -> None ) doc
+    
+  | Value(UpdateTag(sel, tagNew)) ->
+      replace (fun p el ->
+        match el with 
+        | Record(t, nds) when matches p sel -> Some(Record(tagNew, nds))
+        | List(t, nds) when matches p sel -> Some(List(tagNew, nds))
         | _ -> None ) doc
 
   // **Shared edits** - These can be applied both as structural edits to change document shape
@@ -704,19 +677,6 @@ let apply doc edit =
         else None ) doc
       if sk = StructuralKind then
         let nsels = getDocumentReferences doc |> List.map (wrapListSelectors sel)
-        withNodeReferences doc nsels
-      else doc
-    
-  | Shared(sk, UpdateTag(sel, tagOld, tagNew)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
-        failwith $"apply.UpdateTag - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
-      let doc = replace (fun p el ->
-        match el with 
-        | Record(t, nds) when matches p sel && t = tagOld -> Some(Record(tagNew, nds))
-        | List(t, nds) when matches p sel && t = tagOld -> Some(List(tagNew, nds))
-        | _ -> None ) doc
-      if sk = StructuralKind then
-        let nsels = getDocumentReferences doc |> List.map (updateTagSelectors tagOld tagNew sel)
         withNodeReferences doc nsels
       else doc
 
@@ -816,8 +776,6 @@ let rec substituteWithMoreSpecific specPrefix sels =
   | Index(i1)::specPrefix, Index(i2)::sels when i1 = i2 -> Index(i1)::(substituteWithMoreSpecific specPrefix sels)
   | All::specPrefix, Index(i1)::sels 
   | Index(i1)::specPrefix, All::sels -> Index(i1)::(substituteWithMoreSpecific specPrefix sels)
-  | All::specPrefix, Tag(t1)::sels 
-  | Tag(t1)::specPrefix, All::sels -> Tag(t1)::(substituteWithMoreSpecific specPrefix sels)
   | All::specPrefix, All::sels -> All::(substituteWithMoreSpecific specPrefix sels)
   | _ -> sels  // Not matching, but that's OK, we only want to subsitute prefix
  
@@ -869,8 +827,6 @@ let updateSelectors e1 e2 =
       [mapReferences (wrapRecordSelectors id sel) e1]
   | Shared(StructuralKind, WrapList(_, sel)) -> 
       [mapReferences (wrapListSelectors sel) e1]
-  | Shared(StructuralKind, UpdateTag(sel, t1, t2)) ->
-      [mapReferences (updateTagSelectors t1 t2 sel) e1]
   | Shared(StructuralKind, RecordRenameField(sel, fold, fnew)) ->
       [mapReferences (renameFieldSelectors fold fnew sel) e1]
   | Shared(StructuralKind, ListReorder(sel, ord)) -> 

@@ -197,7 +197,7 @@ module Helpers =
     renderReference state trigger ([], (Absolute, sel))
 
   let generalizeToStructuralSelector sels = 
-    sels |> List.map (function Index _ | Tag _ -> All | s -> s)
+    sels |> List.map (function Index _ -> All | s -> s)
 
   let replacePrefixInEdits prefix replacementSel edits = 
     edits |> List.map (fun op ->
@@ -580,13 +580,13 @@ module History =
     | Value(Check(sel, NonEmpty)) -> renderv "check" "fa-circle-check" sel ["cond", text "nonempty"]
     | Value(Check(sel, EqualsTo(Number n))) -> renderv "check" "fa-circle-check" sel ["=", text (string n)]
     | Value(Check(sel, EqualsTo(String s))) -> renderv "check" "fa-circle-check" sel ["=", text s]
+    | Value(UpdateTag(sel, t)) -> renderv "retag" "fa-code" sel ["t", text t]
     | Shared(sk, ListAppend(sel, nd)) -> render sk "append" "fa-at" sel ["node", formatNode state trigger sel nd]
     | Shared(sk, ListAppendFrom(sel, src)) -> render sk "appfrom" "fa-paperclip" sel ["node", Helpers.renderAbsoluteReference state trigger src]
     | Shared(sk, ListReorder(sel, perm)) -> render sk "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Shared(sk, Copy(tgt, src)) -> render sk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | Shared(sk, WrapRecord(id, tg, sel)) -> render sk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
     | Shared(sk, WrapList(tg, sel)) -> render sk "wraplist" "fa-solid fa-list-ul" sel ["tag", text tg]
-    | Shared(sk, UpdateTag(sel, t1, t2)) -> render sk "retag" "fa-code" sel ["t1", text t1; "t2", text t2]
     | Shared(sk, RecordRenameField(sel, fold, fnew)) -> render sk "updid" "fa-font" sel ["old", text fold; "new", text fnew]
     | Shared(sk, ListDelete(sel, i)) -> render sk "delitm" "fa-xmark" sel ["index", text (string i)]
     | Shared(sk, RecordDelete(sel, fld)) -> render sk "delfld" "fa-rectangle-xmark" sel ["fld", text fld]
@@ -748,8 +748,7 @@ module Commands =
     ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
       (P.char '*' |> P.map (fun _ -> All)) <|>
       (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
-      (P.num |> P.map Index) <|>
-      ((P.char '<' <*>> P.ident <<*> P.char '>') |> P.map Tag) ) |> P.hole "sel"
+      (P.num |> P.map Index) ) |> P.hole "sel"
   
   let refHoleBase = 
     (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
@@ -793,13 +792,13 @@ module Commands =
         
     // Rename field, update tag
     match nd with 
-    | List(oldTag, _) | Record(oldTag, _) ->
+    | List _ | Record _ ->
         yield command SK "las la-code" "Update tag of marked elements"
           ( P.keyword "!t " <*>> tagHole |> mapEd (fun (newTag) ->
-            Shared(StructuralKind, UpdateTag(genSel, oldTag, newTag)) ))
+            Value(UpdateTag(genSel, newTag)) ))
         yield command VK "las la-code" "Update tag of the current element"
           ( P.keyword "!t* " <*>> tagHole |> mapEd (fun (newTag) ->
-            Shared(ValueKind, UpdateTag(cursorSel, oldTag, newTag)) ))
+            Value(UpdateTag(cursorSel, newTag)) ))
     | _ -> ()
     match ndTrace with 
     | Patterns.Last(_, Field fold) ->
@@ -1205,7 +1204,6 @@ module View =
           match s with 
           | DotDot -> failwith "renderLocationInfo: Expected normalized reference"
           | Index i -> yield text $"[{i}]"
-          | Tag t -> yield text $"[#{t}]"
           | All -> yield text $"[*]"
           | Field f when f.[0] = '=' -> yield text ""
           | Field f -> yield text ("." + f)
