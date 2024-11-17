@@ -25,7 +25,7 @@ let adhocTests =
         scopeEdit
           (!/"/items/*")
           (!/"/$uniquetemp_7")
-          { Kind = Value(RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot])))
+          { Kind = RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot]))
             GroupLabel = ""; Dependencies = []; Disabled = false }
       ( match actual with InScope _ -> "inscope" | _ -> "" )
       |> equals "inscope"
@@ -152,12 +152,12 @@ let basicMergeTests =
 let complexMergeTests =
   testList "complex merging" [    
     test "merging two appends with edits inside list item" {
-      let ops1 = todoBaseOps @ todoAddOps "First work"
-      let ops2 = todoBaseOps @ todoAddOps "Second work"
+      let ops1 = todoBaseOps @ todoAddOps "first" "First work"
+      let ops2 = todoBaseOps @ todoAddOps "second" "Second work"
       let merged = merge ops1 ops2
       let doc = applyHistory (rcd "div") merged
-      select (!/"/items/0/entry/work") doc |> equals [Primitive (String "First work")]
-      select (!/"/items/1/entry/work") doc |> equals [Primitive (String "Second work")]        
+      select (!/"/items/#first/entry/work") doc |> equals [Primitive (String "First work")]
+      select (!/"/items/#second/entry/work") doc |> equals [Primitive (String "Second work")]        
     }
 
     test "indexing merges with reordering" {
@@ -192,10 +192,14 @@ let complexMergeTests =
       doc1 |> equals doc2 
     }
 
+      // printEdits merged
+      // #load "demos.fs"
+
     test "refactoring merges with adding via temp" {
       let ops1 = merge (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
       let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerViaTempOps) 
+      printEdits ops2
       let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
@@ -224,34 +228,32 @@ let referenceUpdateTests =
     { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
 
   let doc0 = Record("div", [
-    "first", Reference(Relative, [DotDot; Field "things"; Index 0; Field "lbl"])
+    "first", Reference(Relative, [DotDot; Field "things"; Index "0"; Field "lbl"])
     "things", List("ul", [  
-      Record("li", ["lbl", Primitive(String "abc"); 
+      "0", Record("li", ["lbl", Primitive(String "abc"); 
         "ref1", Reference(Relative, [DotDot; Field "lbl"]); 
         "ref2", Reference(Relative, [DotDot; DotDot; DotDot; Field "first"]) ])
-      Record("li", ["lbl", Primitive(String "def"); 
+      "1", Record("li", ["lbl", Primitive(String "def"); 
         "ref1", Reference(Relative, [DotDot; Field "error"; DotDot; Field "lbl"]);
-        "ref2", Reference(Relative, [DotDot; DotDot; Index 0; Field "lbl"])])
+        "ref2", Reference(Relative, [DotDot; DotDot; Index "0"; Field "lbl"])])
     ])
   ])
 
 
   testList "reference updating" [
     test "wrap record" {
-      let doc1 = 
-        Shared(StructuralKind, WrapRecord("list", "section", [Field "things"]))
-        |> mkEd |> apply doc0 
+      let doc1 = WrapRecord(UpdateReferences, "list", "section", [Field "things"]) |> mkEd |> apply doc0 
 
       select [Field "first"] doc1 
-      |> equals [ Reference(Relative, [DotDot; Field "things"; Field "list"; Index 0; Field "lbl"]) ]
-      select [Field "things"; Field "list"; Index 0; Field "ref1"] doc1 
+      |> equals [ Reference(Relative, [DotDot; Field "things"; Field "list"; Index "0"; Field "lbl"]) ]
+      select [Field "things"; Field "list"; Index "0"; Field "ref1"] doc1 
       |> equals [ Reference(Relative, [DotDot; Field "lbl"]) ]
-      select [Field "things"; Field "list"; Index 0; Field "ref2"] doc1 
+      select [Field "things"; Field "list"; Index "0"; Field "ref2"] doc1 
       |> equals [ Reference(Relative, [DotDot; DotDot; DotDot; DotDot; Field "first"]) ]
-      select [Field "things"; Field "list"; Index 1; Field "ref1"] doc1 
+      select [Field "things"; Field "list"; Index "1"; Field "ref1"] doc1 
       |> equals [ Reference(Relative, [DotDot; Field "lbl"]) ]
-      select [Field "things"; Field "list"; Index 1; Field "ref2"] doc1 
-      |> equals [ Reference(Relative, [DotDot; DotDot; Index 0; Field "lbl"]) ]
+      select [Field "things"; Field "list"; Index "1"; Field "ref2"] doc1 
+      |> equals [ Reference(Relative, [DotDot; DotDot; Index "0"; Field "lbl"]) ]
     }
   ]
 

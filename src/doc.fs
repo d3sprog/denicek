@@ -6,7 +6,7 @@ open Tbd.Parsec.Operators
 type Selector = 
   // Applicable to lists only
   | All
-  | Index of int 
+  | Index of string
   // Applicable to records only
   | Field of string
   // Only used for relative references, should be gone
@@ -23,7 +23,7 @@ type ReferenceKind = Absolute | Relative
 
 type Node = 
   | Record of string * list<string * Node>
-  | List of string * list<Node>
+  | List of string * list<string * Node>
   | Primitive of Primitive
   | Reference of ReferenceKind * Selectors
 
@@ -70,10 +70,10 @@ let replace f nd =
     | Some res -> res
     | _ -> 
     match nd with 
-    | List(tag, els) -> 
-        List(tag, els |> List.mapi (fun i nd -> loop (path @ [Index i]) nd))
-    | Record(tag, attrs) -> 
-        Record(tag, attrs |> List.map (fun (n, nd) -> n, loop (path @ [Field n]) nd))
+    | List(tag, nds) -> 
+        List(tag, nds |> List.map (fun (n, nd) -> n, loop (path @ [Index n]) nd))
+    | Record(tag, nds) -> 
+        Record(tag, nds |> List.map (fun (n, nd) -> n, loop (path @ [Field n]) nd))
     | Reference _ | Primitive _ -> nd 
   loop [] nd
 
@@ -81,8 +81,8 @@ let fold f st value =
   let rec loop path st nd =
     let st = f path nd st 
     match nd with 
-    | List(_, els) -> 
-        els |> List.foldi (fun st (i, nd) -> loop (path @ [Index i]) st nd) st
+    | List(_, nds) -> 
+        nds |> List.fold (fun st (n, nd) -> loop (path @ [Index n]) st nd) st
     | Record(_, nds) -> 
         nds |> List.fold (fun st (n, nd) -> loop (path @ [Field n]) st nd) st
     | Primitive _ | Reference _ -> 
@@ -131,33 +131,31 @@ let trace sel doc =
   let rec loop trace sel nd = seq {
     match nd, sel with 
     | nd, [] -> yield nd, List.rev trace
-    | List(_, els), (Index(i) as s)::sel -> 
-        if i < 0 || i >= els.Length then ()
-        else yield! loop ((nd, s)::trace) sel els.[i]
-    | List(_, els), (All as s)::sel -> 
-        for el in els do yield! loop ((nd, s)::trace) sel el
-    | Record(_, els), (Field(f) as s)::sel -> 
-        let chOpt = List.tryFind (fst >> (=) f) els
-        match chOpt with 
-        | Some ch -> yield! loop ((nd, s)::trace) sel (snd ch)
-        | _ -> ()
+    | List(_, els), All::sel -> 
+        for _, el in els do yield! loop ((nd, All)::trace) sel el
+    | List(_, els), (Index(n) as s)::sel -> 
+        for _, ch in List.filter (fst >> (=) n) els do
+          yield! loop ((nd, s)::trace) sel ch
+    | Record(_, els), (Field(n) as s)::sel -> 
+        for _, ch in List.filter (fst >> (=) n) els do
+          yield! loop ((nd, s)::trace) sel ch
     | _ -> ()  }
   loop [] sel doc 
 
-/// Generates a list of selectors where each 'All' or 'Tag'
+/// Generates a list of selectors where each 'All' 
 /// is replaced with all possible 'Index' values.
 let expandWildcards sel doc = 
   let rec loop acc sel nd = 
     match nd, sel with 
-    | nd, [] -> List.map List.rev acc
-    | Record(_, els), (Field(f) as s)::sel -> 
-        loop (List.map (fun acc -> s::acc) acc) sel (snd (List.find (fst >> (=) f) els))
-    | List(_, els), (Index(i) as s)::sel -> 
-        loop (List.map (fun acc -> s::acc) acc) sel els.[i]
-    | List(_, els), (All as s)::sel -> 
+    | _, [] -> List.map List.rev acc
+    | Record(_, els), (Field(n) as s)::sel -> 
+        loop (List.map (fun acc -> s::acc) acc) sel (snd (List.find (fst >> (=) n) els))
+    | List(_, els), (Index(n) as s)::sel -> 
+        loop (List.map (fun acc -> s::acc) acc) sel (snd (List.find (fst >> (=) n) els))
+    | List(_, els), All::sel -> 
         List.concat [
-          for i, nd in Seq.indexed els do
-            loop (List.map (fun acc -> (Index i)::acc) acc) sel nd ]
+          for n, nd in els do
+            loop (List.map (fun acc -> (Index n)::acc) acc) sel nd ]
     | _ -> failwith "expandWildcards: No matching element"
   loop [[]] sel doc 
 
@@ -172,28 +170,26 @@ let selectSingle sel doc =
        
 type Condition = EqualsTo of Primitive | NonEmpty 
 
-type SharedEdit = 
-  | ListReorder of Selectors * list<int>
-  | RecordRenameField of Selectors * string * string
-  | Copy of Selectors * Selectors
-  | WrapRecord of id:string * tag:string * target:Selectors
-  | WrapList of tag:string * target:Selectors
-  | ListDelete of Selectors * int
-  | RecordDelete of Selectors * string
-  | ListAppend of Selectors * Node
-  | ListAppendFrom of Selectors * Selectors
+type ReferenceBehaviour = 
+  | UpdateReferences
+  | KeepReferences
 
-type ValueEdit = 
+type EditKind = 
+  // Edits that can affect references in document
+  | RecordRenameField of ReferenceBehaviour * Selectors * string * string
+  | Copy of ReferenceBehaviour * Selectors * Selectors
+  | WrapRecord of ReferenceBehaviour * id:string * tag:string * target:Selectors
+  | WrapList of ReferenceBehaviour * id:string * tag:string * target:Selectors
+  | RecordDelete of ReferenceBehaviour * Selectors * string
+  // Edits that cannot affect references in document
+  | ListReorder of Selectors * list<string>
+  | ListDelete of Selectors * string
+  | ListAppend of Selectors * string * Node
+  | ListAppendFrom of Selectors * string * Selectors
   | UpdateTag of Selectors * string
   | PrimitiveEdit of Selectors * string * string option
   | RecordAdd of Selectors * string * Node
   | Check of Selectors * Condition
-
-type SharedEditKind = ValueKind | StructuralKind
-
-type EditKind =
-  | Shared of SharedEditKind * SharedEdit
-  | Value of ValueEdit
 
 type Edit = 
   { Kind : EditKind 
@@ -207,7 +203,7 @@ type Edit =
 
 let formatSelector = 
   List.map (function 
-    | All -> "*" | DotDot -> ".." | Index i -> string i | Field f -> f)
+    | All -> "*" | DotDot -> ".." | Index i -> "#" + i | Field f -> f)
   >> String.concat "/"
 
 let formatReference (kind, sel) =
@@ -216,59 +212,70 @@ let formatReference (kind, sel) =
 let formatNode nd = 
   sprintf "%A" nd
   
-let formatSharedKind = function
-  | ValueKind -> "v" | StructuralKind -> "s"
+let formatReferenceBehaviour = function
+  | UpdateReferences -> "v" | KeepReferences -> "s"
 
 let formatString (s:string) = 
   "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
 
 let formatEdit ed = 
-  let fmt kvd kind args = $"""{formatSharedKind kind}.{kvd}({ String.concat "," args })"""
+  let fmt kvd kind args = $"""{formatReferenceBehaviour kind}.{kvd}({ String.concat "," args })"""
+  let fmtv kvd args = $"""{kvd}({ String.concat "," args })"""
   match ed.Kind with
-  | Value(PrimitiveEdit(sel, op, None)) -> 
-      fmt "primitive" ValueKind [formatSelector sel; formatString op]
-  | Value(PrimitiveEdit(sel, op, Some arg)) -> 
-      fmt "primitive" ValueKind [formatSelector sel; formatString op; formatString arg]
-  | Value(RecordAdd(sel, n, nd)) -> 
-      fmt "recordAdd" ValueKind [formatSelector sel; formatString n; formatNode nd]
-  | Value(Check(sel, NonEmpty)) -> 
-      fmt "check" ValueKind [formatSelector sel; "nonempty"]
-  | Value(Check(sel, EqualsTo (String s))) -> 
-      fmt "check" ValueKind [formatSelector sel; "equals"; formatString s]
-  | Value(Check(sel, EqualsTo (Number n))) -> 
-      fmt "check" ValueKind [formatSelector sel; "equals"; string n]
-  | Value(UpdateTag(sel, tagNew)) -> 
-      fmt "updateTag" ValueKind [formatSelector sel; formatString tagNew]
-  | Shared(sk, ListAppend(sel, nd)) -> 
-      fmt "listAppend" sk [formatSelector sel; formatNode nd]
-  | Shared(sk, ListAppendFrom(sel, src)) -> 
-      fmt "listAppendFrom" sk [formatSelector sel; formatSelector src]
-  | Shared(sk, ListReorder(sel, ord)) -> 
-      fmt "listReorder" sk [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
-  | Shared(sk, RecordRenameField(sel, o, n)) -> 
-      fmt "renameField" sk [formatSelector sel; formatString o; formatString n]
-  | Shared(sk, Copy(sel, src)) -> 
-      fmt "copy" sk [formatSelector sel; formatSelector src]
-  | Shared(sk, WrapRecord(id, tag, sel)) -> 
-      fmt "wrapRec" sk [formatSelector sel; formatString id; formatString tag]
-  | Shared(sk, WrapList(tag, sel)) -> 
-      fmt "wrapList" sk [formatSelector sel; formatString tag]
-  | Shared(sk, ListDelete(sel, i)) -> 
-      fmt "listDelete" sk [formatSelector sel; string i]
-  | Shared(sk, RecordDelete(sel, f)) -> 
-      fmt "recordDelete" sk [formatSelector sel; formatString f]
+  | PrimitiveEdit(sel, op, None) -> 
+      fmtv "primitive" [formatSelector sel; formatString op]
+  | PrimitiveEdit(sel, op, Some arg) -> 
+      fmtv "primitive" [formatSelector sel; formatString op; formatString arg]
+  | RecordAdd(sel, n, nd) -> 
+      fmtv "recordAdd" [formatSelector sel; formatString n; formatNode nd]
+  | Check(sel, NonEmpty) -> 
+      fmtv "check" [formatSelector sel; "nonempty"]
+  | Check(sel, EqualsTo (String s)) -> 
+      fmtv "check" [formatSelector sel; "equals"; formatString s]
+  | Check(sel, EqualsTo (Number n)) -> 
+      fmtv "check" [formatSelector sel; "equals"; string n]
+  | UpdateTag(sel, tagNew) -> 
+      fmtv "updateTag" [formatSelector sel; formatString tagNew]
+  | ListAppend(sel, n,nd) -> 
+      fmtv "listAppend" [formatSelector sel; formatString n; formatNode nd]
+  | ListAppendFrom(sel, n, src) -> 
+      fmtv "appendFrom" [formatSelector sel; formatString n; formatSelector src]
+  | ListReorder(sel, ord) -> 
+      fmtv "listReorder" [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
+  | ListDelete(sel, i) -> 
+      fmtv "listDelete" [formatSelector sel; string i]
+  | RecordRenameField(rb, sel, o, n) -> 
+      fmt "renameField" rb [formatSelector sel; formatString o; formatString n]
+  | Copy(rb, sel, src) -> 
+      fmt "copy" rb [formatSelector sel; formatSelector src]
+  | WrapRecord(rb, id, tag, sel) -> 
+      fmt "wrapRec" rb [formatSelector sel; formatString id; formatString tag]
+  | WrapList(rb, id, tag, sel) -> 
+      fmt "wrapList" rb [formatSelector sel; formatString id; formatString tag]
+  | RecordDelete(rb, sel, f) -> 
+      fmt "recordDelete" rb [formatSelector sel; formatString f]
 
 // --------------------------------------------------------------------------------------
 // General purpose helpers for working with selectors
 // --------------------------------------------------------------------------------------
+
+let withReferenceBehaviour rb e = 
+  let ret ek = { e with Kind = ek }
+  match e.Kind with 
+  | RecordRenameField(_, s, o, n) -> RecordRenameField(rb, s, o, n) |> ret
+  | Copy(_, s1, s2) -> Copy(rb, s1, s2) |> ret
+  | WrapRecord(_, i, g, t) -> WrapRecord(rb, i, g, t) |> ret
+  | WrapList(_, i, g, t) -> WrapList(rb, i, g, t) |> ret
+  | RecordDelete(_, t, f) -> RecordDelete(rb, t, f) |> ret
+  | _ -> e
 
 /// Returns all references in a given node as a triple consisting of the
 /// base path, reference kind & the selectors; expects the base path of 
 /// the given node as an argument
 let rec getNodeReferences path nd = 
   match nd with 
-  | Record(_, nds) -> nds |> List.collect (fun (f, nd) -> getNodeReferences (path @ [Field f]) nd)
-  | List(_, nds) -> List.indexed nds |> List.collect (fun (i, nd) -> getNodeReferences (path @ [Index i]) nd)
+  | Record(_, nds) -> nds |> List.collect (fun (n, nd) -> getNodeReferences (path @ [Field n]) nd)
+  | List(_, nds) -> nds |> List.collect (fun (n, nd) -> getNodeReferences (path @ [Index n]) nd)
   | Reference(Absolute, sels) -> [[], (Absolute, sels)]
   | Reference(Relative, sels) -> [path, (Relative, sels)]
   | Primitive _ -> []
@@ -282,8 +289,8 @@ let withNodeReferences nd sels =
   let rec loop nd = 
     match nd with 
     | Record(tag,  nds) -> Record(tag, List.map (fun (n, nd) -> n, loop nd) nds)
-    | List(tag,  nds) -> List(tag, List.map loop nds)
-    | Reference(kind, sels) -> let k, s = next() in Reference(k, s) 
+    | List(tag,  nds) -> List(tag, List.map (fun (n, nd) -> n, loop nd) nds)
+    | Reference _ -> let k, s = next() in Reference(k, s) 
     | Primitive _ -> nd
   loop nd
 
@@ -291,20 +298,20 @@ let withNodeReferences nd sels =
 let getTargetSelector ed = 
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
-  | Shared(_, ListReorder(s, _)) 
-  | Shared(_, Copy(s, _))
-  | Value(UpdateTag(s, _)) 
-  | Value(PrimitiveEdit(s, _, _)) 
-  | Value(Check(s, _)) -> s
+  | ListReorder(s, _) 
+  | Copy(_, s, _)
+  | UpdateTag(s, _) 
+  | PrimitiveEdit(s, _, _) 
+  | Check(s, _) -> s
   // Add selector to the end, pointing at the affected node
-  | Shared(_, WrapList(_, s)) 
-  | Shared(_, ListAppend(s, _))
-  | Shared(_, ListAppendFrom(s, _)) -> s @ [All]
-  | Shared(_, ListDelete(s, i)) -> s @ [Index i]
-  | Shared(_, RecordRenameField(s, id, _)) 
-  | Shared(_, RecordDelete(s, id))
-  | Shared(_, WrapRecord(_, id, s)) 
-  | Value(RecordAdd(s, id, _)) -> s @ [Field id]
+  | WrapList(_, _, _, s) -> s @ [All]
+  | ListAppend(s, i, _) 
+  | ListAppendFrom(s, i, _) 
+  | ListDelete(s, i) -> s @ [Index i]
+  | RecordRenameField(_, s, id, _) 
+  | RecordDelete(_, s, id)
+  | WrapRecord(_, _, id, s) 
+  | RecordAdd(s, id, _) -> s @ [Field id]
 
 let withTargetSelector tgt ed = 
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withTargetSelector - expected selector ending with a field"
@@ -312,20 +319,20 @@ let withTargetSelector tgt ed =
   let ret nk = { ed with Kind = nk }
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
-  | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(tgt, m)) |> ret
-  | Shared(sk, Copy(_, s)) -> Shared(sk, Copy(tgt, s)) |> ret
-  | Value(UpdateTag(_, t)) -> Value(UpdateTag(tgt, t)) |> ret
-  | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(tgt, f, arg)) |> ret
-  | Value(Check(_, cond)) -> Value(Check(tgt, cond)) |> ret
+  | ListReorder(_, m) -> ListReorder(tgt, m) |> ret
+  | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
+  | UpdateTag(_, t) -> UpdateTag(tgt, t) |> ret
+  | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
+  | Check(_, cond) -> Check(tgt, cond) |> ret
   // Remove added selector, pointing at the affected node
-  | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, List.dropLast tgt)) |> ret
-  | Shared(sk, ListAppend(_, nd)) -> Shared(sk, ListAppend(List.dropLast tgt, nd)) |> ret
-  | Shared(sk, ListAppendFrom(_, src)) -> Shared(sk, ListAppendFrom(List.dropLast tgt, src)) |> ret
-  | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast tgt, getLastIndex tgt)) |> ret
-  | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(List.dropLast tgt, getLastField tgt, n)) |> ret
-  | Shared(sk, RecordDelete(_, _)) -> Shared(sk, RecordDelete(List.dropLast tgt, getLastField tgt)) |> ret
-  | Shared(sk, WrapRecord(t, _, _)) -> Shared(sk, WrapRecord(t, getLastField tgt, List.dropLast tgt)) |> ret
-  | Value(RecordAdd(_, _, nd)) -> Value(RecordAdd(List.dropLast tgt, getLastField tgt, nd)) |> ret
+  | WrapList(rb, id, t, _) -> WrapList(rb, id, t, List.dropLast tgt) |> ret
+  | ListAppendFrom(_, _, s) -> ListAppendFrom(List.dropLast tgt, getLastIndex tgt, s) |> ret
+  | ListAppend(_, _, nd) -> ListAppend(List.dropLast tgt, getLastIndex tgt, nd) |> ret
+  | ListDelete(_, _) -> ListDelete(List.dropLast tgt, getLastIndex tgt) |> ret
+  | RecordRenameField(rb, _, _, n) -> RecordRenameField(rb, List.dropLast tgt, getLastField tgt, n) |> ret
+  | RecordDelete(rb, _, _) -> RecordDelete(rb, List.dropLast tgt, getLastField tgt) |> ret
+  | WrapRecord(rb, t, _, _) -> WrapRecord(rb, t, getLastField tgt, List.dropLast tgt) |> ret
+  | RecordAdd(_, _, nd) -> RecordAdd(List.dropLast tgt, getLastField tgt, nd) |> ret
 
 let getTargetSelectorPrefixes eds = 
   let sels = System.Collections.Generic.HashSet<_>()
@@ -338,21 +345,21 @@ let getTargetSelectorPrefixes eds =
 let getAllReferences inNodes ed = 
   match ed.Kind with 
   // Selector is already pointing directly at the affected node
-  | Shared(_, ListReorder(s, _)) 
-  | Value(UpdateTag(s, _)) 
-  | Value(PrimitiveEdit(s, _, _)) 
-  | Value(Check(s, _)) -> [[], (Absolute, s)]
-  | Shared(_, Copy(s1, s2)) -> [[], (Absolute, s1); [], (Absolute, s2)]
+  | ListReorder(s, _) 
+  | UpdateTag(s, _) 
+  | PrimitiveEdit(s, _, _) 
+  | Check(s, _) -> [[], (Absolute, s)]
+  | ListAppendFrom(s1, _, s2)
+  | Copy(_, s1, s2) -> [[], (Absolute, s1); [], (Absolute, s2)]
   // Pointing at a node that will be modified by the edit
-  | Shared(_, WrapRecord(_, _, s)) 
-  | Shared(_, WrapList(_, s)) -> [[], (Absolute, s)]
-  | Shared(_, ListAppend(s, nd)) 
-  | Value(RecordAdd(s, _, nd)) -> ([], (Absolute, s)) :: (if inNodes then getNodeReferences s nd else [])
-  | Shared(_, ListAppendFrom(s1, s2)) -> [[], (Absolute, s1); [], (Absolute, s2)]
+  | WrapRecord(_, _, _, s) 
+  | WrapList(_, _, _, s) -> [[], (Absolute, s)]
+  | ListAppend(s, _, nd) 
+  | RecordAdd(s, _, nd) -> ([], (Absolute, s)) :: (if inNodes then getNodeReferences s nd else [])
   // Add selector pointing to the previously existing thing 
-  | Shared(_, RecordDelete(s, fld)) 
-  | Shared(_, RecordRenameField(s, fld, _)) -> [[], (Absolute, s @ [Field fld])]
-  | Shared(_, ListDelete(s, idx)) -> [[], (Absolute, s @ [Index idx])]
+  | RecordDelete(_, s, fld) 
+  | RecordRenameField(_,s, fld, _) -> [[], (Absolute, s @ [Field fld])]
+  | ListDelete(s, idx) -> [[], (Absolute, s @ [Index idx])]
 
 let withAllReferences inNodes refs ed =
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withAllReferences - expected selector ending with a field"
@@ -362,21 +369,21 @@ let withAllReferences inNodes refs ed =
   let ret nk = { ed with Kind = nk }
   match ed.Kind with
   // Selector is already pointing directly at the affected node
-  | Shared(sk, ListReorder(_, m)) -> Shared(sk, ListReorder(oneAbsolute refs, m)) |> ret
-  | Value(UpdateTag(_, t)) -> Value(UpdateTag(oneAbsolute refs, t) ) |> ret
-  | Value(PrimitiveEdit(_, f, arg)) -> Value(PrimitiveEdit(oneAbsolute refs, f, arg)) |> ret
-  | Value(Check(_, cond)) -> Value(Check(oneAbsolute refs, cond)) |> ret
-  | Shared(sk, Copy(_, _)) -> Shared(sk, Copy(headAbsolute refs, oneAbsolute (List.tail refs))) |> ret
+  | ListReorder(_, m) -> ListReorder(oneAbsolute refs, m) |> ret
+  | UpdateTag(_, t) -> UpdateTag(oneAbsolute refs, t) |> ret
+  | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(oneAbsolute refs, f, arg) |> ret
+  | Check(_, cond) -> Check(oneAbsolute refs, cond) |> ret
+  | Copy(rb, _, _) -> Copy(rb, headAbsolute refs, oneAbsolute (List.tail refs)) |> ret
+  | ListAppendFrom(s1, n, s2) -> ListAppendFrom(headAbsolute refs, n, oneAbsolute (List.tail refs)) |> ret
   // Pointing at a node that will be modified by the edit
-  | Shared(sk, WrapRecord(t, f, _)) -> Shared(sk, WrapRecord(t, f, oneAbsolute refs) ) |> ret
-  | Shared(sk, WrapList(t, _)) -> Shared(sk, WrapList(t, oneAbsolute refs) ) |> ret
-  | Shared(sk, ListAppend(_, nd)) -> Shared(sk, ListAppend(headAbsolute refs, if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
-  | Value(RecordAdd(_, s, nd)) -> Value(RecordAdd(headAbsolute refs, s, if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
-  | Shared(sk, ListAppendFrom(_, _)) -> Shared(sk, ListAppendFrom(headAbsolute refs, oneAbsolute (List.tail refs))) |> ret
+  | WrapRecord(rb, id, t, _) -> WrapRecord(rb, id, t, oneAbsolute refs) |> ret
+  | WrapList(rb, id, t, _) -> WrapList(rb, id, t, oneAbsolute refs) |> ret
+  | ListAppend(_, n, nd) -> ListAppend(headAbsolute refs, n, if inNodes then withNodeReferences nd (List.tail refs) else nd) |> ret
+  | RecordAdd(_, s, nd) -> RecordAdd(headAbsolute refs, s, if inNodes then withNodeReferences nd (List.tail refs) else nd) |> ret
   // Add selector pointing to the previously existing thing 
-  | Shared(sk, ListDelete(_, _)) -> Shared(sk, ListDelete(List.dropLast (oneAbsolute refs), getLastIndex (oneAbsolute refs))) |> ret
-  | Shared(sk, RecordDelete(_, f)) -> Shared(sk, RecordDelete(List.dropLast (oneAbsolute refs), getLastField (oneAbsolute refs))) |> ret
-  | Shared(sk, RecordRenameField(_, _, n)) -> Shared(sk, RecordRenameField(List.dropLast (oneAbsolute refs), getLastField (oneAbsolute refs), n) ) |> ret
+  | ListDelete(_, _) -> ListDelete(List.dropLast (oneAbsolute refs), getLastIndex (oneAbsolute refs)) |> ret
+  | RecordDelete(rb, _, f) -> RecordDelete(rb, List.dropLast (oneAbsolute refs), getLastField (oneAbsolute refs)) |> ret
+  | RecordRenameField(rb, _, _, n) -> RecordRenameField(rb, List.dropLast (oneAbsolute refs), getLastField (oneAbsolute refs), n) |> ret
 
 
 let mapReferences f ed = 
@@ -467,45 +474,7 @@ let transformBasedReference (baseOther, (kindOther, selsOther)) f =
   match kindOther with
   | Absolute -> Absolute, f selOther
   | Relative -> Relative, makeRelative (f baseOther) (f selOther)
-
-/// Returns a modified version of 'selOther' to match
-/// item deletion at selDelete (by decrementing indices of affected selectors)
-let decrementSelectorsAfterDel selDelete idel refOther = 
-  let rec decafter selDelete selOther =
-    match selOther, selDelete with 
-    | Index(io)::selOther, [] -> 
-        if io >= idel then Index(io - 1)::selOther
-        else Index(io)::selOther
-    | MatchingFirst(s, selOther, selDelete) -> s::(decafter selDelete selOther)
-    | TooSpecific(s) -> failwith $"decrementSelectorsAfterDel - Too specific selector {s} matched against Any"
-    | IncompatibleFirst() -> selOther
-    | _ -> failwith $"decrementSelectorsAfterDel - Missing case: {selOther} vs. {selDelete}"
-  transformBasedReference refOther (fun selOther -> decafter selDelete selOther)
-
-/// Returns a modified version of 'selOther' to match
-/// item append at selAppend (by incrementing indices of affected selectors)
-let incrementSelectorsAfterIns selAppend refOther = 
-  let rec incafter selAppend selOther =
-    match selOther, selAppend with 
-    | Index(io)::selOther, [] -> Index(io + 1)::selOther
-    | MatchingFirst(s, selOther, selDelete) -> s::(incafter selDelete selOther)
-    | TooSpecific(s) -> failwith $"incrementSelectorsAfterIns - Too specific selector {s} matched against Any"
-    | IncompatibleFirst() -> selOther
-    | _ -> failwith $"incrementSelectorsAfterIns - Missing case: {selOther} vs. {selAppend}"
-  transformBasedReference refOther (fun selOther -> incafter selAppend selOther)
  
-/// Returns a modified version of 'selOther' to match
-/// reordering of indices 'ord' at location specified by 'selReord'
-let reorderSelectors ord selReord refOther = 
-  let rec reorder selOther selReord =
-    match selOther, selReord with 
-    | Index(io)::selOther, [] -> Index(List.findIndex ((=) io) ord)::selOther // interesting case here
-    | MatchingFirst(s, selOther, selWrap) -> s::(reorder selOther selWrap)
-    | TooSpecific(s) -> failwith $"reorderSelectors - Too specific selector {s} matched against Any"
-    | IncompatibleFirst() -> selOther        
-    | _ -> failwith $"reorderSelectors - Missing case: {selOther} vs. {selReord}"
-  transformBasedReference refOther (fun selOther -> reorder selOther selReord)
-
 /// Returns a modified version of 'selOther' to match
 /// the additional wrapping (in a record with original at @id) at location specified by 'selWrap'
 let wrapRecordSelectors id selWrap refOther =
@@ -563,11 +532,8 @@ let apply doc edit =
   // Add and Append change structure in that they add new items that may have a different
   // shape. This is allowed at runtime, but it may break code referring to newly added
   // things. We could check this using some kind of type system.
-  //
-  // Note that ListAppend/ListAppendFrom can be structural operations, but this has no
-  // effect here (as here they add things to the end) - this only has effects when merging
 
-  | Value(Check(sel, cond)) ->
+  | Check(sel, cond) ->
       match cond, select sel doc with 
       | EqualsTo(String s1), [Primitive(String s2)] -> if s1 <> s2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({s1}<>{s2})")
       | EqualsTo(Number n1), [Primitive(Number n2)] -> if n1 <> n2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({n1}<>{n2})")
@@ -576,25 +542,28 @@ let apply doc edit =
       | cond, nd -> raise (ConditionCheckFailed $"apply.Check Condition ({cond}) failed ({nd})")
       doc
 
-  | Value(PrimitiveEdit(sel, f, arg)) ->
+  | PrimitiveEdit(sel, f, arg) ->
       replace (fun p el -> 
         match el with 
         | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
-  | Shared(_, ListAppend(sel, nd)) ->
+  | ListAppend(sel, n, nd) ->
       replace (fun p el ->
         match el with 
-        | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [nd]))
+        | List(tag, nds) when matches p sel -> 
+            // Similar to 'RecordAdd' but we do not remove duplicates (what will that do?)
+            Some(List(tag, nds @ [n, nd]))
         | _ -> None ) doc
 
-  | Shared(_, ListAppendFrom(sel, src)) ->
+  | ListAppendFrom(sel, n, src) ->
       replace (fun p el ->
-        match el with 
-        | List(tag, nds) when matches p sel -> Some(List(tag, nds @ [selectSingle src doc]))
+        match el with
+        | List(tag, nds) when matches p sel -> 
+            Some(List(tag, nds @ [n, selectSingle src doc]))
         | _ -> None ) doc
 
-  | Value(RecordAdd(sel, fld, nd)) ->
+  | RecordAdd(sel, fld, nd) ->
       replace (fun p el -> 
         match el with 
         | Record(tag, nds) when matches p sel -> 
@@ -602,41 +571,41 @@ let apply doc edit =
             Some(Record(tag, nds @ [fld, nd]))
         | _ -> None ) doc
     
-  | Value(UpdateTag(sel, tagNew)) ->
+  | UpdateTag(sel, tagNew) ->
       replace (fun p el ->
         match el with 
         | Record(t, nds) when matches p sel -> Some(Record(tagNew, nds))
         | List(t, nds) when matches p sel -> Some(List(tagNew, nds))
         | _ -> None ) doc
 
-  // **Shared edits** - These can be applied both as structural edits to change document shape
+  | ListDelete(sel, idel) ->
+      replace (fun p -> function
+        | List(t, items) when matches p sel -> 
+            let items = items |> List.choose (fun (j, it) -> 
+              if idel <> j  then Some(j, it) else None)
+            Some(List(t, items))
+        | _ -> None) doc
+
+  | ListReorder(sel, ord) ->
+      replace (fun p el ->
+        match el with 
+        | List(tag, nds) when matches p sel -> Some(List(tag, [ for i in ord -> List.find (fst >> (=) i) nds])) // TODO: Not compatible with multikeys
+        | _ -> None ) doc
+
+  // **Structural edits** - These can be applied both as structural edits to change document shape
   // or as value edits to affect only particular values. We allow structural edits only when
   // the target selector is structural too! Using those as value edits changes structure too
   // and could consequently break things (but see note above).
 
-  | Shared(sk, ListDelete(sel, idel)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
-        failwith $"apply.ListDelete - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
-      let doc = replace (fun p -> function
-        | List(t, items) when matches p sel -> 
-            let items = items |> List.indexed |> List.choose (fun (j, it) -> 
-              if idel <> j  then Some it else None)
-            Some(List(t, items))
-        | _ -> None) doc
-      if sk = StructuralKind then 
-        let nsels = getDocumentReferences doc |> List.map (decrementSelectorsAfterDel sel idel)
-        withNodeReferences doc nsels
-      else doc
-
-  | Shared(sk, RecordDelete(sel, fdel)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
+  | RecordDelete(rb, sel, fdel) ->
+      if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordDelete - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
       let doc = replace (fun p -> function
         | Record(t, nds) when matches p sel ->
             let nds = nds |> List.filter (fun (f, _) -> f <> fdel)
             Some(Record(t, nds))
         | _ -> None) doc
-      if sk = StructuralKind then 
+      if rb = UpdateReferences then 
         // We cannot update selectors if the target node was deleted, but 
         // we can check there are no such selectors in the document.
         for docRef in getDocumentReferences doc do 
@@ -644,24 +613,13 @@ let apply doc edit =
             failwith $"apply.RecordDelete - Cannot delete {formatSelector sel}. Document contains conflicting selector {formatReference (snd docRef)}."
         doc
       else doc
-
-  | Shared(sk, ListReorder(sel, ord)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
-        failwith $"apply.ListReorder - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
-      let doc = replace (fun p el ->
-        match el with 
-        | List(tag, nds) when matches p sel -> Some(List(tag, [ for i in ord -> nds.[i]]))
-        | _ -> None ) doc
-      if sk = StructuralKind then
-        let nsels = getDocumentReferences doc |> List.map (reorderSelectors ord sel)
-        withNodeReferences doc nsels
-      else doc
-
-  | Shared(sk, WrapRecord(id, tag, sel)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
+      
+  | WrapRecord(rb, id, tag, sel) ->
+      if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.WrapRecord - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
       let doc = 
-        if sk = StructuralKind then
+        // TODO: Need to update references before transforming the document - but why was that?
+        if rb = UpdateReferences then
           let nsels = getDocumentReferences doc |> List.map (wrapRecordSelectors id sel)
           withNodeReferences doc nsels
         else doc
@@ -669,32 +627,32 @@ let apply doc edit =
         if matches p sel then Some(Record(tag, [id, el]))
         else None ) doc
 
-  | Shared(sk, WrapList(tag, sel)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
+  | WrapList(rb, id, tag, sel) ->
+      if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.WrapList - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
       let doc = replace (fun p el -> 
-        if matches p sel then Some(List(tag, [el]))
+        if matches p sel then Some(List(tag, [id, el]))
         else None ) doc
-      if sk = StructuralKind then
+      if rb = UpdateReferences then
         let nsels = getDocumentReferences doc |> List.map (wrapListSelectors sel)
         withNodeReferences doc nsels
       else doc
 
-  | Shared(sk, RecordRenameField(sel, fold, fnew)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
+  | RecordRenameField(rb, sel, fold, fnew) ->
+      if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordRenameField - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
       let doc = replace (fun p el -> 
         match el with 
         | Record(t, nds) when matches p sel -> 
             Some(Record(t, List.map (fun (f, nd) -> if f = fold then fnew, nd else f, nd) nds))
         | _ -> None ) doc
-      if sk = StructuralKind then
+      if rb = UpdateReferences then
         let nsels = getDocumentReferences doc |> List.map (renameFieldSelectors fold fnew sel)
         withNodeReferences doc nsels
       else doc
 
-  | Shared(sk, Copy(sel, src)) ->
-      if sk = StructuralKind && not (isStructuralSelector sel) then 
+  | Copy(rb, sel, src) ->
+      if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.Copy - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
 
       let mutable exprs = 
@@ -703,14 +661,14 @@ let apply doc edit =
         | tgs when tgs.Length = srcNodes.Length -> srcNodes
         // Slightly clever in that we can copy multiple source nodes into a single target list node
         // (this is needed for evaluation of arguments - see eval.fs)
-        | [List(t, _)] -> [List(t, srcNodes)] 
-        | tgtNodes -> [Primitive(String "????")] //failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
+        | [List(t, _)] -> [List(t, List.mapi (fun i nd -> string i, nd) srcNodes)] 
+        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
         if matches p sel then Some(next())
         else None ) doc
 
-      if sk = StructuralKind then 
+      if rb = UpdateReferences then 
         // We cannot update selectors in the document to match this edit, so make sure 
         // there are none (when copying from referenced source, we'd need to duplicate 
         // the reference as done when merging in 'copyEdit'; when copying to 
@@ -812,31 +770,17 @@ let copyEdit e1 srcSel tgtSel =
 //
 let updateSelectors e1 e2 = 
   match e2.Kind with 
-  // Value edits do not affect other selectors
-  | Value(_)
-  | Shared(ValueKind, _) -> [e1]
-  
   // For structural edits, transform the selectors in the
   // other edit in a way corresponding to the edit
-  | Shared(StructuralKind, ListAppend(sel, _)) 
-  | Shared(StructuralKind, ListAppendFrom(sel, _)) ->
-      [mapReferences (incrementSelectorsAfterIns sel) e1]
-  | Shared(StructuralKind, ListDelete(sel, idel)) ->
-      [mapReferences (decrementSelectorsAfterDel sel idel) e1]
-  | Shared(StructuralKind, WrapRecord(id, _, sel)) ->             
+  | WrapRecord(UpdateReferences, id, _, sel) ->
       [mapReferences (wrapRecordSelectors id sel) e1]
-  | Shared(StructuralKind, WrapList(_, sel)) -> 
+  | WrapList(UpdateReferences, _, _, sel) -> 
       [mapReferences (wrapListSelectors sel) e1]
-  | Shared(StructuralKind, RecordRenameField(sel, fold, fnew)) ->
+  | RecordRenameField(UpdateReferences, sel, fold, fnew) ->
       [mapReferences (renameFieldSelectors fold fnew sel) e1]
-  | Shared(StructuralKind, ListReorder(sel, ord)) -> 
-      // TODO: If 'e1' is ListReorder pointing to the same thing, do something clever!
-      // (treat this as a conflict and then do something about it...)
-      // (get back to this once we have conflict detection...)
-      [mapReferences (reorderSelectors ord sel) e1]
-
+  
   // For structural copy, we may need to duplicate the edit e1
-  | Shared(StructuralKind, Copy(tgtSel, srcSel)) -> 
+  | Copy(UpdateReferences, tgtSel, srcSel) -> 
       match copyEdit e1 srcSel tgtSel with 
       | Some res -> res
       | _ ->
@@ -846,9 +790,12 @@ let updateSelectors e1 e2 =
           if conflict then failwith $"CONFLICT!!!\ne1={e1}\ne2={e2}"
           else [e1]
   
-  | Shared(StructuralKind, RecordDelete _) -> 
+  | RecordDelete(UpdateReferences, _, _) -> 
       [e1] // failwith "updateSelectors - Detect conflicts - record delete"
 
+  // Value edits do not affect other selectors
+  | _ -> [e1]
+  
 
 // Assuming 'e1' and 'e2' happened independently, we want to modify
 // 'e1' so that it can be placed after 'e2'. 
@@ -863,77 +810,50 @@ let updateSelectors e1 e2 =
 // * If the edit 'e1' is adding new item to a record, then .. think about this.
 // * If the edit 'e1' is copying .. think about this.
 //
-type EditMoveState = 
-  { UniqueTempField : string; PrefixEdits : Edit list; SuffixEdits : Edit list }
-
-let applyToAdded ctx e1 e2 = 
+let applyToAdded e1 e2 = 
   let mkEd ed = { Kind = ed; Dependencies = []; Disabled = false; GroupLabel = e2.GroupLabel }
 
-  match e1.Kind with 
+  match e1.Kind with   
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
-  | Shared(sk, ListAppendFrom(sel, src)) -> 
-      // A naive implementation is to scope e2 to 'src' and then return [e2scoped; e1] 
-      // This mutates the source in-place in the document - which works for my demos
-      // but it is not correct in general. Instead, we create temp field, apply
-      // all edits to this field and then appendfrom this new temp field.
-      match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField] e2 with
-      | InScope e2scoped -> 
-          let prefix = [
-            mkEd <| Value(RecordAdd([], ctx.UniqueTempField, Primitive (String "empty")))
-            mkEd <| Shared(ValueKind, Copy([Field ctx.UniqueTempField], src)) ]
-          let suffix = [
-            mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
-          let res = [
-            e2scoped
-            mkEd <| Shared(sk, ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
-          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
-          else res, ctx
-      | _ -> [e1], ctx
+  | ListAppendFrom(sel, n, src) -> 
+      match scopeEdit (sel @ [All]) (sel @ [Index n]) e2 with
+      | InScope e2scoped -> [ e1; withReferenceBehaviour KeepReferences e2scoped ]
+      | _ -> [e1]
 
-  | Shared(sk, ListAppend(sel, nd)) -> 
-      // The same trick as above - but here, we set the added node as a value of a temp field
-      // and then transform the field - and turn Append to AppendFrom (to be done at the end).
+  | ListAppend(sel, n, nd) -> 
       match scopeEdit (sel @ [All]) [] e2 with
       | InScope e2scoped ->
-          let nnd = apply nd e2scoped
-          [ { e1 with Kind = Shared(sk, ListAppend(sel, nnd)) }], ctx
-      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+          [ { e1 with Kind = ListAppend(sel, n, apply nd e2scoped) }]
+      | AllOutOfScope | TargetOutOfScope -> [e1]
       | SourceOutOfScope None -> failwith "todo - think about this"
       | SourceOutOfScope (Some _) -> 
-          let e2scoped = match scopeEdit (sel @ [All]) [Field ctx.UniqueTempField] e2 with SourceOutOfScope (Some e) -> e | _ -> failwith "applyToAdded: should not happen"
-          let prefix = [
-            mkEd <| Value(RecordAdd([], ctx.UniqueTempField, nd)) ]
-          let suffix = [
-            mkEd <| Shared(ValueKind, RecordDelete([], ctx.UniqueTempField)) ]
-          let res = [
-            e2scoped
-            mkEd <| Shared(sk, ListAppendFrom(sel, [Field ctx.UniqueTempField] )) ]
-          if ctx.PrefixEdits = [] then res, { ctx with PrefixEdits = prefix; SuffixEdits = suffix } 
-          else res, ctx
+          match scopeEdit (sel @ [All]) (sel @ [Index n]) e2 with 
+          | SourceOutOfScope (Some e2scoped) -> [ e1; e2scoped ]
+          | _ -> failwith "applyToAdded: should not happen"
 
-  | Value(RecordAdd(sel, fld, nd)) -> 
+  | RecordAdd(sel, fld, nd) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
       | InScope _ | SourceOutOfScope _ -> 
           // TODO: This is conflict, because e2 was doing something with a 
           // record field and e1 is now replacing it with a new thing.
           // We can let 'e1' win (return [e1]) or 'e2' win (return [])
-          [e1], ctx
-      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+          [e1]
+      | AllOutOfScope | TargetOutOfScope -> [e1]
 
-  | Shared(_, Copy(sel, src)) -> 
+  | Copy(_, sel, src) -> 
       match scopeEdit sel src e2 with
       | InScope _ | SourceOutOfScope _ -> 
           // TODO: Same conflict as in the case of RecordAdd - with same options.
-          [e1], ctx
-      | AllOutOfScope | TargetOutOfScope -> [e1], ctx
+          [e1]
+      | AllOutOfScope | TargetOutOfScope -> [e1]
 
-  | _ -> [e1], ctx
+  | _ -> [e1]
 
 // Assuming 'e1' and 'e2' happened independently,
 // modify 'e1' so that it can be placed after 'e2'.
-let moveBefore ctx e1 e2 = 
-  let e1s, ctx = applyToAdded ctx e1 e2
-  e1s |> List.collect (fun e1 -> updateSelectors e1 e2), ctx
+let moveBefore e1 e2 = 
+  let e1s = applyToAdded e1 e2
+  e1s |> List.collect (fun e1 -> updateSelectors e1 e2)
 
 // --------------------------------------------------------------------------------------
 // Edit groups
@@ -982,11 +902,11 @@ let filterDisabledGroups initial hist =
         else group |> List.map (fun ed -> { ed with Disabled = true })
       ngroup, state) initial
   |> List.collect id
-
+  
 let getDependencies ed = 
   match ed.Kind with 
-  | Shared(_, ListAppendFrom(_, src)) 
-  | Shared(_, Copy(_, src)) ->  getTargetSelector ed :: src :: ed.Dependencies
+  | ListAppendFrom(_, _, src)
+  | Copy(_, _, src) ->  getTargetSelector ed :: src :: ed.Dependencies
   | _ -> getTargetSelector ed :: ed.Dependencies
   
 let filterConflicting = 
@@ -1022,13 +942,8 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
   e2s |> List.collect (fun e2 ->
       // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
       // (caveat is that the operation can turn it into multiple edits)
-      let mutable ctx = { UniqueTempField = $"$uniquetemp_{counter()}"; PrefixEdits = []; SuffixEdits = [] }
-      let res = 
-        List.fold (fun e2 e1 -> 
-          let e2s, nctx = e2 |> List.foldCollect (fun ctx e2 -> moveBefore ctx e2 e1) ctx
-          ctx <- nctx
-          e2s ) [e2] e1s 
-      let res = ctx.PrefixEdits @ res @ ctx.SuffixEdits
+      let res = List.fold (fun e2 e1 -> 
+        e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s 
       
       let resHashed = withHistoryHash hashAfter id res
       hashBefore <- hash(hashBefore, e2)

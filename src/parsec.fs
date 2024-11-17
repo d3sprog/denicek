@@ -135,7 +135,7 @@ module P =
   let identChar = 
     orElse (orElse alphaNumeric (char '-')) (char '_')
   let ident = 
-    andThen letter (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
+    oneOrMore identChar |> map (fun cs -> System.String(Array.ofSeq (cs)))
   let atIdent = 
     andThen (char '@') (zeroOrMore identChar) |> map (fun (c,cs) -> System.String(Array.ofSeq (c::cs)))
   let dollarIdent = 

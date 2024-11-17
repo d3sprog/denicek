@@ -17,29 +17,20 @@ open Tbd.Doc
 // We first replace all children with <x-evaluated> and then the formula itself.
 // <x-evaluated> has two children - 'formula' (original) and 'result' (the value).
 
-let rec evalSiteRecordChildren inFormula sels nds =
+let rec evalSiteChildren kind inFormula sels nds =
   let rec loop i = function 
     | (f, nd)::nds -> 
-        match evalSite inFormula (Field f::sels) nd with 
-        | Some res -> Some res
-        | None -> loop (i + 1) nds
-    | _ -> None
-  loop 0 nds 
-
-and evalSiteListChildren inFormula sels nds =
-  let rec loop i = function 
-    | nd::nds -> 
-        match evalSite inFormula (Index i::sels) nd with 
+        match evalSite inFormula (kind f::sels) nd with 
         | Some res -> Some res
         | None -> loop (i + 1) nds
     | _ -> None
   loop 0 nds 
 
 and (|EvalSiteRecordChildren|_|) inFormula sels nds = 
-  evalSiteRecordChildren inFormula sels nds
+  evalSiteChildren Field inFormula sels nds
 
 and (|EvalSiteListChildren|_|) inFormula sels nds = 
-  evalSiteListChildren inFormula sels nds
+  evalSiteChildren Index inFormula sels nds
 
 /// Evaluate references only if they are inside formula
 /// (they may be used for other things in the document, e.g. event handlers)
@@ -53,7 +44,7 @@ and evalSite (formulaSel:option<_>) sels nd : option<Selectors * Selectors> =
   // Formula - Call by value - evaluate children first
   | Record("x-formula", children), _ -> 
       let formulaSel = Option.defaultValue (List.rev sels) formulaSel
-      match evalSiteRecordChildren (Some formulaSel) sels children with 
+      match evalSiteChildren Field (Some formulaSel) sels children with 
       | Some res -> Some res
       | None -> Some(formulaSel, List.rev sels)
   | Reference(Absolute, Field "$builtins"::_ ), _ -> None
@@ -86,7 +77,7 @@ let evaluateBuiltin op (args:Map<string, Node>)=
       let f = (dict [ "count", count; "sum", sum ]).[op]
       match args.TryFind "arg" with
       | Some(EvaluatedResult(List(_, nds))) -> 
-          Primitive(Number(f (List.map getEvaluatedResult nds))), [Field "arg"]
+          Primitive(Number(f (List.map (snd >> getEvaluatedResult) nds))), [Field "arg"]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
   | "equals" -> 
@@ -115,9 +106,9 @@ let evaluateRaw doc =
       match it with 
       | Reference(kind, p) ->
           let p = resolveReference sel (kind, p)
-          [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel)), [p]
-            Value(RecordAdd(sel, "result", List("empty", []))), [p] // Allow 'slightly clever' case of Copy from doc.fs
-            Shared(ValueKind, Copy(sel @ [Field "result"], p)), [] ]
+          [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p]
+            RecordAdd(sel, "result", List("empty", [])), [p] // Allow 'slightly clever' case of Copy from doc.fs
+            Copy(KeepReferences, sel @ [Field "result"], p), [] ]
 
       | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, [ Field("$builtins"); Field op ]), args)) ->
           let res, deps = evaluateBuiltin op args
@@ -126,8 +117,8 @@ let evaluateRaw doc =
           // formula (the most top-level one) - which is safe overapproximation
           // (value edits can transform the formula, breaking the dependencies)
           let deps = [ formulaSel ] 
-          [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
-            Value(RecordAdd(sel, "result", res)), deps ]          
+          [ WrapRecord(KeepReferences, "formula", "x-evaluated", sel), deps
+            RecordAdd(sel, "result", res), deps ]
 
       | Record("x-formula", nds) -> 
           failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"

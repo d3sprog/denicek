@@ -25,30 +25,28 @@ let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
 
 // Value edits
-let apV s n = mkEd <| Shared(ValueKind, ListAppend(s, n))  
-let apS s n = mkEd <| Shared(StructuralKind, ListAppend(s, n))  
-let apfV s sel = mkEd <| Shared(ValueKind, ListAppendFrom(s, sel))  
-let apfS s sel = mkEd <| Shared(StructuralKind, ListAppendFrom(s, sel))  
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn, None))  
-let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
+let ap s i n = mkEd <| ListAppend(s, i, n)
+let apf s i sel = mkEd <| ListAppendFrom(s, i, sel)
+let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
+let add sel f n = mkEd <| RecordAdd(sel, ffld f, n)
+let ord s l = mkEd <| ListReorder(s, l)
+let tag s t = mkEd <| UpdateTag(s, t)
 
-// Shared structural
-let ordS s l = mkEd <| Shared(StructuralKind, ListReorder(s, l))  
-let delrV sel f = mkEd <| Shared(ValueKind, RecordDelete(sel, f)) 
-let wrV s fld tag = mkEd <| Shared(ValueKind, WrapRecord(ffld fld, tag, s)) 
-let wrS s fld tag = mkEd <| Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) 
-let wlS s tag = mkEd <| Shared(StructuralKind, WrapList(tag, s)) 
-let cpS s1 s2 = mkEd <| Shared(StructuralKind, Copy(s2, s1)) 
-let cpV s1 s2 = mkEd <| Shared(ValueKind, Copy(s2, s1)) 
-let tagV s t = mkEd <| Value(UpdateTag(s, t)) 
-let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
-let uidV s fold fnew = mkEd <| Shared(ValueKind, RecordRenameField(s, fold, ffld fnew)) 
+// Structural edits
+let delrV sel f = mkEd <| RecordDelete(KeepReferences, sel, f)
+let wrV s fld tag = mkEd <| WrapRecord(KeepReferences, ffld fld, tag, s)
+let wrS s fld tag = mkEd <| WrapRecord(UpdateReferences, ffld fld, tag, s)
+let wlS s i tag = mkEd <| WrapList(UpdateReferences, tag, i, s)
+let cpS s1 s2 = mkEd <| Copy(UpdateReferences, s2, s1)
+let cpV s1 s2 = mkEd <| Copy(KeepReferences, s2, s1)
+let uidS s fold fnew = mkEd <| RecordRenameField(UpdateReferences, s, fold, ffld fnew)
+let uidV s fold fnew = mkEd <| RecordRenameField(KeepReferences, s, fold, ffld fnew)
 
 let selPart = 
   ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
     (P.char '*' |> P.map (fun _ -> All)) <|>
     (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
-    (P.num |> P.map Index) ) |> P.hole "sel"
+    (P.char '#' <*>> P.ident |> P.map Index) ) |> P.hole "sel"
   
 let refHoleBase = 
     (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
@@ -72,16 +70,16 @@ let opsCore =
     add [] "t1" (nds "value" "h1" "Programming conference 2023")
     add [] "t2" (nds "value" "h2" "Speakers")
     add [] "speakers" (lst "ul")
-    apV (!/ "/speakers") (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
-    apV (!/ "/speakers") (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
-    apV (!/ "/speakers") (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
+    ap (!/ "/speakers") "goldberg" (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
+    ap (!/ "/speakers") "hamilton" (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
+    ap (!/ "/speakers") "jennings" (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
 
 // Add <li> and reorder items
 let addSpeakerOps = 
   [ 
-    apS (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ordS (!/ "/speakers") [3; 0; 1; 2] 
+    ap (!/ "/speakers") "lovelace" (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"] 
   ]
 
 // Create <li> as /temp and then copy into <ul>
@@ -89,9 +87,9 @@ let addSpeakerViaTempOps =
   [
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apfS (!/ "/speakers") (!/ "/temp")
+    apf (!/ "/speakers") "lovelace" (!/ "/temp")
     delrV (!/ "/") "temp"
-    ordS (!/ "/speakers") [3; 0; 1; 2] 
+    ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"]
   ]
 
 // String replace specific list item
@@ -109,8 +107,8 @@ let refactorListOps =
     wrS (!/ "/speakers/*/name") "contents" "td"
     
     add (!/ "/speakers/*") "email" (nds "contents" "td" "")
-    tagV (!/ "/speakers/*") "tr"
-    tagV (!/ "/speakers") "tbody"
+    tag (!/ "/speakers/*") "tr"
+    tag (!/ "/speakers") "tbody"
     
     wrS (!/ "/speakers") "body" "table"
     add (!/ "/speakers") "head" (rcd "thead")
@@ -165,8 +163,8 @@ let opsBudget =
     // NOTE: Construct things in a way where all structural edits (wrapping)
     // are applied to the entire list using All (this should be required!)
     // because otherwise we may end up with inconsistent structures
-    apV (!/ "/totals") (ps "Refreshments: ") 
-    apV (!/ "/totals") (ps "Speaker travel: ") 
+    ap (!/ "/totals") "refreshments" (ps "Refreshments: ") 
+    ap (!/ "/totals") "travel" (ps "Speaker travel: ") 
     wrS (!/ "/totals/*") "label" "li"    
     add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
     add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
@@ -198,7 +196,7 @@ let pbdAddFirstSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apfV (!/ "/speakers") (!/ "/temp")
+    apf (!/ "/speakers") "lovelace" (!/ "/temp")
     delrV (!/ "/") "temp"
   ]
 
@@ -209,7 +207,7 @@ let pbdAddAnotherSpeaker =
     add [] "temp" (rcd "li")
     add (!/ "/temp") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apfV (!/ "/speakers") (!/ "/temp")
+    apf (!/ "/speakers") "liskov" (!/ "/temp")
     delrV (!/ "/") "temp"
   ]
   
@@ -223,15 +221,15 @@ let todoBaseOps =
     add [] "items" (lst "ul")
   ]
 
-let todoAddOps work = 
+let todoAddOps idwork work = 
   [ 
     add [] "temp" (ps work)
-    apS (!/"/items") (rcd "li")
-    add (!/"/items/0") "entry" (rcd "label")
-    add (!/"/items/0/entry") "done" (rcd "input")
-    add (!/"/items/0/entry/done") "@type" (ps "checkbox")
-    add (!/"/items/0/entry") "work" (ps "")
-    cpV (!/"/temp") (!/"/items/0/entry/work")
+    ap (!/"/items") idwork (rcd "li")
+    add (!/ $"/items/#{idwork}") "entry" (rcd "label")
+    add (!/ $"/items/#{idwork}/entry") "done" (rcd "input")
+    add (!/ $"/items/#{idwork}/entry/done") "@type" (ps "checkbox")
+    add (!/ $"/items/#{idwork}/entry") "work" (ps "")
+    cpV (!/ "/temp") (!/ $"/items/#{idwork}/entry/work")
     delrV [] "temp"
   ]
 
@@ -284,15 +282,15 @@ let opsCounterHndl baseList =
     yield add (!/"/saved-interactions") "increment" (rcd "x-interaction")
     yield add (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
-    for op in opsCounterInc ->
-      apV (!/ "/saved-interactions/increment/interactions") (Represent.represent None op) 
+    for i, op in Seq.indexed opsCounterInc ->
+      ap (!/ "/saved-interactions/increment/interactions") (string i) (Represent.represent None op) 
     yield add (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
 
     yield add (!/"/saved-interactions") "decrement" (rcd "x-interaction")
     yield add (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
     yield add (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
-    for op in opsCounterDec ->
-      apV (!/ "/saved-interactions/decrement/interactions") (Represent.represent None op) 
+    for i, op in Seq.indexed opsCounterDec ->
+      ap (!/ "/saved-interactions/decrement/interactions") (string i) (Represent.represent None op) 
     yield add (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) ]
 
 
