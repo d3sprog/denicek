@@ -18,7 +18,7 @@ let rec nodeToJson = function
   | List(tag, nds) -> JsInterop.createObj [ 
         "kind", box "list" 
         "tag", box tag
-        "nodes", box [| for nd in nds -> nodeToJson nd |]
+        "nodes", box [| for n, nd in nds -> [| box n, nodeToJson nd |] |]
       ]
   | Record(tag, nds) -> JsInterop.createObj [ 
         "kind", box "record" 
@@ -52,7 +52,7 @@ let selFromJson o =
 let rec nodeFromJson o =
   if jsTypeof o = "string" then Primitive(String(unbox o))
   elif jsTypeof o = "number" then Primitive(Number(unbox o))
-  elif o?kind = "list" then List(o?tag, [ for o in unbox<obj[]> o?nodes -> nodeFromJson o ])
+  elif o?kind = "list" then List(o?tag, [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
   elif o?kind = "record" then Record(o?tag, [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
   elif o?kind = "reference" then 
     Reference

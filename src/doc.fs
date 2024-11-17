@@ -189,7 +189,6 @@ type EditKind =
   | UpdateTag of Selectors * string
   | PrimitiveEdit of Selectors * string * string option
   | RecordAdd of Selectors * string * Node
-  | Check of Selectors * Condition
 
 type Edit = 
   { Kind : EditKind 
@@ -228,12 +227,6 @@ let formatEdit ed =
       fmtv "primitive" [formatSelector sel; formatString op; formatString arg]
   | RecordAdd(sel, n, nd) -> 
       fmtv "recordAdd" [formatSelector sel; formatString n; formatNode nd]
-  | Check(sel, NonEmpty) -> 
-      fmtv "check" [formatSelector sel; "nonempty"]
-  | Check(sel, EqualsTo (String s)) -> 
-      fmtv "check" [formatSelector sel; "equals"; formatString s]
-  | Check(sel, EqualsTo (Number n)) -> 
-      fmtv "check" [formatSelector sel; "equals"; string n]
   | UpdateTag(sel, tagNew) -> 
       fmtv "updateTag" [formatSelector sel; formatString tagNew]
   | ListAppend(sel, n,nd) -> 
@@ -301,8 +294,7 @@ let getTargetSelector ed =
   | ListReorder(s, _) 
   | Copy(_, s, _)
   | UpdateTag(s, _) 
-  | PrimitiveEdit(s, _, _) 
-  | Check(s, _) -> s
+  | PrimitiveEdit(s, _, _) -> s
   // Add selector to the end, pointing at the affected node
   | WrapList(_, _, _, s) -> s @ [All]
   | ListAppend(s, i, _) 
@@ -323,7 +315,6 @@ let withTargetSelector tgt ed =
   | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
   | UpdateTag(_, t) -> UpdateTag(tgt, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
-  | Check(_, cond) -> Check(tgt, cond) |> ret
   // Remove added selector, pointing at the affected node
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, List.dropLast tgt) |> ret
   | ListAppendFrom(_, _, s) -> ListAppendFrom(List.dropLast tgt, getLastIndex tgt, s) |> ret
@@ -347,8 +338,7 @@ let getAllReferences inNodes ed =
   // Selector is already pointing directly at the affected node
   | ListReorder(s, _) 
   | UpdateTag(s, _) 
-  | PrimitiveEdit(s, _, _) 
-  | Check(s, _) -> [[], (Absolute, s)]
+  | PrimitiveEdit(s, _, _) -> [[], (Absolute, s)]
   | ListAppendFrom(s1, _, s2)
   | Copy(_, s1, s2) -> [[], (Absolute, s1); [], (Absolute, s2)]
   // Pointing at a node that will be modified by the edit
@@ -372,7 +362,6 @@ let withAllReferences inNodes refs ed =
   | ListReorder(_, m) -> ListReorder(oneAbsolute refs, m) |> ret
   | UpdateTag(_, t) -> UpdateTag(oneAbsolute refs, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(oneAbsolute refs, f, arg) |> ret
-  | Check(_, cond) -> Check(oneAbsolute refs, cond) |> ret
   | Copy(rb, _, _) -> Copy(rb, headAbsolute refs, oneAbsolute (List.tail refs)) |> ret
   | ListAppendFrom(s1, n, s2) -> ListAppendFrom(headAbsolute refs, n, oneAbsolute (List.tail refs)) |> ret
   // Pointing at a node that will be modified by the edit
@@ -515,8 +504,6 @@ let renameFieldSelectors fold fnew selRename refOther =
 // Apply
 // --------------------------------------------------------------------------------------
 
-exception ConditionCheckFailed of string
-
 let rec isStructuralSelector sel = 
   match sel with 
   | [] -> true
@@ -532,15 +519,6 @@ let apply doc edit =
   // Add and Append change structure in that they add new items that may have a different
   // shape. This is allowed at runtime, but it may break code referring to newly added
   // things. We could check this using some kind of type system.
-
-  | Check(sel, cond) ->
-      match cond, select sel doc with 
-      | EqualsTo(String s1), [Primitive(String s2)] -> if s1 <> s2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({s1}<>{s2})")
-      | EqualsTo(Number n1), [Primitive(Number n2)] -> if n1 <> n2 then raise(ConditionCheckFailed $"apply.Check: EqualsTo failed ({n1}<>{n2})")
-      | NonEmpty, [Primitive(Number _)] -> ()
-      | NonEmpty, [Primitive(String s)] -> if System.String.IsNullOrWhiteSpace(s) then raise(ConditionCheckFailed $"apply.Check: NonEmpty failed ({s})")
-      | cond, nd -> raise (ConditionCheckFailed $"apply.Check Condition ({cond}) failed ({nd})")
-      doc
 
   | PrimitiveEdit(sel, f, arg) ->
       replace (fun p el -> 
@@ -889,19 +867,6 @@ let takeAfterHash hashToFind eds =
 
 let applyHistory initial hist =
   hist |> List.fold apply initial
-  
-let filterDisabledGroups initial hist = 
-  hist 
-  |> List.chunkBy (fun ed -> ed.GroupLabel)
-  |> List.mapWithState (fun doc group ->
-      let keep, state = 
-        try true, group |> List.fold apply doc
-        with ConditionCheckFailed _ -> false, doc
-      let ngroup =
-        if keep then group
-        else group |> List.map (fun ed -> { ed with Disabled = true })
-      ngroup, state) initial
-  |> List.collect id
   
 let getDependencies ed = 
   match ed.Kind with 

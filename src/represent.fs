@@ -74,8 +74,6 @@ let unrepresent nd =
   // Value edits
   | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd)) ->
       RecordAdd(unrepresentSel sel, f, nd) |> ret
-  | Record("x-edit-check", Lookup (Find "target" tgt & Find "cond" cond)) ->
-      Check(unrepresentSel tgt, unrepresentCond cond) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op & Finds "arg" arg)) ->
       PrimitiveEdit(unrepresentSel tgt, op, Some arg) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
@@ -114,8 +112,6 @@ let represent (hash:int option) op =
   // Value edits
   | RecordAdd(target, f, nd) ->
       rcd "x-edit-add" [ "target", representSel target; "field", ps f; "node", nd ]
-  | Check(target, cond) -> 
-      rcd "x-edit-check" [ "target", representSel target; "cond", representCond cond ]
   | PrimitiveEdit(target, op, None) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op ]
   | PrimitiveEdit(target, op, Some arg) ->
