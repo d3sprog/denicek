@@ -953,10 +953,10 @@ module Commands =
       
     // Built-in transformations of primitive values
     // (these are also only value edits, like RecordAdd/ListAppend above)
-    for sel, sk, rb, kind in [genSel, GS, RU, MarkedNode; cursorSel, CS, RK, CurrentNode] do
+    for sel, sk, rb, kind in [genSel, GS, RN, MarkedNode; cursorSel, CS, RN, CurrentNode] do
       let lbl, pAst = 
-        if kind = CurrentNode then " (current)", P.char '*' |> P.map ignore
-        else " (marked)", P.unit () 
+        if kind = CurrentNode then " (current)", P.unit ()
+        else " (marked)", P.char '*' |> P.map ignore
       if isString nd || isNumber nd then
         for t in transformations do
           yield command sk rb "las la-at" (t.Label + lbl)
@@ -1459,10 +1459,10 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base" ] //"conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; ]
+  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table"]//;"conf-rename"; "conf-budget"; ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase |] -> //[| confBase; confAdd; confRename; confTable; confBudget; |] ->
+  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase; confBase; confAdd; confTable |] -> //[| confRename; confBudget; |] ->
     let demos = 
       [ 
         "empty", readJson "[]", []
@@ -1474,15 +1474,13 @@ async {
           "remove", readJsonOps todoRemove 
         ]
         "counter", readJson counterBase, []
-      (*
-        "conf2", readJson confBase, [
+        "conf", readJson confBase, [
           "add", readJsonOps confAdd 
-          "rename", readJsonOps confRename
+          //"rename", readJsonOps confRename
           "table", readJsonOps confTable 
-          "budget", readJsonOps confBudget
-        ] 
-        *)
+          //"budget", readJsonOps confBudget
         ]
+      ]
     trigger (DemoEvent(LoadDemos demos))
   | _ -> failwith "wrong number of demos" }
 |> startWithHandler

@@ -212,7 +212,7 @@ let formatNode nd =
   sprintf "%A" nd
   
 let formatReferenceBehaviour = function
-  | UpdateReferences -> "v" | KeepReferences -> "s"
+  | UpdateReferences -> "s" | KeepReferences -> "v"
 
 let formatString (s:string) = 
   "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\""
@@ -419,7 +419,8 @@ let removeSelectorPrefix p1 p2 =
     // done at a specific index, we do not want to apply it to All - but are ok
     // with applying it at the specific index - so this is also OK)
     | All::p1, Index(i)::p2 ->
-        None //loop (Index(i)::specPref) p1 p2
+        //None //
+        loop (Index(i)::specPref) p1 p2
 
     | All::p1, All::p2 -> loop (All::specPref) p1 p2
     | [], p2 -> Some(List.rev specPref, p2)
@@ -799,11 +800,12 @@ let applyToAdded e1 e2 =
       | _ -> e2, []
 
   | ListAppend(sel, n, nd) -> 
+      //printfn $"APPLY {formatEdit e1} to added {formatEdit e2}"
       match scopeEdit (sel @ [All]) (sel @ [Index n]) e1 with
       | InScope e1scoped 
       | SourceOutOfScope (Some e1scoped) ->
-          printfn $"SCOPED {formatEdit e1}"
-          printfn $"AS {formatEdit e1scoped}"
+          //printfn $"SCOPED {formatEdit e1}"
+          //printfn $"AS {formatEdit e1scoped}"
           e2, [ withReferenceBehaviour KeepReferences e1scoped ]
           //printfn $"IN SCOPE ({formatSelector (sel @ [All])}): {formatEdit e2}"
           //[ { e1 with Kind = ListAppend(sel, n, apply nd e2scoped) }]
@@ -915,7 +917,7 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
   for e in e2s do printfn $"  {formatEdit e}"
   printfn "THROUGH"
   for e in e1s do printfn $"  {formatEdit e}"
-  *)
+  //*)
   let e2s = 
     if crmode = RemoveConflicting then
       let e1ModSels = e1s |> List.map getTargetSelector
@@ -924,11 +926,15 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
 
   let e2smap = 
     e2s |> List.map (fun e2 ->
-      //printfn $"UPDATING {formatEdit e2}"
+      printfn $"UPDATING {formatEdit e2}"
       let e2init = [e2], []
-      let e2after, e2extras = e1s |> List.fold (fun e2state e1 -> moveAllBefore e1 e2state) e2init
-      //printfn $" * after {List.map formatEdit e2after}"
-      //printfn $" * extras {List.map formatEdit e2extras}"
+      let e2after, e2extras = 
+        e1s |> List.fold (fun e2state e1 -> 
+          let res = moveAllBefore e1 e2state
+          printfn $"... {formatEdit e1} = {List.map formatEdit (fst res)}"
+          res ) e2init
+      printfn $" * after {List.map formatEdit e2after}"
+      printfn $" * extras {List.map formatEdit e2extras}"
       e2, e2after, e2extras) 
 
   // Compute before and after hashes for original and new edits

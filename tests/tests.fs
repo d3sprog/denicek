@@ -22,22 +22,28 @@ let mkEd ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false 
 let adhocTests =
   testList "ad hoc tests" [       
     test "moveBefore correctly scopes record transformation" {
-      let _, extras = 
+      let _, actual = 
         moveAllBefore (mkEd (RecordAdd(!/"/items/*", "condition", Record("x-formula", []))))
           ([mkEd (ListAppend(!/"/items", "0", Record("li", []))) ], [])
-      List.map formatEdit extras
+      List.map formatEdit actual
       |> equals ["""recordAdd(items/#0,"condition",Record ("x-formula", []))"""]
     }
 
     test "scopeEdit can scope edit that adds unrelated reference" {
       let actual = 
-        scopeEdit
-          (!/"/items/*")
-          (!/"/$uniquetemp_7")
-          { Kind = RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot]))
-            GroupLabel = ""; Dependencies = []; Disabled = false }
+        scopeEdit (!/"/items/*") (!/"/$uniquetemp_7")
+          (mkEd (RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot]))))
       ( match actual with InScope _ -> "inscope" | _ -> "" )
       |> equals "inscope"
+    }
+
+    test "moveBefore transforms selectors in list append" {
+      let actual, _ = 
+        moveBefore
+          (mkEd (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"])))
+          (mkEd (ListAppend([Field "speakers"],"hamilton",Record("li", []))))
+      List.map formatEdit actual
+      |> equals ["""listAppend(speakers/body,"hamilton",Record ("li", []))"""]
     }
 ]
 
