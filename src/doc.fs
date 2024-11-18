@@ -419,7 +419,7 @@ let removeSelectorPrefix p1 p2 =
     // done at a specific index, we do not want to apply it to All - but are ok
     // with applying it at the specific index - so this is also OK)
     | All::p1, Index(i)::p2 ->
-        loop (Index(i)::specPref) p1 p2
+        None //loop (Index(i)::specPref) p1 p2
 
     | All::p1, All::p2 -> loop (All::specPref) p1 p2
     | [], p2 -> Some(List.rev specPref, p2)
@@ -640,7 +640,7 @@ let apply doc edit =
         // Slightly clever in that we can copy multiple source nodes into a single target list node
         // (this is needed for evaluation of arguments - see eval.fs)
         | [List(t, _)] -> [List(t, List.mapi (fun i nd -> string i, nd) srcNodes)] 
-        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
+        | tgtNodes -> srcNodes @ srcNodes //failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
       let doc = replace (fun p el -> 
         if matches p sel then Some(next())
@@ -735,51 +735,51 @@ let copyEdit e1 srcSel tgtSel =
   
 
 // Assuming 'e1' and 'e2' happened independently, we want to modify
-// 'e1' so that it can be placed after 'e2'. If the edit 'e2' was 
+// 'e2' so that it can be placed after 'e1'. If the edit 'e1' was 
 // structural edit that affected the shape of the document, we need
-// to transform the selectors in 'e1' to match the new shape.
-//
-// If the 'e2' edit was structural Copy and the target of 'e1' was
-// the source of the copy, we return [e1;e1'] that targets both the
-// original node and the one produced by the copying.
-//
+// to transform the selectors in 'e2' to match the new shape.
 // Note that this is doing almost exactly the same thing as when 
 // editing existing document (there, we update selectors in document)
 //
+// If the 'e1' edit was structural Copy and the target of 'e2' was
+// the source of the copy, we return [e2;e2'] that targets both the
+// original node and the one produced by the copying. (When editing
+// document, such structural copy would be disallowed.)
+//
 let updateSelectors e1 e2 = 
-  match e2.Kind with 
+  match e1.Kind with 
   // For structural edits, transform the selectors in the
   // other edit in a way corresponding to the edit
   | WrapRecord(UpdateReferences, id, _, sel) ->
-      [mapReferences (wrapRecordSelectors id sel) e1]
+      [mapReferences (wrapRecordSelectors id sel) e2]
   | WrapList(UpdateReferences, _, _, sel) -> 
-      [mapReferences (wrapListSelectors sel) e1]
+      [mapReferences (wrapListSelectors sel) e2]
   | RecordRenameField(UpdateReferences, sel, fold, fnew) ->
-      [mapReferences (renameFieldSelectors fold fnew sel) e1]
+      [mapReferences (renameFieldSelectors fold fnew sel) e2]
   
   // For structural copy, we may need to duplicate the edit e1
   | Copy(UpdateReferences, tgtSel, srcSel) -> 
-      match copyEdit e1 srcSel tgtSel with 
+      match copyEdit e2 srcSel tgtSel with 
       | Some res -> res
       | _ ->
           // TODO: What does this even do?
-          let target = getTargetSelector e1
+          let target = getTargetSelector e2
           let conflict = removeSelectorPrefix srcSel target |> Option.isSome
-          if conflict then failwith $"CONFLICT!!!\ne1={e1}\ne2={e2}"
-          else [e1]
+          if conflict then failwith $"CONFLICT!!!\ne1={e2}\ne2={e1}"
+          else [e2]
   
   | RecordDelete(UpdateReferences, _, _) -> 
-      [e1] // failwith "updateSelectors - Detect conflicts - record delete"
+      [e2] // failwith "updateSelectors - Detect conflicts - record delete"
 
   // Value edits do not affect other selectors
-  | _ -> [e1]
+  | _ -> [e2]
   
 
 // Assuming 'e1' and 'e2' happened independently, we want to modify
-// 'e1' so that it can be placed after 'e2'. 
+// 'e2' so that it can be placed after 'e1'. If the 
 //
-// * If the edit 'e1' is adding new items to the document, we want to apply the 
-//   transformation done by 'e2' to the value to be added. If the edit 'e1' is copying.
+// * If the edit 'e2' is adding new items to the document, we want to apply the 
+//   transformation done by 'e1' to the value to be added. If the edit 'e1' is copying.
 //
 // * If the edit 'e1' is appending a list item from somewhere else in the document and
 //   'e2' did some operation to the list we are appending to, return edit that first
@@ -789,26 +789,34 @@ let updateSelectors e1 e2 =
 // * If the edit 'e1' is copying .. think about this.
 //
 let applyToAdded e1 e2 = 
-  let mkEd ed = { Kind = ed; Dependencies = []; Disabled = false; GroupLabel = e2.GroupLabel }
-
-  match e1.Kind with   
+  match e2.Kind with   
    // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
   | ListAppendFrom(sel, n, src) -> 
-      match scopeEdit (sel @ [All]) (sel @ [Index n]) e2 with
-      | InScope e2scoped -> [ e1; withReferenceBehaviour KeepReferences e2scoped ]
-      | _ -> [e1]
+      match scopeEdit (sel @ [All]) (sel @ [Index n]) e1 with
+      | InScope e1scoped 
+      | SourceOutOfScope (Some e1scoped) -> 
+          e2, [ withReferenceBehaviour KeepReferences e1scoped ]
+      | _ -> e2, []
 
   | ListAppend(sel, n, nd) -> 
-      match scopeEdit (sel @ [All]) [] e2 with
-      | InScope e2scoped ->
-          [ { e1 with Kind = ListAppend(sel, n, apply nd e2scoped) }]
-      | AllOutOfScope | TargetOutOfScope -> [e1]
+      match scopeEdit (sel @ [All]) (sel @ [Index n]) e1 with
+      | InScope e1scoped 
+      | SourceOutOfScope (Some e1scoped) ->
+          printfn $"SCOPED {formatEdit e1}"
+          printfn $"AS {formatEdit e1scoped}"
+          e2, [ withReferenceBehaviour KeepReferences e1scoped ]
+          //printfn $"IN SCOPE ({formatSelector (sel @ [All])}): {formatEdit e2}"
+          //[ { e1 with Kind = ListAppend(sel, n, apply nd e2scoped) }]
+      (*| AllOutOfScope | TargetOutOfScope -> e1, []
       | SourceOutOfScope None -> failwith "todo - think about this"
       | SourceOutOfScope (Some _) -> 
+          printfn $"SOURCE OUT OF SCOPE: {formatEdit e2}"
           match scopeEdit (sel @ [All]) (sel @ [Index n]) e2 with 
           | SourceOutOfScope (Some e2scoped) -> [ e1; e2scoped ]
           | _ -> failwith "applyToAdded: should not happen"
-
+          *)
+      | _ -> e2, []
+      (*
   | RecordAdd(sel, fld, nd) -> 
       match scopeEdit (sel @ [Field fld]) [] e2 with
       | InScope _ | SourceOutOfScope _ -> 
@@ -824,20 +832,31 @@ let applyToAdded e1 e2 =
           // TODO: Same conflict as in the case of RecordAdd - with same options.
           [e1]
       | AllOutOfScope | TargetOutOfScope -> [e1]
-
-  | _ -> [e1]
+      *)
+  | _ -> e2, []
 
 // Assuming 'e1' and 'e2' happened independently,
-// modify 'e1' so that it can be placed after 'e2'.
+// modify 'e2' so that it can be placed after 'e1'.
 let moveBefore e1 e2 = 
-  let e1s = applyToAdded e1 e2
-  e1s |> List.collect (fun e1 -> updateSelectors e1 e2)
+  let e2, extras = applyToAdded e1 e2 
+  updateSelectors e1 e2, 
+  extras //|> List.collect (fun ee -> updateSelectors e1 ee)
+
+let moveAllBefore e1 (e2s, e2extras) = 
+  //printfn $"MOVE BEFORE {formatEdit e1}"
+  //printfn $" * edits = {List.map formatEdit e2s}"
+  //printfn $" * extras = {List.map formatEdit e2extras}"
+  let e2s, e2extras0 = List.map (moveBefore e1) e2s |> List.unzip
+  let e2extras, e2extras1 = List.map (applyToAdded e1) e2extras |> List.unzip
+  //printfn $" * nedits = {List.map formatEdit (List.concat e2s)}"
+  //printfn $" * nextras = {List.map formatEdit (List.concat e2extras)} // {List.map formatEdit (List.concat e2extras0)} // {List.map formatEdit (List.concat e2extras1)}"
+  List.concat e2s, e2extras @ (List.concat (e2extras0 @ e2extras1))
 
 // --------------------------------------------------------------------------------------
 // Edit groups
 // --------------------------------------------------------------------------------------
 
-let hashEditList initial eds = 
+let hashEditList initial (eds:Edit list) = 
   eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
 
 let withHistoryHash initial (f:_ -> Edit) eds = 
@@ -889,33 +908,51 @@ type ConflictResolution =
 
 let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
 
-let pushEditsThrough crmode hashBefore hashAfter e1s e2s = 
+// Push edits 'e2s' through 'e1s'
+let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
+  (*
+  printfn "PUSH EDITS"
+  for e in e2s do printfn $"  {formatEdit e}"
+  printfn "THROUGH"
+  for e in e1s do printfn $"  {formatEdit e}"
+  *)
   let e2s = 
     if crmode = RemoveConflicting then
       let e1ModSels = e1s |> List.map getTargetSelector
       filterConflicting e1ModSels e2s
     else e2s
 
-  // TODO: Clean this up so that it does not look so ugly?
-  // (As we push edits 'e2s' through 'e1s', we also compute
-  // map that maps hashes of old edits to hashes of new edits)
+  let e2smap = 
+    e2s |> List.map (fun e2 ->
+      //printfn $"UPDATING {formatEdit e2}"
+      let e2init = [e2], []
+      let e2after, e2extras = e1s |> List.fold (fun e2state e1 -> moveAllBefore e1 e2state) e2init
+      //printfn $" * after {List.map formatEdit e2after}"
+      //printfn $" * extras {List.map formatEdit e2extras}"
+      e2, e2after, e2extras) 
 
-  let mutable hashBefore = hashBefore
-  let mutable hashAfter = hashAfter
-  let hashMap = System.Collections.Generic.Dictionary<_, _>()
+  // Compute before and after hashes for original and new edits
+  let e2smap = 
+    e2smap |> List.mapWithState (fun (hashBefore, hashAfter) (e2, e2after, e2extras) ->
+      let hashBefore = hash(hashBefore, e2)
+      let e2afterHashed = withHistoryHash hashAfter id e2after
+      let hashAfter = hashEditList hashAfter e2after
+      ((e2, hashBefore), e2afterHashed, e2extras), (hashBefore, hashAfter)) (hashBefore, hashAfter)
+  
+  // Computer after hashes for the extra added edits
+  let e2smap = 
+    e2smap |> List.mapWithState (fun hashAfter (e2, e2after, e2extras) ->
+      let e2extrasHashed = withHistoryHash hashAfter id e2extras
+      let hashAfter = hashEditList hashAfter e2extras
+      (e2, e2after, e2extrasHashed), hashAfter) hashAfter
 
-  e2s |> List.collect (fun e2 ->
-      // For a given edit 'e2', move it before all the edits in 'e1s' using 'moveBefore'
-      // (caveat is that the operation can turn it into multiple edits)
-      let res = List.fold (fun e2 e1 -> 
-        e2 |> List.collect (fun e2 -> moveBefore e2 e1)) [e2] e1s 
-      
-      let resHashed = withHistoryHash hashAfter id res
-      hashBefore <- hash(hashBefore, e2)
-      hashAfter <- hashEditList hashAfter res
-      hashMap.Add(hashBefore, (hashAfter, resHashed))
-
-      res ), hashMap
+  let hashMap = 
+    [ for (_, e2hash), e2after, e2extras in e2smap -> 
+        e2hash, (fst (List.last e2after), e2after, e2extras) ] |> dict
+  
+  List.collect (fun (_, e2s, _) -> List.map snd e2s) e2smap @ 
+  List.collect (fun (_, _, extras) -> List.map snd extras) e2smap,
+  hashMap
 
 let pushEditsThroughSimple crmode e1s e2s = 
   pushEditsThrough crmode 0 0 e1s e2s |> fst
@@ -943,15 +980,10 @@ let getEffects eds =
 *)
 let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
   let shared, (e1s, e2s) = List.sharedPrefix h1 h2
-
-  (*
-  let e1eff = getEffects e1s
-  let e2eff = getEffects e2s
-  printfn "E1 (BASE) EFFECTS"
-  for eff in e1eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
-  printfn "E2 (MERGE) EFFECTS"
-  for eff in e2eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
-  *)
+  //printfn "MERGE EDITS"
+  //for e in e2s do printfn $"  {formatEdit e}"
+  //printfn "AFTER"
+  //for e in e1s do printfn $"  {formatEdit e}"
   let e2sAfter, hashMap = pushEditsThrough crmode (hashEditList 0 (shared)) (hashEditList 0 (shared @ e1s)) e1s e2s
   shared @ e1s @ e2sAfter, hashMap
 

@@ -35,7 +35,7 @@ let unrepresentSel expr =
       sels |> List.map (function 
         | _, Primitive(String "..") -> DotDot
         | _, Primitive(String "*") -> All 
-        | _, Primitive(String s) when s.Length > 0 && s.[0] = '#' -> Index(s.Substring(0))
+        | _, Primitive(String s) when s.Length > 0 && s.[0] = '#' -> Index(s.Substring(1))
         | _, Primitive(String s) -> Field(s)
         | _ -> failwith "unrepresentSel: Invalid selector")
   | _ -> failwith $"unrepresentSel: Not a selector: {expr}"
@@ -81,9 +81,9 @@ let unrepresent nd =
   | Record("x-edit-updatetag", Lookup (Find "target" tgt & Finds "new" ntag)) ->
       UpdateTag(unrepresentSel tgt, ntag) |> ret
   // Shared edits
-  | Record("x-edit-append", Lookup (Findrb rb & Find "target" sel & Find "node" nd & Finds "index" i)) ->
+  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i)) ->
       ListAppend(unrepresentSel sel, i, nd) |> ret
-  | Record("x-edit-appendfrom", Lookup (Findrb rb & Find "target" sel & Find "src" src & Finds "index" i)) ->
+  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src & Finds "index" i)) ->
       ListAppendFrom(unrepresentSel sel, i, unrepresentSel src) |> ret
   | Record("x-edit-wraprec", Lookup(Findrb rb & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       WrapRecord(rb, tag, id, unrepresentSel target) |> ret
@@ -91,13 +91,13 @@ let unrepresent nd =
       RecordRenameField(rb, unrepresentSel sel, fold, fnew) |> ret
   | Record("x-edit-copy", Lookup (Findrb rb & Find "target" tgt & Find "source" src)) ->
       Copy(rb, unrepresentSel tgt, unrepresentSel src) |> ret
-  | Record("x-edit-listdelete", Lookup (Findrb rb & Find "target" tgt & Finds "index" i)) ->
+  | Record("x-edit-listdelete", Lookup (Find "target" tgt & Finds "index" i)) ->
       ListDelete(unrepresentSel tgt, i) |> ret
   | Record("x-edit-recdelete", Lookup (Findrb rb & Find "target" tgt & Finds "field" fld)) ->
       RecordDelete(rb, unrepresentSel tgt, fld) |> ret
   | Record("x-edit-wraplist", Lookup (Findrb rb & Find "target" tgt & Finds "tag" tag & Finds "index" i)) ->
       WrapList(rb, tag, i, unrepresentSel tgt) |> ret
-  | Record("x-edit-listreorder", Lookup (Findrb rb & Find "target" tgt & Find "perm" perm)) ->
+  | Record("x-edit-listreorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
       ListReorder(unrepresentSel tgt, unrepresentStringList perm) |> ret
   | _ -> failwith $"unrepresent - Missing case for: {nd}"
 

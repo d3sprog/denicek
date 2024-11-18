@@ -15,13 +15,13 @@ let selToJson = function
 let rec nodeToJson = function
   | Primitive(String s) -> box s
   | Primitive(Number n) -> box n
-  | List(tag, nds) -> JsInterop.createObj [ 
-        "kind", box "list" 
-        "tag", box tag
-        "nodes", box [| for n, nd in nds -> [| box n, nodeToJson nd |] |]
-      ]
   | Record(tag, nds) -> JsInterop.createObj [ 
         "kind", box "record" 
+        "tag", box tag
+        "nodes", box [| for n, nd in nds -> [| box n; nodeToJson nd |] |]
+      ]
+  | List(tag, nds) -> JsInterop.createObj [ 
+        "kind", box "list" 
         "tag", box tag
         "nodes", box [| for n, nd in nds -> [| box n; nodeToJson nd |] |]
       ]
@@ -62,9 +62,7 @@ let rec nodeFromJson o =
 
 let nodesToJson nds = box [| for nd in nds -> nodeToJson nd |]
 let nodesFromJson obj = 
-  [ for os in unbox<obj[]> obj do 
-      if isArray os then yield! Array.map nodeFromJson (unbox os)  // Compatibility - previously, this was list of lists
-      else nodeFromJson os ]
+  [ for os in unbox<obj[]> obj -> nodeFromJson os ]
 
 let nodesToJsonString nds = JS.JSON.stringify(nodesToJson nds)
 let nodesFromJsonString s = nodesFromJson(JS.JSON.parse(s))

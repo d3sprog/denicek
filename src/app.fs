@@ -206,27 +206,41 @@ module Helpers =
     sels |> List.map (function Index _ -> All | s -> s)
 
   let replacePrefixInEdits prefix replacementSel edits = 
+    let updateSel sel = 
+      match removeSelectorPrefix prefix sel with 
+      | Some (_, rest) -> replacementSel @ rest
+      | None -> sel
     edits |> List.map (fun op ->
-      let newSels = getSelectors op |> List.map (fun sel -> 
-        match removeSelectorPrefix prefix sel with 
-        | Some (_, rest) -> replacementSel @ rest
-        | None -> sel)
-      withSelectors newSels op)
+      // First apply to all selectors (referenced), but then also to 
+      // target selector which affects Append/AppendFrom operations
+      let newSels = getSelectors op |> List.map updateSel
+      let op = withSelectors newSels op
+      withTargetSelector (updateSel (getTargetSelector op)) op)
   
+  let makeUnique n = n + "." + hash(System.Guid.NewGuid()).ToString("x")
+
   let withUniqueGroupLabel prefix eds = 
-    let lbl = prefix + "." + System.Guid.NewGuid().ToString("N")
+    let lbl = makeUnique prefix 
     [ for ed in eds -> { ed with GroupLabel = lbl } ]
 
+  let generalizeSaved t ops = 
+    let newItems = ops |> List.choose (function
+      | { Kind = ListAppend(s, n, _) | ListAppendFrom(s, n, _) } -> 
+          Some(s @ [Index n], s @ [Index (makeUnique n)]) 
+      | _ -> None)
+    let ops = newItems |> List.fold (fun ops (osel, nsel) -> replacePrefixInEdits osel nsel ops) ops
+    withUniqueGroupLabel t ops
+
   let applySavedInteraction t doc target prefix condOpt ops = 
+    let check markerSel = 
+      match condOpt with 
+      | Some(condKind, condSel) ->
+          let condSel = resolveReference markerSel (condKind, condSel)
+          match select (condSel @ [Field "result"]) doc with [Primitive(String "true")] -> true | _ -> false
+      | _ -> true
     [ for markerSel in expandWildcards target doc do
-        let apply = 
-          match condOpt with 
-          | Some(condKind, condSel) ->
-              let condSel = resolveReference markerSel (condKind, condSel)
-              match select condSel doc with [Primitive(String "true")] -> true | _ -> false
-          | _ -> true
-        let eds = replacePrefixInEdits prefix markerSel ops |> withUniqueGroupLabel t 
-        if apply then yield eds ]
+        if check markerSel then 
+          yield replacePrefixInEdits prefix markerSel ops |> generalizeSaved t ]
 
 // --------------------------------------------------------------------------------------
 // Document and its history 
@@ -329,19 +343,22 @@ module Document =
             | id, Record("x-handler", Lookup(
                 Find "interactions" (Reference(_, Select state.DocumentState.CurrentDocument 
                   [Helpers.InteractionNode(histhash, ops) ])) &
-                Find "target" (Reference(_, targetSel)) &
-                Find "condition" condNd &
+                Find "target" (Reference(targetKind, targetSel)) &
+                Find "condition" (Reference(condKind, condSel)) &
                 Find "prefix" prefixNd )) when id.StartsWith "@" -> 
                 let ops() = 
-                  let prefixSel = Represent.unrepresentSel prefixNd
-                  let condSel = Represent.unrepresentSel condNd
+                  let targetSel = resolveReference path (targetKind, targetSel)
+                  let condSel = resolveReference path (condKind, condSel)
+                  let condSel = match removeSelectorPrefix targetSel condSel with Some(_, condSel) -> condSel | _ -> failwith "getEventHandlers: target not prefix of condition"
+                  let prefixSel = Represent.unrepresentSel prefixNd                  
                   Helpers.applySavedInteraction (id.Substring(0)) 
                     state.DocumentState.CurrentDocument targetSel prefixSel 
                       (Some(Relative, condSel)) (List.map snd ops)
-                yield makeHandler id state.DocumentState.FinalHash ops // Use final hash here
+                yield makeHandler id state.DocumentState.FinalHash ops // TODO: Use final hash here?
             | id, Reference(kind, Select state.DocumentState.CurrentDocument 
                     [Helpers.InteractionNode(histhash, ops) ]) when id.StartsWith "@" -> 
-                yield makeHandler id histhash (fun () -> [List.map snd ops])
+                yield makeHandler id histhash (fun () -> 
+                  [ Helpers.generalizeSaved (id.Substring(1)) (List.map snd ops) ])
             | _ -> ()
       | _ -> ()
 
@@ -440,38 +457,32 @@ module Document =
         // Merge histories produces map that maps original edits to  new edits.
         // We use this to fix all the saved interactions... (I guess this is a bit hacky?
         // The alternative would be to keep git-like tree and merge in more complex ways.)
-        let fixhist =             
-          // Because we are appending edits before those that we are replaying
-          // (this makes it possible to replay edits to list items on top of new items)
-          // we also need to rename unique IDs in selectors to avoid clashes
-          let dict = System.Collections.Generic.Dictionary<_, _>()
-          let renameUniqueSelector =
-            let unique() = "$uniquetemp_" + hash(System.Guid.NewGuid()).ToString("x")
-            function 
-              | Field(f)::sel when f.StartsWith("$uniquetemp_") ->
-                  if not (dict.ContainsKey(f)) then let nk = unique() in dict.Add(f, nk); dict.Add(nk, nk)
-                  Field(dict.[f])::sel
-              | sel -> sel               
-
+        let fixhist =
           let doc = applyHistory state.Initial merged
           let mked ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
           [ for n, oldhash, ops in Helpers.getSavedInteractions doc do
             // Update the saved base hash for the saved interactions
-            if hashMap.ContainsKey(oldhash) then 
-              let nhash = Primitive(String((fst hashMap.[oldhash]).ToString("x")))
-              yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash)
+            match hashMap.TryGetValue(oldhash) with
+            | true, (nhash, _, _) ->
+                let nhash = Primitive(String(nhash.ToString("x")))
+                yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash)
+            | _ -> ()
 
             // Update the operations to new ones - if they have changed,
             // replace the interactions list in the saved interactions
             let newOps = 
               [ for hash, op in ops do 
-                if hashMap.ContainsKey(hash) then yield! snd hashMap.[hash]
-                else yield hash, op ]
+                  match hashMap.TryGetValue(hash) with 
+                  | true, (_, nops, _) -> yield! nops
+                  | _ -> yield hash, op 
+                for hash, _ in ops do 
+                  match hashMap.TryGetValue(hash) with 
+                  | true, (_, _, nextras) -> yield! nextras 
+                  | _ -> () ]
+
             if newOps <> ops then
               yield RecordAdd([Field "saved-interactions"; Field n], "interactions", List("x-interaction-list", []))
               for i, (hash, op) in Seq.indexed newOps ->
-                let op = withSelectors (List.map renameUniqueSelector (getSelectors op)) op
-                let op = withTargetSelector (renameUniqueSelector (getTargetSelector op)) op                
                 ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
                   Represent.represent (Some hash) op) ]
           |> List.map mked
@@ -850,9 +861,9 @@ module Commands =
           ( P.keyword "!x" |> mapEd (fun (_) -> RecordDelete(KeepReferences, List.dropLast cursorSel, fold) ))
     | Patterns.Last(_, Index idx) ->
         yield command GS RN "las la-trash" "Delete currently marked list items" 
-          ( P.keyword "!x" |> mapEd (fun (_) -> ListDelete(List.dropLast genSel, idx) ))
+          ( P.keyword "!x*" |> mapEd (fun (_) -> ListDelete(List.dropLast genSel, idx) ))
         yield command CS RN "las la-trash" "Delete the currently selected list item" 
-          ( P.keyword "!x*" |> mapEd (fun (_) -> ListDelete(List.dropLast cursorSel, idx) ))
+          ( P.keyword "!x" |> mapEd (fun (_) -> ListDelete(List.dropLast cursorSel, idx) ))
     | _ -> ()
 
     // Copy, paste & save edits actions
@@ -957,25 +968,30 @@ module Commands =
     for t, _, ops in Helpers.getSavedInteractions doc do
       let ops = List.map snd ops
       yield command NS RN "las la-at" ("Apply " + t + " as recorded")
-        ( P.keyword $"@{t}" |> mapEds (fun _ -> [ops]) )
+        ( P.keyword $"@{t}" |> mapEds (fun _ -> [ Helpers.generalizeSaved t ops ]) )
       yield command CS RN "las la-at" ("Apply " + t + " to current")
         ( P.keyword $"@{t}!" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
                 yield commandh CS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
-                  ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
-                    [ Helpers.replacePrefixInEdits prefix cursorSel ops ] )) ]
+                  ( P.keyword $"@{t}! {string i}" |> mapEds (fun _ ->
+                    Helpers.applySavedInteraction t doc cursorSel prefix None ops )) ]
         ))
       yield command GS RN "las la-at" ("Apply " + t + " to marked")
         ( P.keyword $"@{t}*" |> P.map (fun _ -> 
             NestedRecommendation [
               for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
-                yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix; text " with condition"])
-                  ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
-                    Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) 
                 yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
-                  ( P.keyword $"@{t} {string i}" |> mapEds (fun _ ->
+                  ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc genSel prefix None ops ))  ]
+        ))
+      yield command GS RN "las la-at" ("Apply " + t + " to some marked")
+        ( P.keyword $"@{t}?" |> P.map (fun _ -> 
+            NestedRecommendation [
+              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+                yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix ])
+                  ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
+                    Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) ]
         ))
   ]
 
@@ -1003,8 +1019,8 @@ module Commands =
     let el = 
       h?li [ 
         "class" => "" +? (selected, "selected") 
-          +? (c.SelectorKind = Some GeneralizedSelector, "gensel") 
-          +? (c.SelectorKind = Some CurrentSelector, "cursel") 
+          +? (c.SelectorKind = Some GeneralizedSelector, "igensel") 
+          +? (c.SelectorKind = Some CurrentSelector, "icursel") 
         "mouseover" =!> fun _ _ -> trigger(CommandEvent(SetRecommendation i))
         "click" =!> fun _ _ -> trigger(EnterCommand)
       ] [
@@ -1443,13 +1459,21 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ ] //"conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; "hello-base";"hello-saved"; "todo-base"; "todo-remove"; "todo-cond"; "counter-inc" ]
+  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base" ] //"conf-base";"conf-add";"conf-rename";"conf-table"; "conf-budget"; ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [||] -> //[| confBase; confAdd; confRename; confTable; confBudget; helloBase; helloSaved; todoBase; todoRemove; todoCond; counterInc |] ->
+  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase |] -> //[| confBase; confAdd; confRename; confTable; confBudget; |] ->
     let demos = 
       [ 
         "empty", readJson "[]", []
+        "hello", readJson helloBase, [
+          "saved", readJsonOps helloSaved 
+        ]
+        "todo", readJson todoBase, [  
+          "cond", readJsonOps todoCond
+          "remove", readJsonOps todoRemove 
+        ]
+        "counter", readJson counterBase, []
       (*
         "conf2", readJson confBase, [
           "add", readJsonOps confAdd 
@@ -1457,14 +1481,6 @@ async {
           "table", readJsonOps confTable 
           "budget", readJsonOps confBudget
         ] 
-        "hello", readJson helloBase, [
-          "saved", readJsonOps helloSaved 
-        ]
-        "todo", readJson todoBase, [  
-          "remove", readJsonOps todoRemove 
-          "cond", readJsonOps todoCond
-        ]
-        "counter", readJson counterInc, []
         *)
         ]
     trigger (DemoEvent(LoadDemos demos))

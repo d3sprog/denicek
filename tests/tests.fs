@@ -15,11 +15,20 @@ open Tbd.Demos
 let merge h1 h2 = mergeHistories IgnoreConflicts h1 h2 |> fst
 let printEdits = List.iter (formatEdit >> printfn " - %s")
 let selectTag sel doc = match select sel doc with [List(t, _)] | [Record(t, _)] -> Some t | _ -> None 
+let mkEd ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
 
 
 [<Tests>]
 let adhocTests =
   testList "ad hoc tests" [       
+    test "moveBefore correctly scopes record transformation" {
+      let _, extras = 
+        moveAllBefore (mkEd (RecordAdd(!/"/items/*", "condition", Record("x-formula", []))))
+          ([mkEd (ListAppend(!/"/items", "0", Record("li", []))) ], [])
+      List.map formatEdit extras
+      |> equals ["""recordAdd(items/#0,"condition",Record ("x-formula", []))"""]
+    }
+
     test "scopeEdit can scope edit that adds unrelated reference" {
       let actual = 
         scopeEdit
@@ -192,9 +201,6 @@ let complexMergeTests =
       doc1 |> equals doc2 
     }
 
-      // printEdits merged
-      // #load "demos.fs"
-
     test "refactoring merges with adding via temp" {
       let ops1 = merge (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
       let doc1 = applyHistory (rcd "div") ops1 
@@ -224,9 +230,6 @@ let complexMergeTests =
 
 [<Tests>]
 let referenceUpdateTests =
-  let mkEd ed = 
-    { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
-
   let doc0 = Record("div", [
     "first", Reference(Relative, [DotDot; Field "things"; Index "0"; Field "lbl"])
     "things", List("ul", [  
