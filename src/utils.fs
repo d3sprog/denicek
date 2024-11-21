@@ -7,8 +7,19 @@ module Patterns =
   let (|Lookup|) args = dict args
   let (|Find|_|) k (d:System.Collections.Generic.IDictionary<_, _>) = 
     if d.ContainsKey k then Some(d.[k]) else None
+  let (|TryFind|) k (d:System.Collections.Generic.IDictionary<_, _>) = 
+    if d.ContainsKey k then Some(d.[k]) else None
 
 module List = 
+
+  let partitionBy sizes list = 
+    let mutable list = list
+    [ for s in sizes ->
+        let res = List.take s list 
+        list <- List.skip s list 
+        res ]
+
+  //partitionBy [0;1;2;3] (List.ofSeq "abcdef")
 
   let foldCollect (f:'st -> 'a -> 'b list * 'st) st list = 
     let st, acc = List.fold (fun (st, acc) v -> let res, st = f st v in (st, res::acc)) (st, []) list 

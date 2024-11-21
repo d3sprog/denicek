@@ -128,7 +128,7 @@ let evaluateRaw doc =
 let evaluateOne doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
   [ for ed, deps in evaluateRaw doc -> 
-      { Disabled = false; Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
+      { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
 let evaluateAll doc = 
   let rec loop doc = seq {
@@ -144,5 +144,5 @@ let evaluateAll doc =
 /// on the "side" of main history) and re-evaluate invalidated things.
 let updateEvaluatedEdits oldDocEdits newDocEdits evalEdits = 
   let editsAfterEval = List.skip (List.length oldDocEdits) newDocEdits
-  let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
-  updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
+  pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
+  

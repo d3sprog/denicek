@@ -66,7 +66,7 @@ let unrepresent nd =
   // NOTE: This works if the 'match' is not wrapped inside another expression (e.g. let) otherwise
   // Fable creates 600MB JavaScript file (https://x.com/tomaspetricek/status/1845753585163731319)
   let ret ed = 
-    let res = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
+    let res = { Kind = ed; Dependencies = []; GroupLabel = "" }
     match nd with 
     | Record(_, Lookup (Finds "hash" hash)) -> res, Some (System.Convert.ToInt32(hash, 16))
     | _ -> res, None
@@ -101,7 +101,7 @@ let unrepresent nd =
       ListReorder(unrepresentSel tgt, unrepresentStringList perm) |> ret
   | _ -> failwith $"unrepresent - Missing case for: {nd}"
 
-let represent (hash:int option) op = 
+let rec represent (hash:int option) op = 
   let ps v = Primitive(String v)
   let pn i = Primitive(Number i)
   let rcd k args = 

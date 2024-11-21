@@ -96,29 +96,39 @@ let rec matches p1 p2 =
   | [], _ | _, [] -> false
   | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && matches p1 p2
   | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && matches p1 p2
-  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> matches p1 p2
+  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 | All::p1, All::p2 -> matches p1 p2
   | _ -> false
 
-/// Is 'p1' prefix of 'p2' 
-let rec includes p1 p2 = 
-  match p1, p2 with 
-  | [], _ -> true
-  | _, [] -> false
-  | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includes p1 p2
-  | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includes p1 p2
-  | Index(_)::p1, All::p2 | All::p1, Index(_)::p2 -> includes p1 p2
-  | _ -> false
+/// If 'p1' is prefix of 'p2', return the rest of 'p2'.
+/// This also computes 'more specific prefix' which is a version
+/// of the prefix where 'Index' is preferred over 'All' when matched.
+let removePrefix matchAllIndex matchIndexAll p1 p2 = 
+  let rec loop specPref p1 p2 = 
+    match p1, p2 with 
+    | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::specPref) p1 p2
+    | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::specPref) p1 p2
+    | Index(i)::p1, All::p2 when matchIndexAll -> loop (Index(i)::specPref) p1 p2
+    | All::p1, Index(i)::p2 when matchAllIndex -> loop (Index(i)::specPref) p1 p2
+    | All::p1, All::p2 -> loop (All::specPref) p1 p2
+    | [], p2 -> Some(List.rev specPref, p2)
+    | _ -> None
+  loop [] p1 p2
 
-/// Is 'p1' prefix of 'p2' 
-/// (unlike 'includes', this does not match if p1=/123 and p2=/*)
-let rec includesStrict p1 p2 = 
-  match p1, p2 with 
-  | [], _ -> true
-  | _, [] -> false
-  | Field(f1)::p1, Field(f2)::p2 -> f1 = f2 && includesStrict p1 p2
-  | Index(i1)::p1, Index(i2)::p2 -> i1 = i2 && includesStrict p1 p2
-  | All::p1, Index(_)::p2 -> includesStrict p1 p2
-  | _ -> false
+/// Replace as much as possible of p2 with more specific matching part of p1
+let replaceWithMoreSpecificPrefix p1 p2 = 
+  let rec loop acc p1 p2 = 
+    match p1, p2 with 
+    | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::acc) p1 p2
+    | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::acc) p1 p2
+    | Index(i)::p1, All::p2 | All::p1, Index(i)::p2 -> loop (Index(i)::acc) p1 p2
+    | All::p1, All::p2 -> loop (All::acc) p1 p2
+    | _ -> List.rev acc @ p2
+  loop [] p1 p2
+
+let includesGeneral matchAllIndex matchIndexAll p1 p2 =
+  removePrefix matchAllIndex matchIndexAll p1 p2 |> Option.isSome
+
+let includes = includesGeneral true true
 
 let includesReference p1 (p2base, p2ref) =
   includes p1 (resolveReference p2base p2ref)
@@ -184,17 +194,16 @@ type EditKind =
   // Edits that cannot affect references in document
   | ListReorder of Selectors * list<string>
   | ListDelete of Selectors * string
-  | ListAppend of Selectors * string * Node
-  | ListAppendFrom of Selectors * string * Selectors
+  | ListAppend of Selectors * string * Node 
+  | ListAppendFrom of Selectors * string * Selectors 
   | UpdateTag of Selectors * string
   | PrimitiveEdit of Selectors * string * string option
   | RecordAdd of Selectors * string * Node
 
-type Edit = 
+and Edit = 
   { Kind : EditKind 
     GroupLabel : string
-    Dependencies : Selectors list
-    Disabled : bool }
+    Dependencies : Selectors list }
 
 // --------------------------------------------------------------------------------------
 // Pretty printing
@@ -229,10 +238,10 @@ let formatEdit ed =
       fmtv "recordAdd" [formatSelector sel; formatString n; formatNode nd]
   | UpdateTag(sel, tagNew) -> 
       fmtv "updateTag" [formatSelector sel; formatString tagNew]
-  | ListAppend(sel, n,nd) -> 
-      fmtv "listAppend" [formatSelector sel; formatString n; formatNode nd]
+  | ListAppend(sel, n, nd) ->       
+      fmtv "listAppend" [formatSelector sel; formatString n; formatNode nd ]
   | ListAppendFrom(sel, n, src) -> 
-      fmtv "appendFrom" [formatSelector sel; formatString n; formatSelector src]
+      fmtv "appendFrom" [formatSelector sel; formatString n; formatSelector src ]
   | ListReorder(sel, ord) -> 
       fmtv "listReorder" [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
   | ListDelete(sel, i) -> 
@@ -288,28 +297,31 @@ let withNodeReferences nd sels =
   loop nd
 
 /// Target selector points to the affected nodes, after the edit is done (?)
-let getTargetSelector ed = 
+let getAnySelector afterTarget copySourceSel ed = 
   match ed.Kind with 
+  | Copy(_, _, s) when copySourceSel -> s
   // Selector is already pointing directly at the affected node
   | ListReorder(s, _) 
-  | Copy(_, s, _)
   | UpdateTag(s, _) 
+  | Copy(_, s, _) 
   | PrimitiveEdit(s, _, _) -> s
   // Add selector to the end, pointing at the affected node
-  | WrapList(_, _, _, s) -> s @ [All]
+  | WrapList(_, _, _, s) -> s @ [All] // do not append if not afterTarget?
   | ListAppend(s, i, _) 
   | ListAppendFrom(s, i, _) 
   | ListDelete(s, i) -> s @ [Index i]
+  | RecordRenameField(_, s, _, id) when afterTarget -> s @ [Field id]
   | RecordRenameField(_, s, id, _) 
   | RecordDelete(_, s, id)
   | WrapRecord(_, _, id, s) 
   | RecordAdd(s, id, _) -> s @ [Field id]
 
-let withTargetSelector tgt ed = 
+let withAnySelector afterTarget copySourceSel tgt ed = 
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withTargetSelector - expected selector ending with a field"
   let getLastIndex tgt = match List.last tgt with Index i -> i | _ -> failwith "withTargetSelector - expected selector ending with an index"
   let ret nk = { ed with Kind = nk }
   match ed.Kind with 
+  | Copy(rb, s, _) when copySourceSel -> Copy(rb, s, tgt) |> ret
   // Selector is already pointing directly at the affected node
   | ListReorder(_, m) -> ListReorder(tgt, m) |> ret
   | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
@@ -320,10 +332,14 @@ let withTargetSelector tgt ed =
   | ListAppendFrom(_, _, s) -> ListAppendFrom(List.dropLast tgt, getLastIndex tgt, s) |> ret
   | ListAppend(_, _, nd) -> ListAppend(List.dropLast tgt, getLastIndex tgt, nd) |> ret
   | ListDelete(_, _) -> ListDelete(List.dropLast tgt, getLastIndex tgt) |> ret
+  | RecordRenameField(rb, _, n, _) when afterTarget -> RecordRenameField(rb, List.dropLast tgt, n, getLastField tgt) |> ret
   | RecordRenameField(rb, _, _, n) -> RecordRenameField(rb, List.dropLast tgt, getLastField tgt, n) |> ret
   | RecordDelete(rb, _, _) -> RecordDelete(rb, List.dropLast tgt, getLastField tgt) |> ret
   | WrapRecord(rb, t, _, _) -> WrapRecord(rb, t, getLastField tgt, List.dropLast tgt) |> ret
   | RecordAdd(_, _, nd) -> RecordAdd(List.dropLast tgt, getLastField tgt, nd) |> ret
+
+let getTargetSelector = getAnySelector false false 
+let withTargetSelector = withAnySelector false false
 
 let getTargetSelectorPrefixes eds = 
   let sels = System.Collections.Generic.HashSet<_>()
@@ -350,7 +366,7 @@ let getAllReferences inNodes ed =
   | RecordDelete(_, s, fld) 
   | RecordRenameField(_,s, fld, _) -> [[], (Absolute, s @ [Field fld])]
   | ListDelete(s, idx) -> [[], (Absolute, s @ [Index idx])]
-
+  
 let withAllReferences inNodes refs ed =
   let getLastField tgt = match List.last tgt with Field f -> f | _ -> failwith "withAllReferences - expected selector ending with a field"
   let getLastIndex tgt = match List.last tgt with Index i -> i | _ -> failwith "withAllReferences - expected selector ending with an index"
@@ -363,11 +379,11 @@ let withAllReferences inNodes refs ed =
   | UpdateTag(_, t) -> UpdateTag(oneAbsolute refs, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(oneAbsolute refs, f, arg) |> ret
   | Copy(rb, _, _) -> Copy(rb, headAbsolute refs, oneAbsolute (List.tail refs)) |> ret
-  | ListAppendFrom(s1, n, s2) -> ListAppendFrom(headAbsolute refs, n, oneAbsolute (List.tail refs)) |> ret
+  | ListAppendFrom(_, n, _) -> ListAppendFrom(headAbsolute refs, n, oneAbsolute (List.tail refs)) |> ret
   // Pointing at a node that will be modified by the edit
   | WrapRecord(rb, id, t, _) -> WrapRecord(rb, id, t, oneAbsolute refs) |> ret
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, oneAbsolute refs) |> ret
-  | ListAppend(_, n, nd) -> ListAppend(headAbsolute refs, n, if inNodes then withNodeReferences nd (List.tail refs) else nd) |> ret
+  | ListAppend(_, n, nd) -> ListAppend(headAbsolute refs, n, (if inNodes then withNodeReferences nd (List.tail refs) else nd)) |> ret
   | RecordAdd(_, s, nd) -> RecordAdd(headAbsolute refs, s, if inNodes then withNodeReferences nd (List.tail refs) else nd) |> ret
   // Add selector pointing to the previously existing thing 
   | ListDelete(_, _) -> ListDelete(List.dropLast (oneAbsolute refs), getLastIndex (oneAbsolute refs)) |> ret
@@ -376,7 +392,8 @@ let withAllReferences inNodes refs ed =
 
 
 let mapReferences f ed = 
-  // Here it may be useful to transform selectors inside added nodes too
+  // Here it may be useful to transform selectors inside added nodes too (
+  // TODO: Maybe not. I do not think this ever works
   withAllReferences true (List.map f (getAllReferences true ed)) ed
 
 
@@ -391,41 +408,7 @@ let tryWithSelectors sels ed =
   with _ -> None
 
 
-/// If 'p1' is prefix of 'p2', return the rest of 'p2'.
-/// This also computes 'more specific prefix' which is a version
-/// of the prefix where 'Index' is preferred over 'All' when matched.
-let removeSelectorPrefix p1 p2 = 
-  let rec loop specPref p1 p2 = 
-    match p1, p2 with 
-    | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::specPref) p1 p2
-    | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::specPref) p1 p2
-    // TODO: Arguably, we should not insert into specific index (only All) as that is a 'type error'
-    // Meaning that when called from 'scopeEdit', then 'p1' should not contain 'Index' ?
-    | Index(i)::p1, All::p2 ->
-        None //failwith "removeSelectorPrefix - Index/All - arguably error %"
-      //  loop (Index(i)::specPref) p1 p2
-    //| Index(_)::_ | All(_::)
-    //| Tag(t)::p1, All::p2 | All::p1, Tag(t)::p2 -> loop (Tag(t)::specPref) p1 p2
-    //
-    // More thinking - When called from 'scopeEdit' we maybe do not want to scope edits that 
-    // have been applied to specific indices (because we do not want to 
-    // apply those to newly added nodes)? but maybe it is ok??
-    //
-    // When called from 'copyEdits' - if we copied All of something (p1) but
-    // have an edit to a specific index in the source, we want to also apply it
-    // to the other location at the given index.
-    // So for that we need -
-    // (when called from scopeEdit, if we are appending to All, but an edit was
-    // done at a specific index, we do not want to apply it to All - but are ok
-    // with applying it at the specific index - so this is also OK)
-    | All::p1, Index(i)::p2 ->
-        //None //
-        loop (Index(i)::specPref) p1 p2
-
-    | All::p1, All::p2 -> loop (All::specPref) p1 p2
-    | [], p2 -> Some(List.rev specPref, p2)
-    | _ -> None
-  loop [] p1 p2
+let removeSelectorPrefix = removePrefix true false
   
 // --------------------------------------------------------------------------------------
 // Helpes for transforming edits when merging / applying
@@ -514,7 +497,6 @@ let rec isStructuralSelector sel =
 
 let apply doc edit =
   match edit.Kind with
-  | _ when edit.Disabled -> doc
 
   // **Value edits** - These do not affect any selectors elsewhere in the document.
   // Add and Append change structure in that they add new items that may have a different
@@ -534,14 +516,14 @@ let apply doc edit =
             // Similar to 'RecordAdd' but we do not remove duplicates (what will that do?)
             Some(List(tag, nds @ [n, nd]))
         | _ -> None ) doc
-
+      
   | ListAppendFrom(sel, n, src) ->
       replace (fun p el ->
         match el with
         | List(tag, nds) when matches p sel -> 
             Some(List(tag, nds @ [n, selectSingle src doc]))
         | _ -> None ) doc
-
+      
   | RecordAdd(sel, fld, nd) ->
       replace (fun p el -> 
         match el with 
@@ -634,32 +616,36 @@ let apply doc edit =
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.Copy - Non-structural selector {formatSelector sel} used with structural edit {formatEdit edit}."
 
-      let mutable exprs = 
+      let mutable exprs, ok = 
         let srcNodes = select src doc
         match select sel doc with         
-        | tgs when tgs.Length = srcNodes.Length -> srcNodes
+        | tgs when tgs.Length = srcNodes.Length -> srcNodes, true
         // Slightly clever in that we can copy multiple source nodes into a single target list node
         // (this is needed for evaluation of arguments - see eval.fs)
-        | [List(t, _)] -> [List(t, List.mapi (fun i nd -> string i, nd) srcNodes)] 
-        | tgtNodes -> srcNodes @ srcNodes //failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
+        | [List(t, _)] -> [List(t, List.mapi (fun i nd -> string i, nd) srcNodes)], true 
+        // If source or target is empty, do not do anything
+        // (needed if we create merged edits that do not apply to anything)
+        | tgtNodes when srcNodes.Length = 0 || tgtNodes.Length = 0 -> [], false 
+        | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
       let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
-      let doc = replace (fun p el -> 
-        if matches p sel then Some(next())
-        else None ) doc
+      if ok then 
+        let doc = replace (fun p el -> 
+          if matches p sel then Some(next())
+          else None ) doc
 
-      if rb = UpdateReferences then 
-        // We cannot update selectors in the document to match this edit, so make sure 
-        // there are none (when copying from referenced source, we'd need to duplicate 
-        // the reference as done when merging in 'copyEdit'; when copying to 
-        // a location, we have no clue what the structure change is, so cannot update.)
-        for docRef in getDocumentReferences doc do
-          if includesReference sel docRef then
-            failwith $"apply.RecordDelete - Cannot copy to {formatSelector sel}. Document contains conflicting selector {formatReference (snd docRef)}."
-          if includesReference src docRef then
-            failwith $"apply.RecordDelete - Cannot copy from {formatSelector sel}. Document contains conflicting selector {formatReference (snd docRef)}."
-        doc
+        if rb = UpdateReferences then 
+          // We cannot update selectors in the document to match this edit, so make sure 
+          // there are none (when copying from referenced source, we'd need to duplicate 
+          // the reference as done when merging in 'copyEdit'; when copying to 
+          // a location, we have no clue what the structure change is, so cannot update.)
+          for docRef in getDocumentReferences doc do
+            if includesReference sel docRef then
+              failwith $"apply.RecordDelete - Cannot copy to {formatSelector sel}. Document contains conflicting selector {formatReference (snd docRef)}."
+            if includesReference src docRef then
+              failwith $"apply.RecordDelete - Cannot copy from {formatSelector sel}. Document contains conflicting selector {formatReference (snd docRef)}."
+          doc
+        else doc
       else doc
-
 
 // --------------------------------------------------------------------------------------
 // Merge
@@ -691,7 +677,7 @@ let tryScopeSelectors f edit =
 
   match fullyScopedEditOpt, scopedTargetSel with 
   // None of the selectors satisfied the condition
-  | _ when scopedSels.Length = 0 -> AllOutOfScope
+  | _, None when scopedSels.Length = 0 -> AllOutOfScope
   // All selectors satisfied the condition
   | Some nedit, _ when scopedSels.Length = sels.Length -> InScope nedit 
   // Target selector did not satisfy the condition
@@ -761,7 +747,7 @@ let updateSelectors e1 e2 =
   // For structural copy, we may need to duplicate the edit e1
   | Copy(UpdateReferences, tgtSel, srcSel) -> 
       match copyEdit e2 srcSel tgtSel with 
-      | Some res -> res
+      | Some res -> res 
       | _ ->
           // TODO: What does this even do?
           let target = getTargetSelector e2
@@ -774,6 +760,36 @@ let updateSelectors e1 e2 =
 
   // Value edits do not affect other selectors
   | _ -> [e2]
+
+let simpleRemoveSelectorPrefix p1 p2 = 
+  let rec loop specPref p1 p2 = 
+    match p1, p2 with 
+    | Field(f1)::p1, Field(f2)::p2 when f1 = f2 -> loop (Field(f1)::specPref) p1 p2
+    | Index(i1)::p1, Index(i2)::p2 when i1 = i2 -> loop (Index(i1)::specPref) p1 p2
+    | Index(i)::p1, All::p2 ->
+        None //failwith "removeSelectorPrefix - Index/All - arguably error %"
+    | All::p1, Index(i)::p2 ->
+        //None //
+        loop (Index(i)::specPref) p1 p2
+
+    | All::p1, All::p2 -> loop (All::specPref) p1 p2
+    | [], p2 -> Some(List.rev specPref, p2)
+    | _ -> None
+  loop [] p1 p2
+
+// Scope e1 to affect the target of e2  
+let simpleScopeEdit e1 e2 = 
+  match removePrefix false true (getAnySelector true false e2) (getAnySelector false true e1) with 
+  | Some(specificPrefix, rest) ->
+      // Still transform all other selectors here e.g. when e1 is Copy inside the target of e2
+      let e1target = specificPrefix @ rest
+      // Maybe a bit hackish trick? It is hard to figure out what exactly part of the
+      // selector to scope in the case of copY!
+      let nsels = getSelectors e1 |> List.map (replaceWithMoreSpecificPrefix e1target) 
+      let e1 = defaultArg (tryWithSelectors nsels e1) e1
+      let scoped = withAnySelector false true (specificPrefix @ rest) e1
+      Some(withReferenceBehaviour KeepReferences scoped)
+  | _ -> None
   
 
 // Assuming 'e1' and 'e2' happened independently, we want to modify
@@ -789,15 +805,15 @@ let updateSelectors e1 e2 =
 // * If the edit 'e1' is adding new item to a record, then .. think about this.
 // * If the edit 'e1' is copying .. think about this.
 //
-let applyToAdded e1 e2 = 
+let applyToAdded e1 (e2, e2extras) = 
+  (*
   match e2.Kind with   
-   // We are appending under 'sel', so the selector for 'nd' will be 'sel/*' 
   | ListAppendFrom(sel, n, src) -> 
       match scopeEdit (sel @ [All]) (sel @ [Index n]) e1 with
-      | InScope e1scoped 
-      | SourceOutOfScope (Some e1scoped) -> 
-          e2, [ withReferenceBehaviour KeepReferences e1scoped ]
-      | _ -> e2, []
+      | InScope e1scoped | SourceOutOfScope (Some e1scoped) -> 
+          Some [ withReferenceBehaviour KeepReferences e1scoped ]
+      | TargetOutOfScope | AllOutOfScope | SourceOutOfScope None ->
+          None
 
   | ListAppend(sel, n, nd) -> 
       //printfn $"APPLY {formatEdit e1} to added {formatEdit e2}"
@@ -806,7 +822,7 @@ let applyToAdded e1 e2 =
       | SourceOutOfScope (Some e1scoped) ->
           //printfn $"SCOPED {formatEdit e1}"
           //printfn $"AS {formatEdit e1scoped}"
-          e2, [ withReferenceBehaviour KeepReferences e1scoped ]
+          Some [ withReferenceBehaviour KeepReferences e1scoped ]
           //printfn $"IN SCOPE ({formatSelector (sel @ [All])}): {formatEdit e2}"
           //[ { e1 with Kind = ListAppend(sel, n, apply nd e2scoped) }]
       (*| AllOutOfScope | TargetOutOfScope -> e1, []
@@ -817,16 +833,8 @@ let applyToAdded e1 e2 =
           | SourceOutOfScope (Some e2scoped) -> [ e1; e2scoped ]
           | _ -> failwith "applyToAdded: should not happen"
           *)
-      | _ -> e2, []
-      (*
-  | RecordAdd(sel, fld, nd) -> 
-      match scopeEdit (sel @ [Field fld]) [] e2 with
-      | InScope _ | SourceOutOfScope _ -> 
-          // TODO: This is conflict, because e2 was doing something with a 
-          // record field and e1 is now replacing it with a new thing.
-          // We can let 'e1' win (return [e1]) or 'e2' win (return [])
-          [e1]
-      | AllOutOfScope | TargetOutOfScope -> [e1]
+      | TargetOutOfScope | AllOutOfScope | SourceOutOfScope None ->
+          None
 
   | Copy(_, sel, src) -> 
       match scopeEdit sel src e2 with
@@ -834,25 +842,43 @@ let applyToAdded e1 e2 =
           // TODO: Same conflict as in the case of RecordAdd - with same options.
           [e1]
       | AllOutOfScope | TargetOutOfScope -> [e1]
-      *)
-  | _ -> e2, []
+  *)
+
+  match e2.Kind with   
+  | ListAppendFrom _
+  | ListAppend _
+  | RecordAdd _ -> 
+      // If we are handling edit that adds something, we may need to apply 'e1' to it!
+      // Try to scope e1 to target of either e2 itself or any of the later added edits
+      e2::e2extras |> List.tryPick (fun e2ed ->
+        match simpleScopeEdit e1 e2ed with
+        | Some e1 -> Some [ withReferenceBehaviour KeepReferences e1 ]
+        | _ -> None)
+  | _ -> None
 
 // Assuming 'e1' and 'e2' happened independently,
 // modify 'e2' so that it can be placed after 'e1'.
-let moveBefore e1 e2 = 
-  let e2, extras = applyToAdded e1 e2 
-  updateSelectors e1 e2, 
-  extras //|> List.collect (fun ee -> updateSelectors e1 ee)
+let moveBefore e1 (e2, e2extras) = 
+  let e2moreExtras = 
+    match applyToAdded e1 (e2, e2extras) with 
+    | Some e2moreExtras -> e2moreExtras
+    | None -> []
+  match updateSelectors e1 e2 with 
+  | e2::e2s -> (e2, List.collect (updateSelectors e1) e2extras @ e2moreExtras) :: [ for e in e2s -> e, [] ] // no extras for copied?
+  | [] -> failwith "never"
 
-let moveAllBefore e1 (e2s, e2extras) = 
+  //extras //|> List.collect (fun ee -> updateSelectors e1 ee)
+
+let moveAllBefore e1 e2s = 
   //printfn $"MOVE BEFORE {formatEdit e1}"
   //printfn $" * edits = {List.map formatEdit e2s}"
   //printfn $" * extras = {List.map formatEdit e2extras}"
-  let e2s, e2extras0 = List.map (moveBefore e1) e2s |> List.unzip
-  let e2extras, e2extras1 = List.map (applyToAdded e1) e2extras |> List.unzip
+  //let e2s, e2extras0 = List.map (moveBefore e1) e2s |> List.unzip
+  //let e2extras, e2extras1 = List.map (applyToAdded e1) e2extras |> List.unzip
   //printfn $" * nedits = {List.map formatEdit (List.concat e2s)}"
   //printfn $" * nextras = {List.map formatEdit (List.concat e2extras)} // {List.map formatEdit (List.concat e2extras0)} // {List.map formatEdit (List.concat e2extras1)}"
-  List.concat e2s, e2extras @ (List.concat (e2extras0 @ e2extras1))
+  //List.concat e2s, e2extras @ (List.concat (e2extras0 @ e2extras1))
+  List.collect (moveBefore e1) e2s
 
 // --------------------------------------------------------------------------------------
 // Edit groups
@@ -896,12 +922,12 @@ let getDependencies ed =
   | _ -> getTargetSelector ed :: ed.Dependencies
   
 let filterConflicting = 
-  List.mapWithState (fun modsels ed ->
+  List.filterWithState (fun modsels ed ->
     // Conflict if any dependency depends on any of the modified locations
     let conflict = getDependencies ed |> List.exists (fun dep -> 
       List.exists (fun modsel -> includes dep modsel || includes modsel dep) modsels)
-    if conflict then { ed with Disabled = true }, (getTargetSelector ed)::modsels
-    else ed, modsels) 
+    if conflict then false, (getTargetSelector ed)::modsels
+    else true, modsels) 
 
 
 type ConflictResolution = 
@@ -926,6 +952,20 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
 
   let e2smap = 
     e2s |> List.map (fun e2 ->
+      //printfn "========================"
+      //printfn $"PUSHING EDIT\n  * {formatEdit e2}"
+      let res = e1s |> List.fold (fun e2s e1 -> 
+        //printfn $"  * through: {formatEdit e1}"
+        let res = moveAllBefore e1 e2s //moveAllBefore e1 e2s
+        //printfn "    -> now have: %s" (String.concat "," [ for e, es in res do $"  {formatEdit e} {List.map formatEdit es}" ])
+        res           ) [e2, []]
+      //printfn $"GOT"
+      //for e in res do printfn $"  * {formatEdit e}"
+      e2, [ for e,ee in res do yield! e::ee ]
+    )
+    (*
+  let e2smap = 
+    e2s |> List.map (fun e2 ->
       printfn $"UPDATING {formatEdit e2}"
       let e2init = [e2], []
       let e2after, e2extras = 
@@ -936,28 +976,29 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
       printfn $" * after {List.map formatEdit e2after}"
       printfn $" * extras {List.map formatEdit e2extras}"
       e2, e2after, e2extras) 
-
+      *)
   // Compute before and after hashes for original and new edits
-  let e2smap = 
-    e2smap |> List.mapWithState (fun (hashBefore, hashAfter) (e2, e2after, e2extras) ->
+  let hashMap = 
+    e2smap |> List.mapWithState (fun (hashBefore, hashAfter) (e2, e2after) ->
       let hashBefore = hash(hashBefore, e2)
       let e2afterHashed = withHistoryHash hashAfter id e2after
       let hashAfter = hashEditList hashAfter e2after
-      ((e2, hashBefore), e2afterHashed, e2extras), (hashBefore, hashAfter)) (hashBefore, hashAfter)
-  
+      (hashBefore, (hashAfter, e2afterHashed)), (hashBefore, hashAfter)) (hashBefore, hashAfter) |> dict
+  (*
   // Computer after hashes for the extra added edits
   let e2smap = 
     e2smap |> List.mapWithState (fun hashAfter (e2, e2after, e2extras) ->
       let e2extrasHashed = withHistoryHash hashAfter id e2extras
       let hashAfter = hashEditList hashAfter e2extras
       (e2, e2after, e2extrasHashed), hashAfter) hashAfter
-
-  let hashMap = 
-    [ for (_, e2hash), e2after, e2extras in e2smap -> 
-        e2hash, (fst (List.last e2after), e2after, e2extras) ] |> dict
+      *)
+  //let hashMap = 
+    //[ for (_, e2hash), e2after, e2extras in e2smap -> 
+      //  e2hash, (fst (List.last e2after), e2after, e2extras) ] |> dict
   
-  List.collect (fun (_, e2s, _) -> List.map snd e2s) e2smap @ 
-  List.collect (fun (_, _, extras) -> List.map snd extras) e2smap,
+  //List.collect (fun (_, e2s, _) -> List.map snd e2s) e2smap @ 
+  //List.collect (fun (_, _, extras) -> List.map snd extras) e2smap,
+  List.collect snd e2smap,
   hashMap
 
 let pushEditsThroughSimple crmode e1s e2s = 

@@ -15,35 +15,88 @@ open Tbd.Demos
 let merge h1 h2 = mergeHistories IgnoreConflicts h1 h2 |> fst
 let printEdits = List.iter (formatEdit >> printfn " - %s")
 let selectTag sel doc = match select sel doc with [List(t, _)] | [Record(t, _)] -> Some t | _ -> None 
-let mkEd ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
+let mkEd ed = { Kind = ed; GroupLabel = ""; Dependencies = [] } 
+let moveOneBefore e1 e2 = [ for e, es in moveAllBefore (mkEd e1) [mkEd e2, []] do yield! e::es ]
+let moveMultiBefore e1 (e2, e2extras) = [ for e, es in moveAllBefore (mkEd e1) [mkEd e2, List.map mkEd e2extras] do yield! e::es ]
 
+[<Tests>]
+let moveBeforeTests =
+  testList "moveBefore tests" [       
+    test "moveBefore scopes record transformation" {
+      let actual = 
+        moveOneBefore 
+          (RecordAdd(!/"/items/*", "condition", Record("x-formula", [])))
+          (ListAppend(!/"/items", "0", Record("li", [])))
+      formatEdit actual.[1]
+      |> equals """recordAdd(items/#0,"condition",Record ("x-formula", []))"""
+    }
+
+    test "moveBefore scopes source of a copy edit" {
+      let actual = 
+        moveOneBefore 
+          (Copy(UpdateReferences, !/"/speakers/body/*/name", !/"/speakers/body/*/email"))
+          (ListAppend(!/"/speakers/body", "hamilton", Primitive(String "Margaret Hamilton")))
+      formatEdit actual.[1]
+      |> equals "v.copy(speakers/body/#hamilton/name,speakers/body/#hamilton/email)"
+    }
+
+    test "moveBefore applies copy edit to added field" {
+      let actual = 
+        moveMultiBefore 
+          (Copy(UpdateReferences, !/"/speakers/body/*/email", !/"/speakers/body/*/name"))
+          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")),
+            [RecordRenameField(KeepReferences, !/"/speakers/body/#hamilton", "speaker", "name")] )
+      formatEdit actual.[2]
+      |> equals "v.copy(speakers/body/#hamilton/email,speakers/body/#hamilton/name)"
+    }
+
+    test "moveBefore applies wraprec to added field" {
+      let actual = 
+        moveOneBefore 
+          (WrapRecord(UpdateReferences, "td", "value", !/"/speakers/body/*/speaker"))
+          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")))
+      formatEdit actual.[1]
+      |> equals """v.wrapRec(speakers/body/#hamilton/speaker,"td","value")"""
+    }
+
+    test "moveBefore applies wraprec to field added by extra rename" {
+      let actual = 
+        moveMultiBefore 
+          ( WrapRecord(UpdateReferences, "td", "contents", !/"/speakers/*/name") )
+          ( RecordAdd(!/"/speakers/#hamilton", "value", Primitive(String "Margaret Hamilton")), 
+            [RecordRenameField(KeepReferences, !/"/speakers/#hamilton", "value", "name")] )
+      formatEdit actual.[2]
+      |> equals """v.wrapRec(speakers/#hamilton/name,"td","contents")"""
+    }
+    (*
+    test "moveBefore scopes source of a copy edit" {
+      let actual = 
+        moveOneBefore 
+          (Copy(UpdateReferences, "td", "value", !/"/speakers/body/*/speaker"))
+          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")))
+      formatEdit actual.[1]
+      |> equals """v.wrapRec(speakers/body/#hamilton/speaker/td,"td","value")"""
+    }*)
+
+    test "moveBefore transforms selectors in list append" {
+      let actual = 
+        moveOneBefore
+          (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
+          (ListAppend([Field "speakers"],"hamilton",Record("li", [])))
+      formatEdit actual.[0]
+      |> equals """listAppend(speakers/body,"hamilton",Record ("li", []))"""
+    }
+]
 
 [<Tests>]
 let adhocTests =
   testList "ad hoc tests" [       
-    test "moveBefore correctly scopes record transformation" {
-      let _, actual = 
-        moveAllBefore (mkEd (RecordAdd(!/"/items/*", "condition", Record("x-formula", []))))
-          ([mkEd (ListAppend(!/"/items", "0", Record("li", []))) ], [])
-      List.map formatEdit actual
-      |> equals ["""recordAdd(items/#0,"condition",Record ("x-formula", []))"""]
-    }
-
     test "scopeEdit can scope edit that adds unrelated reference" {
       let actual = 
         scopeEdit (!/"/items/*") (!/"/$uniquetemp_7")
           (mkEd (RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot]))))
       ( match actual with InScope _ -> "inscope" | _ -> "" )
       |> equals "inscope"
-    }
-
-    test "moveBefore transforms selectors in list append" {
-      let actual, _ = 
-        moveBefore
-          (mkEd (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"])))
-          (mkEd (ListAppend([Field "speakers"],"hamilton",Record("li", []))))
-      List.map formatEdit actual
-      |> equals ["""listAppend(speakers/body,"hamilton",Record ("li", []))"""]
     }
 ]
 
@@ -187,6 +240,14 @@ let complexMergeTests =
       let ops1 = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
       let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerOps) 
+      let doc2 = applyHistory (rcd "div") ops2
+      doc1 |> equals doc2
+    }
+
+    test "refactoring merges with two step adding" {
+      let ops1 = merge (opsCore @ addSpeakerTwoStepOps) (opsCore @ refactorListOps)
+      let doc1 = applyHistory (rcd "div") ops1 
+      let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerTwoStepOps) 
       let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }

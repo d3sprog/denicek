@@ -372,7 +372,7 @@ module Document =
               RecordDelete(KeepReferences, path, "@checked")
             else
               RecordAdd(path, "@value", Primitive(String el.value))
-          let edit = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
+          let edit = { Kind = ed; Dependencies = []; GroupLabel = "" }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.DocumentEdits @ [ edit ])))
     ]
 
@@ -458,34 +458,32 @@ module Document =
         // We use this to fix all the saved interactions... (I guess this is a bit hacky?
         // The alternative would be to keep git-like tree and merge in more complex ways.)
         let fixhist =
-          let doc = applyHistory state.Initial merged
-          let mked ed = { Kind = ed; GroupLabel = ""; Dependencies = []; Disabled = false } 
-          [ for n, oldhash, ops in Helpers.getSavedInteractions doc do
-            // Update the saved base hash for the saved interactions
-            match hashMap.TryGetValue(oldhash) with
-            | true, (nhash, _, _) ->
-                let nhash = Primitive(String(nhash.ToString("x")))
-                yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash)
-            | _ -> ()
+          try
+            let doc = applyHistory state.Initial merged
+            let mked ed = { Kind = ed; GroupLabel = ""; Dependencies = [] } 
+            [ for n, oldhash, ops in Helpers.getSavedInteractions doc do
+              // Update the saved base hash for the saved interactions
+              match hashMap.TryGetValue(oldhash) with
+              | true, (nhash, _) ->
+                  let nhash = Primitive(String(nhash.ToString("x")))
+                  yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash)
+              | _ -> ()
 
-            // Update the operations to new ones - if they have changed,
-            // replace the interactions list in the saved interactions
-            let newOps = 
-              [ for hash, op in ops do 
-                  match hashMap.TryGetValue(hash) with 
-                  | true, (_, nops, _) -> yield! nops
-                  | _ -> yield hash, op 
-                for hash, _ in ops do 
-                  match hashMap.TryGetValue(hash) with 
-                  | true, (_, _, nextras) -> yield! nextras 
-                  | _ -> () ]
+              // Update the operations to new ones - if they have changed,
+              // replace the interactions list in the saved interactions
+              let newOps = 
+                [ for hash, op in ops do 
+                    match hashMap.TryGetValue(hash) with 
+                    | true, (_, nops) -> yield! nops
+                    | _ -> yield hash, op ]
 
-            if newOps <> ops then
-              yield RecordAdd([Field "saved-interactions"; Field n], "interactions", List("x-interaction-list", []))
-              for i, (hash, op) in Seq.indexed newOps ->
-                ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
-                  Represent.represent (Some hash) op) ]
-          |> List.map mked
+              if newOps <> ops then
+                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", List("x-interaction-list", []))
+                for i, (hash, op) in Seq.indexed newOps ->
+                  ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
+                    Represent.represent (Some hash) op) ]
+            |> List.map mked
+          with e -> Browser.Dom.console.error(e); []
         let merged = merged @ fixhist
 
         let evaluated = Eval.updateEvaluatedEdits state.DocumentEdits merged state.EvaluatedEdits                
@@ -559,7 +557,7 @@ module History =
             trigger(HistoryEvent(ToggleEdit(i, chk)))
         ] []
         h?a [ 
-          "class" => "" +? (i = state.DocumentState.DisplayEditIndex, "sel") +? (ed.Edit.Disabled, "disabled")
+          "class" => "" +? (i = state.DocumentState.DisplayEditIndex, "sel")
           "href" => "javascript:;"; "click" =!> fun _ _ -> 
             let withHashAndIndex = withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed
             let clicked, _ = withHashAndIndex |> List.find (fun (i, (hash, _)) -> hash = histhash)
@@ -594,8 +592,8 @@ module History =
     | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
     | RecordAdd(sel, f, nd) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger sel nd; "fld", text f]
     | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
-    | ListAppend(sel, i, nd) -> renderv "append" "fa-at" sel ["i", text i; "node", formatNode state trigger sel nd]
-    | ListAppendFrom(sel, i, src) -> renderv "appfrom" "fa-paperclip" sel ["i", text i; "node", Helpers.renderAbsoluteReference state trigger src]
+    | ListAppend(sel, i, nd) -> renderv "append" "fa-at" sel ["i", text i; "node", formatNode state trigger sel nd ]
+    | ListAppendFrom(sel, i, src) -> renderv "appfrom" "fa-paperclip" sel ["i", text i; "node", Helpers.renderAbsoluteReference state trigger src ]
     | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
@@ -775,9 +773,9 @@ module Commands =
   let listTag = P.char '[' <*>> fieldHole <<*> P.char ']'
 
   // When parsed, returns just a single edit
-  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x; Dependencies = []; GroupLabel = ""; Disabled = false }]] )
+  let mapEd f = P.map (fun x -> EditRecommendation [[{ Kind = f x; Dependencies = []; GroupLabel = ""  }]] )
   // When parsed, returns a sequence of edits
-  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k; Dependencies = []; GroupLabel = ""; Disabled = false } ]])
+  let mapEdg f = P.map (fun x -> EditRecommendation [[ for k in f x -> { Kind = k; Dependencies = []; GroupLabel = ""  } ]])
   // Returns potentially mutiple sequences of edits
   // (those have to be merged using the current as shared base)
   let mapEds f = P.map (fun x -> EditRecommendation(f x))
@@ -1466,6 +1464,10 @@ async {
     let demos = 
       [ 
         "empty", readJson "[]", []
+        "?base", fromOperationsList (opsCore), []
+        "?add", fromOperationsList (opsCore @ addSpeakerTwoStepOps), []
+        "?table", fromOperationsList (opsCore @ refactorListOps), []
+        "?merge", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerTwoStepOps)), []
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]

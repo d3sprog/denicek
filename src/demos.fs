@@ -22,7 +22,7 @@ let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
 let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
 let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
 
-let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
+let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
 
 // Value edits
 let ap s i n = mkEd <| ListAppend(s, i, n)
@@ -82,6 +82,13 @@ let addSpeakerOps =
     ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"] 
   ]
 
+  // Add <li> and reorder items
+let addSpeakerTwoStepOps = 
+  [ 
+    ap (!/ "/speakers") "floyd" (rcd "li")
+    add (!/ "/speakers/#floyd") "value" (ps "Christiane Floyd, floyd@tu-berlin.de")
+  ]
+
 // Create <li> as /temp and then copy into <ul>
 let addSpeakerViaTempOps = 
   [
@@ -95,7 +102,7 @@ let addSpeakerViaTempOps =
 // String replace specific list item
 let fixSpeakerNameOps = 
   [
-    ed (!/ "/speakers/2/value") "rename Jean" <| function 
+    ed (!/ "/speakers/#jennings/value") "rename Jean" <| function 
       | (_, String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
       | _ -> failwith "fixSpeakerNameOps - wrong primitive"
   ]
@@ -111,11 +118,13 @@ let refactorListOps =
     tag (!/ "/speakers") "tbody"
     
     wrS (!/ "/speakers") "body" "table"
+    
     add (!/ "/speakers") "head" (rcd "thead")
     add (!/ "/speakers/head") "name" (nds "value" "td" "Name")
     add (!/ "/speakers/head") "email" (nds "value" "td" "E-mail")
 
     cpS (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
+
     ed (!/ "/speakers/body/*/name/contents") "get name" <| function 
       | _, String s -> String(s.Substring(0, s.IndexOf(',')))
       | _ -> failwith "refactorListOps - invalid primitive"
