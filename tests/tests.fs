@@ -1,7 +1,7 @@
 ﻿#if INTERACTIVE
 #nowarn "3353"
 #I "../src"
-#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "eval.fs" "demos.fs"
+#load "utils.fs" "parsec.fs" "ordlist.fs" "doc.fs" "represent.fs" "eval.fs" "demos.fs"
 let equals a b = a = b
 #else
 module Tbd.Tests
@@ -25,36 +25,105 @@ let moveBeforeTests =
     test "moveBefore scopes record transformation" {
       let actual = 
         moveOneBefore 
-          (RecordAdd(!/"/items/*", "condition", Record("x-formula", [])))
-          (ListAppend(!/"/items", "0", Record("li", [])))
+          (RecordAdd(!/"/items/*", "condition", None, Record("x-formula", OrdList.empty)))
+          (ListAppend(!/"/items", "0", None, Record("li", OrdList.empty)))
       formatEdit actual.[1]
-      |> equals """recordAdd(items/#0,"condition",Record ("x-formula", []))"""
+      |> equals """recordAdd(items/#0,"condition",na,x-formula{})"""
     }
 
     test "moveBefore scopes source of a copy edit" {
       let actual = 
         moveOneBefore 
           (Copy(UpdateReferences, !/"/speakers/body/*/name", !/"/speakers/body/*/email"))
-          (ListAppend(!/"/speakers/body", "hamilton", Primitive(String "Margaret Hamilton")))
+          (ListAppend(!/"/speakers/body", "hamilton", None, Primitive(String "Margaret Hamilton")))
       formatEdit actual.[1]
       |> equals "v.copy(speakers/body/#hamilton/name,speakers/body/#hamilton/email)"
+    }
+
+    test "moveBefore does not overwrite record with conflicting add" {
+      let actual = 
+        moveOneBefore 
+          (RecordAdd(!/"/", "demo", None, Primitive(String "original")))
+          (RecordAdd(!/"/", "demo", None, Primitive(String "new")))
+      select (!/"/demo") (applyHistory (rcd "root") actual)
+      |> equals [Primitive(String "new")]
     }
 
     test "moveBefore applies copy edit to added field" {
       let actual = 
         moveMultiBefore 
           (Copy(UpdateReferences, !/"/speakers/body/*/email", !/"/speakers/body/*/name"))
-          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")),
+          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")),
             [RecordRenameField(KeepReferences, !/"/speakers/body/#hamilton", "speaker", "name")] )
       formatEdit actual.[2]
       |> equals "v.copy(speakers/body/#hamilton/email,speakers/body/#hamilton/name)"
+    }
+
+    test "moveBefore does not apply renames to extra ops and appends it instead" {
+      let actual = 
+        moveMultiBefore 
+          (RecordRenameField(UpdateReferences, !/"/speakers/body/*", "speaker", "name"))
+          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")),
+            [WrapRecord(KeepReferences, "value", "td", !/"/speakers/body/#hamilton/speaker")] )
+      formatEdit actual.[1]
+      |> equals """v.wrapRec(speakers/body/#hamilton/speaker,"value","td")"""
+      formatEdit actual.[2]
+      |> equals """v.renameField(speakers/body/#hamilton,"speaker","name")"""
+    }
+
+    test "moveBefore does wraps added field but not again the target of copy" {
+      let actual1 = 
+        moveOneBefore 
+          (WrapRecord(UpdateReferences, "value", "td", !/"/speakers/*/speaker"))
+          (RecordAdd(!/"/speakers/#n", "speaker", None, Primitive(String "")))
+      List.map formatEdit actual1 |> equals [ 
+        """recordAdd(speakers/#n,"speaker",na,"")"""
+        """v.wrapRec(speakers/#n/speaker,"value","td")"""]
+      let actual2 = 
+        moveOneBefore 
+          (WrapRecord(UpdateReferences, "value", "td", !/"/speakers/*/speaker"))
+          (Copy(KeepReferences,!/"/speakers/#n/speaker", !/"/new/@value"))
+      List.map formatEdit actual2
+      |> equals ["v.copy(speakers/#n/speaker/value,new/@value)"]
+    }
+
+    test "moveBefore applies primitive edit to copied" {
+      let actual = 
+        moveOneBefore 
+          (PrimitiveEdit(!/"/speakers/body/*/name/email", "op", None))
+          (Copy(KeepReferences, !/"/speakers/body/#hamilton/name/email", !/"/new/@value"))
+      formatEdit actual.[1]
+      |> equals """primitive(speakers/body/#hamilton/name/email,"op")"""
+    }
+
+
+    test "moveBefore does not wrap target of record add" {
+      let actual = 
+        moveOneBefore 
+          (WrapRecord(UpdateReferences, "contents", "td", !/"/speakers/*/name"))
+          (RecordAdd(!/"/speakers/#hamilton", "name", None, Primitive(String "Margaret Hamilton")))
+      formatEdit actual.[0]
+      |> equals """recordAdd(speakers/#hamilton,"name",na,"Margaret Hamilton")"""
+      formatEdit actual.[1]
+      |> equals """v.wrapRec(speakers/#hamilton/name,"contents","td")"""
+    }
+
+    test "moveBefore renames target of record add" {
+      let actual = 
+        moveOneBefore 
+          (RecordRenameField(UpdateReferences, !/"/speakers/*", "value", "name"))
+          (RecordAdd(!/"/speakers/#hamilton", "value", None, Primitive(String "Margaret Hamilton")))
+      formatEdit actual.[0]
+      |> equals """recordAdd(speakers/#hamilton,"value",na,"Margaret Hamilton")"""
+      formatEdit actual.[1]
+      |> equals """v.renameField(speakers/#hamilton,"value","name")"""
     }
 
     test "moveBefore applies wraprec to added field" {
       let actual = 
         moveOneBefore 
           (WrapRecord(UpdateReferences, "td", "value", !/"/speakers/body/*/speaker"))
-          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")))
+          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")))
       formatEdit actual.[1]
       |> equals """v.wrapRec(speakers/body/#hamilton/speaker,"td","value")"""
     }
@@ -63,42 +132,31 @@ let moveBeforeTests =
       let actual = 
         moveMultiBefore 
           ( WrapRecord(UpdateReferences, "td", "contents", !/"/speakers/*/name") )
-          ( RecordAdd(!/"/speakers/#hamilton", "value", Primitive(String "Margaret Hamilton")), 
+          ( RecordAdd(!/"/speakers/#hamilton", "value", None, Primitive(String "Margaret Hamilton")), 
             [RecordRenameField(KeepReferences, !/"/speakers/#hamilton", "value", "name")] )
       formatEdit actual.[2]
       |> equals """v.wrapRec(speakers/#hamilton/name,"td","contents")"""
     }
-    (*
-    test "moveBefore scopes source of a copy edit" {
-      let actual = 
-        moveOneBefore 
-          (Copy(UpdateReferences, "td", "value", !/"/speakers/body/*/speaker"))
-          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", Primitive(String "Margaret Hamilton")))
-      formatEdit actual.[1]
-      |> equals """v.wrapRec(speakers/body/#hamilton/speaker/td,"td","value")"""
-    }*)
 
     test "moveBefore transforms selectors in list append" {
       let actual = 
         moveOneBefore
           (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
-          (ListAppend([Field "speakers"],"hamilton",Record("li", [])))
+          (ListAppend([Field "speakers"],"hamilton", None, Record("li", OrdList.empty)))
       formatEdit actual.[0]
-      |> equals """listAppend(speakers/body,"hamilton",Record ("li", []))"""
+      |> equals """listAppend(speakers/body,"hamilton",na,li{})"""
+    }
+
+    test "moveBefore wraps added reference" {
+      let actual = 
+        moveOneBefore
+          (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
+          (RecordAdd(!/"/budget", "count", None, Reference(Absolute, [Field "speakers"])))
+      List.map formatEdit actual
+      |> equals ["""recordAdd(budget,"count",na,/speakers/body)"""]
     }
 ]
 
-[<Tests>]
-let adhocTests =
-  testList "ad hoc tests" [       
-    test "scopeEdit can scope edit that adds unrelated reference" {
-      let actual = 
-        scopeEdit (!/"/items/*") (!/"/$uniquetemp_7")
-          (mkEd (RecordAdd(!/"/items/*/condition", "left", Reference(Relative, [DotDot]))))
-      ( match actual with InScope _ -> "inscope" | _ -> "" )
-      |> equals "inscope"
-    }
-]
 
 [<Tests>]
 let evalTests =
@@ -250,6 +308,7 @@ let complexMergeTests =
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerTwoStepOps) 
       let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
+      ()
     }
 
     test "refactoring merges with name fix" {
@@ -272,7 +331,6 @@ let complexMergeTests =
       let ops1 = merge (opsCore @ addSpeakerViaTempOps) (opsCore @ refactorListOps)
       let doc1 = applyHistory (rcd "div") ops1 
       let ops2 = merge (opsCore @ refactorListOps) (opsCore @ addSpeakerViaTempOps) 
-      printEdits ops2
       let doc2 = applyHistory (rcd "div") ops2
       doc1 |> equals doc2
     }
@@ -297,13 +355,13 @@ let complexMergeTests =
 
 [<Tests>]
 let referenceUpdateTests =
-  let doc0 = Record("div", [
+  let doc0 = Record("div", OrdList.ofList [
     "first", Reference(Relative, [DotDot; Field "things"; Index "0"; Field "lbl"])
-    "things", List("ul", [  
-      "0", Record("li", ["lbl", Primitive(String "abc"); 
+    "things", List("ul", OrdList.ofList [  
+      "0", Record("li", OrdList.ofList ["lbl", Primitive(String "abc"); 
         "ref1", Reference(Relative, [DotDot; Field "lbl"]); 
         "ref2", Reference(Relative, [DotDot; DotDot; DotDot; Field "first"]) ])
-      "1", Record("li", ["lbl", Primitive(String "def"); 
+      "1", Record("li", OrdList.ofList ["lbl", Primitive(String "def"); 
         "ref1", Reference(Relative, [DotDot; Field "error"; DotDot; Field "lbl"]);
         "ref2", Reference(Relative, [DotDot; DotDot; Index "0"; Field "lbl"])])
     ])
@@ -327,4 +385,41 @@ let referenceUpdateTests =
     }
   ]
 
+open Tbd.OrdList
 
+[<Tests>]
+let ordListTests = 
+  let l = { Members = Map.ofList [ 1,"one"; 2,"two"; 3,"three" ]; Order = Map.ofList [ 1,2; 2,3; ]  }
+  let l2 = OrdList.empty |> OrdList.add (3, "three") None |> OrdList.add (1, "one") (Some 2)  |> OrdList.add (2, "two") (Some 3)
+  testList "OrdList tests" [
+    test "OrdList iterator works" {
+      l |> List.ofSeq
+      |> equals [(3, "three"); (2, "two"); (1, "one")]
+    }
+    test "OrdList.after works" {
+      l |> OrdList.after 1 2 
+      |> equals true
+      l |> OrdList.after 1 3 
+      |> equals true
+    }
+    test "OrdList.tryLastKey works" {
+      l |> OrdList.tryLastKey
+      |> equals (Some 1)
+    }
+    test "OrdList.remove works" {
+      let lrem = l |> OrdList.remove 2
+      lrem |> OrdList.after 3 1
+      |> equals false
+      lrem |> OrdList.after 1 3
+      |> equals true
+    }
+    test "OrdList.renameKey works" {
+      let lren = l |> OrdList.renameKey 2 20
+      lren |> List.ofSeq
+      |> equals [(3, "three"); (20, "two"); (1, "one")]
+    }
+    test "OrdList iterator works on constructed" {
+      [ for k, v in l2 -> k, v ]
+      |> equals [(3, "three"); (2, "two"); (1, "one")]
+    }
+  ]

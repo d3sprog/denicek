@@ -14,7 +14,7 @@ let (|Findrb|_|) (d:System.Collections.Generic.IDictionary<_, Node>) =
   | true, Primitive(String "keep") -> Some(KeepReferences)
   | true, v -> failwith $"Findrb: expected 'update' or 'keep' but got '{v}'"
   | _ -> None
-let rcd id kvp = Record(id, kvp)
+let rcd id kvp = Record(id, OrdList.ofList kvp)
 
 let representRb = function
   | UpdateReferences -> "refs", Primitive(String "update")
@@ -27,40 +27,37 @@ let representSel sel =
         | DotDot -> string i, Primitive(String "..")
         | All -> string i, Primitive(String "*")
         | Index n -> string i, Primitive(String ("#" + n))
-        | Field f -> string i, Primitive(String f) ])
+        | Field f -> string i, Primitive(String f) ] |> OrdList.ofList)
 
 let unrepresentSel expr =
   match expr with 
   | List("x-selectors", sels) ->
-      sels |> List.map (function 
+      sels |> Seq.map (function 
         | _, Primitive(String "..") -> DotDot
         | _, Primitive(String "*") -> All 
         | _, Primitive(String s) when s.Length > 0 && s.[0] = '#' -> Index(s.Substring(1))
         | _, Primitive(String s) -> Field(s)
-        | _ -> failwith "unrepresentSel: Invalid selector")
+        | _ -> failwith "unrepresentSel: Invalid selector") |> List.ofSeq
   | _ -> failwith $"unrepresentSel: Not a selector: {expr}"
 
 let representStringList ns =
-  List("x-string-list", [for i, s in Seq.indexed ns -> string i, Primitive(String s) ])
+  List("x-string-list", OrdList.ofList [for i, s in Seq.indexed ns -> string i, Primitive(String s) ])
 
 let unrepresentStringList nd =
   match nd with 
   | List("x-string-list", nds) ->
-      nds |> List.sortBy (fst >> int) |> List.map (function 
+      nds |> Seq.sortBy (fst >> int) |> Seq.map (function 
         | _, Primitive(String s) -> s 
-        | _ -> failwith "unrepresentStringList - Not a number") 
+        | _ -> failwith "unrepresentStringList - Not a number") |> List.ofSeq
   | _ -> failwith $"unrepresentIntList - Invalid node {nd}"
 
-let representCond cond = 
-  match cond with 
-  | EqualsTo(nd) -> [ "node", Primitive nd ] |> rcd "x-cond-equals"
-  | NonEmpty -> [] |> rcd "x-cond-nonempty"
+let unrepresentStringOpt = function
+  | Some(Primitive(String s)) -> Some s
+  | _ -> None
 
-let unrepresentCond nd = 
-  match nd with 
-  | Record("x-cond-equals", Lookup(Find "node" (Primitive v))) -> EqualsTo(v)
-  | Record("x-cond-nonempty", []) -> NonEmpty
-  | _ -> failwith $"unrepresentCond - Invalid node {nd}"
+let representStringOpt k = function
+  | Some s -> [ k, Primitive(String s) ]
+  | _ -> []
 
 let unrepresent nd = 
   // NOTE: This works if the 'match' is not wrapped inside another expression (e.g. let) otherwise
@@ -72,8 +69,8 @@ let unrepresent nd =
     | _ -> res, None
   match nd with
   // Value edits
-  | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd)) ->
-      RecordAdd(unrepresentSel sel, f, nd) |> ret
+  | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd & TryFind "pred" pred)) ->
+      RecordAdd(unrepresentSel sel, f, unrepresentStringOpt pred, nd) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op & Finds "arg" arg)) ->
       PrimitiveEdit(unrepresentSel tgt, op, Some arg) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
@@ -81,10 +78,10 @@ let unrepresent nd =
   | Record("x-edit-updatetag", Lookup (Find "target" tgt & Finds "new" ntag)) ->
       UpdateTag(unrepresentSel tgt, ntag) |> ret
   // Shared edits
-  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i)) ->
-      ListAppend(unrepresentSel sel, i, nd) |> ret
-  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src & Finds "index" i)) ->
-      ListAppendFrom(unrepresentSel sel, i, unrepresentSel src) |> ret
+  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i & TryFind "pred" pred)) ->
+      ListAppend(unrepresentSel sel, i, unrepresentStringOpt pred, nd) |> ret
+  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src & Finds "index" i & TryFind "pred" pred)) ->
+      ListAppendFrom(unrepresentSel sel, i, unrepresentStringOpt pred, unrepresentSel src) |> ret
   | Record("x-edit-wraprec", Lookup(Findrb rb & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       WrapRecord(rb, tag, id, unrepresentSel target) |> ret
   | Record("x-edit-renamefld", Lookup (Findrb rb & Find "target" sel & Finds "old" fold & Finds "new" fnew)) ->
@@ -110,18 +107,18 @@ let rec represent (hash:int option) op =
     | None -> rcd k args
   match op.Kind with 
   // Value edits
-  | RecordAdd(target, f, nd) ->
-      rcd "x-edit-add" [ "target", representSel target; "field", ps f; "node", nd ]
+  | RecordAdd(target, f, pred, nd) ->
+      rcd "x-edit-add" <| [ "target", representSel target; "field", ps f; "node", nd ] @ (representStringOpt "pred" pred)
   | PrimitiveEdit(target, op, None) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op ]
   | PrimitiveEdit(target, op, Some arg) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op; "arg", ps arg ]
   | UpdateTag(target, ntag) ->
       rcd "x-edit-updatetag" [ "target", representSel target; "new", ps ntag ]
-  | ListAppend(target, n, nd) ->
-      rcd "x-edit-append" [ "target", representSel target; "node", nd; "index", ps n ]
-  | ListAppendFrom(target, n, src) ->
-      rcd "x-edit-appendfrom" [ "target", representSel target; "src", representSel src; "index", ps n ]
+  | ListAppend(target, n, pred, nd) ->
+      rcd "x-edit-append" <| [ "target", representSel target; "node", nd; "index", ps n ] @ (representStringOpt "pred" pred)
+  | ListAppendFrom(target, n, pred, src) ->
+      rcd "x-edit-appendfrom" <| [ "target", representSel target; "src", representSel src; "index", ps n ] @ (representStringOpt "pred" pred)
   | ListDelete(target, i) ->
       rcd "x-edit-listdelete" [ "target", representSel target; "index", ps i ]
   | ListReorder(target, perm) ->

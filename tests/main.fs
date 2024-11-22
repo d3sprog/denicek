@@ -6,6 +6,7 @@ open Tbd.Demos
 [<EntryPoint>]
 let main argv =
     Tests.runTestsInAssemblyWithCLIArgs [] argv
+    //Tests.runTestsWithCLIArgs [] argv moveBeforeTests
 
     //Tests.runTestsWithCLIArgs [] argv referenceUpdateTests
 

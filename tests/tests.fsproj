@@ -9,7 +9,8 @@
   <ItemGroup>
 		<Compile Include="../src/parsec.fs" />
     <Compile Include="../src/utils.fs" />
-    <Compile Include="../src/doc.fs" />
+		<Compile Include="../src/ordlist.fs" />
+		<Compile Include="../src/doc.fs" />
 		<Compile Include="../src/represent.fs" />
 		<Compile Include="../src/eval.fs" />
     <Compile Include="../src/demos.fs" />

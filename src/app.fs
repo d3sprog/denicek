@@ -159,9 +159,9 @@ module Helpers =
 
   let (|InteractionNode|_|) = function
     | Record("x-interaction", 
-        Patterns.ListFind "interactions" (List("x-interaction-list", ops)) & 
-        Patterns.ListFind "historyhash" (Primitive(String hash)) ) ->
-          let ops = ops |> List.sortBy (fst >> int) |> List.map snd
+        OrdList.Find "interactions" (List("x-interaction-list", ops)) & 
+        OrdList.Find "historyhash" (Primitive(String hash)) ) ->
+          let ops = ops |> OrdList.toList |> List.sortBy (fst >> int) |> List.map snd
           let opsWithHashes = ops |> List.map Represent.unrepresent |> List.map (fun (op, h) ->
             if h.IsNone then failwith "InteractionNode: Interaction nodes should have hashes!"
             else h.Value, op)
@@ -171,7 +171,7 @@ module Helpers =
   let getSavedInteractions doc = 
     match select [Field "saved-interactions"] doc with 
     | [ Record("x-saved-interactions", saved) ] ->
-        saved |> List.map (function 
+        saved |> OrdList.toList |> List.map (function 
           | k, InteractionNode(hist, ops) -> k, hist, ops
           | _ -> failwith "getSavedInteractions: Expected x-interaction" )
     | _ -> []
@@ -215,7 +215,8 @@ module Helpers =
       // target selector which affects Append/AppendFrom operations
       let newSels = getSelectors op |> List.map updateSel
       let op = withSelectors newSels op
-      withTargetSelector (updateSel (getTargetSelector op)) op)
+      withTargetSelector (updateSel (getTargetSelector op)) op
+      )
   
   let makeUnique n = n + "." + hash(System.Guid.NewGuid()).ToString("x")
 
@@ -225,7 +226,7 @@ module Helpers =
 
   let generalizeSaved t ops = 
     let newItems = ops |> List.choose (function
-      | { Kind = ListAppend(s, n, _) | ListAppendFrom(s, n, _) } -> 
+      | { Kind = ListAppend(s, n, _, _) | ListAppendFrom(s, n, _, _) } -> 
           Some(s @ [Index n], s @ [Index (makeUnique n)]) 
       | _ -> None)
     let ops = newItems |> List.fold (fun ops (osel, nsel) -> replacePrefixInEdits osel nsel ops) ops
@@ -239,6 +240,7 @@ module Helpers =
           match select (condSel @ [Field "result"]) doc with [Primitive(String "true")] -> true | _ -> false
       | _ -> true
     [ for markerSel in expandWildcards target doc do
+        printfn $"{formatSelector markerSel}"
         if check markerSel then 
           yield replacePrefixInEdits prefix markerSel ops |> generalizeSaved t ]
 
@@ -367,11 +369,11 @@ module Document =
           let el = unbox<Browser.Types.HTMLInputElement> el
           let ed = 
             if el.``type`` = "checkbox" && el.``checked`` then
-              RecordAdd(path, "@checked", Primitive(String "checked"))
+              RecordAdd(path, "@checked", None, Primitive(String "checked"))
             elif el.``type`` = "checkbox" && not el.``checked`` then
               RecordDelete(KeepReferences, path, "@checked")
             else
-              RecordAdd(path, "@value", Primitive(String el.value))
+              RecordAdd(path, "@value", None, Primitive(String el.value))
           let edit = { Kind = ed; Dependencies = []; GroupLabel = "" }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.DocumentEdits @ [ edit ])))
     ]
@@ -390,7 +392,7 @@ module Document =
 
       let rcdattrs = 
         match nd with 
-        | Record(_, nds) -> nds |> List.choose (function 
+        | Record(_, nds) -> nds |> Seq.choose (function 
             | n, Primitive(String s) when n.StartsWith("@") -> Some(n.Substring(1) => s)
             | n, Primitive(Number m) when n.StartsWith("@") -> Some(n.Substring(1) => string m)
             | _ -> None)
@@ -411,8 +413,8 @@ module Document =
       h?(tag) attrs [
         match nd with 
         | Record("x-formula", nds) -> 
-            let op = nds |> List.tryFind (fun (f,_) -> f = "op") |> Option.map snd
-            let args = nds |> List.filter (fun (f,_)-> f <> "op")
+            let op = nds |> Seq.tryFind (fun (f,_) -> f = "op") |> Option.map snd
+            let args = nds |> Seq.filter (fun (f,_)-> f <> "op")
             if op.IsSome then yield loop (path @ [Field "op"]) (pid ++ "op") op.Value
             else yield text "@"
             yield text "("
@@ -466,7 +468,7 @@ module Document =
               match hashMap.TryGetValue(oldhash) with
               | true, (nhash, _) ->
                   let nhash = Primitive(String(nhash.ToString("x")))
-                  yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", nhash)
+                  yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", None, nhash)
               | _ -> ()
 
               // Update the operations to new ones - if they have changed,
@@ -478,10 +480,10 @@ module Document =
                     | _ -> yield hash, op ]
 
               if newOps <> ops then
-                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", List("x-interaction-list", []))
+                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", None, List("x-interaction-list", OrdList.empty))
                 for i, (hash, op) in Seq.indexed newOps ->
                   ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
-                    Represent.represent (Some hash) op) ]
+                    (if i = 0 then None else Some(string(i-1))), Represent.represent (Some hash) op) ]
             |> List.map mked
           with e -> Browser.Dom.console.error(e); []
         let merged = merged @ fixhist
@@ -587,13 +589,14 @@ module History =
         ]
       ]
     let renderv = render KeepReferences
+    let fmtprev = function Some s -> ["prev", text s] | _ -> []
     match ed.Edit.Kind with 
     | PrimitiveEdit(sel, fn, None) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
     | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
-    | RecordAdd(sel, f, nd) -> renderv "addfield" "fa-plus" sel ["node", formatNode state trigger sel nd; "fld", text f]
+    | RecordAdd(sel, f, prev, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev prev
     | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
-    | ListAppend(sel, i, nd) -> renderv "append" "fa-at" sel ["i", text i; "node", formatNode state trigger sel nd ]
-    | ListAppendFrom(sel, i, src) -> renderv "appfrom" "fa-paperclip" sel ["i", text i; "node", Helpers.renderAbsoluteReference state trigger src ]
+    | ListAppend(sel, i, prev, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev prev
+    | ListAppendFrom(sel, i, prev, src) -> renderv "appfrom" "fa-paperclip" sel <| ["i", text i; "node", Helpers.renderAbsoluteReference state trigger src ] @ fmtprev prev
     | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
@@ -882,14 +885,15 @@ module Commands =
         yield command NS RN "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
-                yield RecordAdd([], "saved-interactions", Record("x-saved-interactions", []))
-              yield RecordAdd([Field "saved-interactions"], fld, 
-                Record("x-interaction", [ 
+                yield RecordAdd([], "saved-interactions", None, Record("x-saved-interactions", OrdList.empty))
+              yield RecordAdd([Field "saved-interactions"], fld, None,
+                Record("x-interaction", OrdList.ofList [ 
                   "historyhash", Primitive(String(histHash.ToString("x"))); 
-                  "interactions", List("x-interaction-list", []) ]))
+                  "interactions", List("x-interaction-list", OrdList.empty) ]))
               for i, (hash, op) in Seq.indexed recordedEds ->
                 ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
-                  string i, Represent.represent (Some hash) op) ] ))
+                  string i, (if i = 0 then None else Some(string(i-1))), 
+                    Represent.represent (Some hash) op) ] ))
              
     // The following are value edits regardless of to what they are applied
     // But it may be useful to apply them to all marked nodes. We use '+' in the notation 
@@ -902,51 +906,55 @@ module Commands =
       let fieldAssignment = P.char ':' <*>> fieldHole <<*> assignSymbol
       
       // Add field of some kind to a record
-      if isRecord nd then 
+      match nd with 
+      | Record(_, nds) ->
+        let pred = OrdList.tryLastKey nds
         match state.CommandState.CopySource with
         | None -> ()
         | Some src ->
             yield command sk rb "las la-paste" ("Add copied node to " + cr)
               ( fieldAssignment <<*> P.keyword "!v" |> mapEdg (fun (fld) ->
-                [ RecordAdd(sel, fld, Primitive(String ""))
+                [ RecordAdd(sel, fld, pred, Primitive(String ""))
                   Copy(rb.Value, sel @ [Field fld], src) ] ))
         yield command sk rb "las la-id-card" ("Add record field to " + cr)
           ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, Record(tag, [])) ))
+            RecordAdd(sel, fld, pred, Record(tag, OrdList.empty)) ))
         yield command sk rb "las la-list" ("Add list field to " + cr)
           ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, List(tag, [])) ))
+            RecordAdd(sel, fld, pred, List(tag, OrdList.empty)) ))
         yield command sk rb "las la-link" ("Add reference field to " + cr)
           ( fieldAssignment <*> refHole |> mapEd (fun (fld, ref) ->
-            RecordAdd(sel, fld, Reference(ref)) ))
+            RecordAdd(sel, fld, pred, Reference(ref)) ))
         yield command sk rb "las la-hashtag" ("Add numerical field to " + cr)
           ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
-            RecordAdd(sel, fld, Primitive(Number (int num))) ))
+            RecordAdd(sel, fld, pred, Primitive(Number (int num))) ))
         yield command sk rb "las la-font" ("Add string field to " + cr)
           ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
-            RecordAdd(sel, fld, Primitive(String str)) ))
+            RecordAdd(sel, fld, pred, Primitive(String str)) ))
+      | _ -> ()
 
       // Add item of some kind to a list
       match nd with 
       | List(_, children) ->
+        let pred = OrdList.tryLastKey children
         match state.CommandState.CopySource with
         | None -> ()
         | Some src ->
             yield command sk rb "las la-paste" ("Add copied node to " + cl)
               ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun idx ->
-                ListAppendFrom(sel, idx, src) ))
+                ListAppendFrom(sel, idx, pred, src) ))
         yield command sk rb "las la-id-card" ("Add record item to " + cl)
           ( fieldAssignment <*> recordTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, Record(tag, [])) ))
+            ListAppend(sel, idx, pred, Record(tag, OrdList.empty)) ))
         yield command sk rb "las la-list" ("Add list item to " + cl)
           ( fieldAssignment <*> listTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, List(tag, [])) ))
+            ListAppend(sel, idx, pred, List(tag, OrdList.empty)) ))
         yield command sk rb "las la-hashtag" ("Add numerical item to " + cl)
           ( fieldAssignment <*> numHole |> mapEd (fun (idx, num) ->
-            ListAppend(sel, idx, Primitive(Number (int num))) ))
+            ListAppend(sel, idx, pred, Primitive(Number (int num))) ))
         yield command sk rb "las la-font" ("Add string item to " + cl)
           ( fieldAssignment <*> strHole |> mapEd (fun (idx, str) ->
-            ListAppend(sel, idx, Primitive(String str)) ))
+            ListAppend(sel, idx, pred, Primitive(String str)) ))
       | _ -> ()
       
     // Built-in transformations of primitive values
@@ -1457,17 +1465,37 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table"]//;"conf-rename"; "conf-budget"; ]
+  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase; confBase; confAdd; confTable |] -> //[| confRename; confBudget; |] ->
+  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; |] ->
     let demos = 
       [ 
         "empty", readJson "[]", []
+        
         "?base", fromOperationsList (opsCore), []
         "?add", fromOperationsList (opsCore @ addSpeakerTwoStepOps), []
         "?table", fromOperationsList (opsCore @ refactorListOps), []
         "?merge", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerTwoStepOps)), []
+
+        //"?1", fromOperationsList (todoBaseOps @ todoAddOps "first" "First work"), []
+        //"?2", fromOperationsList (todoBaseOps @ todoAddOps "second" "Second work"), []
+        //"?m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (todoBaseOps @ todoAddOps "first" "First work") (todoBaseOps @ todoAddOps "second" "Second work")), []
+
+        "?1", fromOperationsList (opsCore @ opsBudget), []
+        "?1m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ opsBudget)), []
+        "?2", fromOperationsList (opsCore @ opsBudget), []
+        "?2m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ opsBudget) (opsCore @ refactorListOps)), []
+
+        //"?base", fromOperationsList (opsCore @ pbdAddInput), [ ]
+        //"?ref", fromOperationsList (opsCore @ pbdAddInput @ pbdAddFirstSpeaker @ refactorListOps), []
+        //"?add2", fromOperationsList (opsCore @ pbdAddInput @ pbdAddAnotherSpeaker), []
+        //"?merge", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ pbdAddInput @ pbdAddFirstSpeaker @ refactorListOps) (opsCore @ pbdAddInput @ pbdAddAnotherSpeaker)), []
+        //]
+      //let ops1 = merge (pbdCore @ refactorListOps) (pbdCore @ pbdAddFirstSpeaker @ pbdAddAnotherSpeaker) 
+      //let doc1 = applyHistory (rcd "div") ops1 
+      //let ops2 = merge (pbdCore @ pbdAddFirstSpeaker @ refactorListOps) (pbdCore @ pbdAddAnotherSpeaker)
+
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]
@@ -1478,9 +1506,9 @@ async {
         "counter", readJson counterBase, []
         "conf", readJson confBase, [
           "add", readJsonOps confAdd 
-          //"rename", readJsonOps confRename
+          "rename", readJsonOps confRename
           "table", readJsonOps confTable 
-          //"budget", readJsonOps confBudget
+          "budget", readJsonOps confBudget
         ]
       ]
     trigger (DemoEvent(LoadDemos demos))
