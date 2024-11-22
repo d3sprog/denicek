@@ -220,13 +220,16 @@ let formatString (s:string) =
 let formatReference (kind, sel) =
   (if kind = Relative then "./" else "/") + formatSelector sel
 
-let rec formatNode nd = 
-  match nd with 
-  | Primitive(String s) -> formatString s
-  | Primitive(Number n) -> string n
-  | List(tag, nds) -> sprintf "%s[%s]" tag (String.concat ", " [for k, v in nds -> $"{k}={formatNode nd}" ])
-  | Record(tag, nds) -> sprintf "%s{%s}" tag (String.concat ", " [for k, v in nds -> $"{k}={formatNode nd}" ])
-  | Reference(kind, sel) -> formatReference (kind, sel)
+let formatNode nd = 
+  let rec loop depth nd =
+    match nd with 
+    | _ when depth > 3 -> "..."
+    | Primitive(String s) -> formatString s
+    | Primitive(Number n) -> string n
+    | List(tag, nds) -> sprintf "%s[%s]" tag (String.concat ", " [for k, v in nds -> $"{k}={loop (depth+1) v}" ])
+    | Record(tag, nds) -> sprintf "%s{%s}" tag (String.concat ", " [for k, v in nds -> $"{k}={loop (depth+1) v}" ])
+    | Reference(kind, sel) -> formatReference (kind, sel)
+  loop 0 nd
 
 let formatReferenceBehaviour = function
   | UpdateReferences -> "s" | KeepReferences -> "v"
@@ -283,8 +286,8 @@ let withReferenceBehaviour rb e =
 /// the given node as an argument
 let rec getNodeReferences path nd = 
   match nd with 
-  | Record(_, nds) -> nds |> Seq.collect (fun (n, nd) -> getNodeReferences (path @ [Field n]) nd) |> List.ofSeq
-  | List(_, nds) -> nds |> Seq.collect (fun (n, nd) -> getNodeReferences (path @ [Index n]) nd) |> List.ofSeq
+  | Record(_, nds) -> nds |> OrdList.toListUnordered |> List.collect (fun (n, nd) -> getNodeReferences (path @ [Field n]) nd)
+  | List(_, nds) -> nds |> OrdList.toListUnordered |> List.collect (fun (n, nd) -> getNodeReferences (path @ [Index n]) nd)
   | Reference(Absolute, sels) -> [[], (Absolute, sels)]
   | Reference(Relative, sels) -> [path, (Relative, sels)]
   | Primitive _ -> []
@@ -297,8 +300,8 @@ let withNodeReferences nd sels =
   let next() = let r = List.head sels in sels <- List.tail sels; r
   let rec loop nd = 
     match nd with 
-    | Record(tag,  nds) -> Record(tag, OrdList.mapValues (fun n nd -> loop nd) nds)
-    | List(tag,  nds) -> List(tag, OrdList.mapValues (fun n nd -> loop nd) nds)
+    | Record(tag,  nds) -> Record(tag, OrdList.mapValuesUnordered (fun n nd -> loop nd) nds)
+    | List(tag,  nds) -> List(tag, OrdList.mapValuesUnordered (fun n nd -> loop nd) nds)
     | Reference _ -> let k, s = next() in Reference(k, s) 
     | Primitive _ -> nd
   loop nd
@@ -386,6 +389,19 @@ let getTargetSelectorPrefixes eds =
     let sel = getTargetSelector ed
     for prefix in List.prefixes sel do ignore(sels.Add(prefix))
   List.sort (List.ofSeq sels)
+
+let getInNodeReferences ed = 
+  match ed.Kind with 
+  | ListAppend(s, _, _, nd) 
+  | RecordAdd(s, _, _, nd) -> getNodeReferences s nd
+  | _ -> []
+
+let withInNodeRferences refs ed = 
+  let ret nk = { ed with Kind = nk }
+  match ed.Kind with 
+  | ListAppend(sel, i, pred, nd) -> ListAppend(sel, i, pred, withNodeReferences nd refs) |> ret
+  | RecordAdd(sel, f, pred, nd) -> RecordAdd(sel, f, pred, withNodeReferences nd refs) |> ret
+  | _ -> ed
 
 // Selector pointing to the affected node, at a location where it is before the edit
 let getAllReferences inNodes ed = 
@@ -796,6 +812,19 @@ let updateSelectors e1 e2 =
   // Value edits do not affect other selectors
   | _ -> [e2]
 
+let updateNodeReferences e1 e2 = 
+  let mapReferences f e2 = 
+    let sels = getInNodeReferences e2 |> List.map f
+    withInNodeRferences sels e2
+  match e1.Kind with 
+  | WrapRecord(_, id, _, sel) ->
+      mapReferences (wrapRecordSelectors id sel) e2
+  | WrapList(_, _, _, sel) -> 
+      mapReferences (wrapListSelectors sel) e2
+  | RecordRenameField(_, sel, fold, fnew) ->
+      mapReferences (renameFieldSelectors fold fnew sel) e2
+  | _ -> e2
+
 let simpleRemoveSelectorPrefix p1 p2 = 
   let rec loop specPref p1 p2 = 
     match p1, p2 with 
@@ -921,7 +950,7 @@ let moveBefore e1 (e2, e2extras) =
   let e2extras = 
     match applyToAdded e1 (e2, e2extras) with 
     | Some e2moreExtras -> e2extras @ e2moreExtras
-    | None -> List.collect (updateSelectors e1) e2extras
+    | None -> List.collect (updateNodeReferences e1 >> updateSelectors e1) e2extras
   match updateSelectors e1 e2 with 
   | e2::e2s -> (e2, e2extras) :: [ for e in e2s -> e, [] ] // no extras for copied?
   | [] -> failwith "never"

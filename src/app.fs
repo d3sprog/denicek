@@ -240,7 +240,6 @@ module Helpers =
           match select (condSel @ [Field "result"]) doc with [Primitive(String "true")] -> true | _ -> false
       | _ -> true
     [ for markerSel in expandWildcards target doc do
-        printfn $"{formatSelector markerSel}"
         if check markerSel then 
           yield replacePrefixInEdits prefix markerSel ops |> generalizeSaved t ]
 
@@ -526,28 +525,32 @@ module History =
         { state with SelectedEdits = set [ 0 .. appstate.DocumentState.DisplayEdits.Length - 1 ] }
 
 
-  let rec formatNode state trigger path (nd:Node) = 
-    match nd with 
-    | Primitive(Number n) -> text (string n)
-    | Primitive(String s) -> text s
-    | Reference(kind, sel) -> Helpers.renderReference state trigger (path, (kind, sel))
-    | List(tag, nds) -> h?span [] [
-          yield text "["
-          for j, (i, nd) in Seq.indexed nds do 
-            if j <> 0 then yield text ", "
-            yield formatNode state trigger (path @ [Index i]) nd
-          yield text "]"
-        ]
-    | Record(tag, nds) -> h?span [] [
-          yield text (tag + "{")
-          for i, (f, nd) in Seq.indexed nds do 
-            if i <> 0 then yield text ", "
-            yield text $"{f}="
-            yield formatNode state trigger (path @ [Field f]) nd
-          yield text "}"
-        ]
+  let formatNode state trigger path (nd:Node) = 
+    let rec loop depth path nd = 
+      match nd with 
+      | _ when depth > 4 -> text "..."
+      | Primitive(Number n) -> text (string n)
+      | Primitive(String s) -> text s
+      | Reference(kind, sel) -> Helpers.renderReference state trigger (path, (kind, sel))
+      | List(tag, nds) -> h?span [] [
+            yield text (tag + "[")
+            for j, (i, nd) in Seq.indexed nds do 
+              if j <> 0 then yield text ", "
+              yield text $"{i}="
+              yield loop (depth+1) (path @ [Index i]) nd
+            yield text "]"
+          ]
+      | Record(tag, nds) -> h?span [] [
+            yield text (tag + "{")
+            for i, (f, nd) in Seq.indexed nds do 
+              if i <> 0 then yield text ", "
+              yield text $"{f}="
+              yield loop (depth+1) (path @ [Field f]) nd
+            yield text "}"
+          ]
+    loop 0 path nd
 
-  let renderEdit state trigger (i, (histhash, ed)) = 
+  let renderEdit state trigger details (i, (histhash, ed)) = 
     let render rb n fa sel args = 
       h?li [] [ 
         h?input [ 
@@ -573,7 +576,7 @@ module History =
           yield h?span ["style" => "color:black"] [ text " (" ]
           yield Helpers.renderHistoryHash state trigger histhash
           yield h?span ["style" => "color:black"] [ text ") " ]
-          if i = state.DocumentState.DisplayEditIndex then
+          if details || i = state.DocumentState.DisplayEditIndex then
             yield h?br [] []
             for i, (k, v) in Seq.indexed args do
               if i <> 0 then yield text ", "
@@ -623,7 +626,7 @@ module History =
                 yield h?ol [] [
                   let ops = [ for hash, op in ops -> hash, { Edit = op; Evaluated = true }]
                   for ied in Seq.rev (Seq.indexed ops) -> 
-                    renderEdit state trigger ied
+                    renderEdit state trigger true ied
                 ]
               ]
           ]
@@ -647,7 +650,7 @@ module History =
           let groups = withHashAndIdx |> List.chunkBy (fun (_, (_, ed)) -> ed.Edit.GroupLabel)
           for ieds in groups do
             for ied in ieds do
-              yield renderEdit state trigger ied
+              yield renderEdit state trigger false ied
             yield h?li [] [ h?hr [] [] ]
         ]
       ] 
@@ -1452,8 +1455,24 @@ let asyncRequest file =
     req.send())
 
 
+let orderEdits eds = 
+  let mutable doc = rcd "div"
+  [ for ed in eds do
+      let ed = 
+        match ed.Kind with 
+        | RecordAdd(sel, f, _, nd) ->
+            match select sel doc with 
+            | Record(_, nds)::_ -> 
+                let prev = OrdList.tryLastKey nds
+                { ed with Kind = RecordAdd(sel, f, prev, nd) }
+            | _ -> ed
+        | _ -> ed
+      yield ed
+      doc <- apply doc ed ]
+
 let readJsonOps json = 
   List.map (Represent.unrepresent >> fst) (Serializer.nodesFromJsonString json) 
+  |> orderEdits
 
 let readJson json = 
   readJsonOps json |> fromOperationsList
@@ -1465,27 +1484,28 @@ let startWithHandler op = Async.StartImmediate <| async {
 let pbdCore = opsCore @ pbdAddInput
 
 async { 
-  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; ]
+  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-hide"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| helloBase; helloSaved; todoBase; todoCond; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; |] ->
+  | [| helloBase; helloSaved; todoBase; todoCond; todoHide; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; |] ->
     let demos = 
       [ 
         "empty", readJson "[]", []
         
         "?base", fromOperationsList (opsCore), []
-        "?add", fromOperationsList (opsCore @ addSpeakerTwoStepOps), []
+        "?add", fromOperationsList (opsCore @ addSpeakerOps), []
         "?table", fromOperationsList (opsCore @ refactorListOps), []
-        "?merge", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerTwoStepOps)), []
+        "?merge1", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerOps)), []
+        "?merge2", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)), []
 
         //"?1", fromOperationsList (todoBaseOps @ todoAddOps "first" "First work"), []
         //"?2", fromOperationsList (todoBaseOps @ todoAddOps "second" "Second work"), []
         //"?m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (todoBaseOps @ todoAddOps "first" "First work") (todoBaseOps @ todoAddOps "second" "Second work")), []
 
-        "?1", fromOperationsList (opsCore @ opsBudget), []
-        "?1m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ opsBudget)), []
-        "?2", fromOperationsList (opsCore @ opsBudget), []
-        "?2m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ opsBudget) (opsCore @ refactorListOps)), []
+        //"?1", fromOperationsList (opsCore @ opsBudget), []
+        //"?1m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ opsBudget)), []
+        //"?2", fromOperationsList (opsCore @ opsBudget), []
+        //"?2m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ opsBudget) (opsCore @ refactorListOps)), []
 
         //"?base", fromOperationsList (opsCore @ pbdAddInput), [ ]
         //"?ref", fromOperationsList (opsCore @ pbdAddInput @ pbdAddFirstSpeaker @ refactorListOps), []
@@ -1501,6 +1521,7 @@ async {
         ]
         "todo", readJson todoBase, [  
           "cond", readJsonOps todoCond
+          "hide", readJsonOps todoHide
           "remove", readJsonOps todoRemove 
         ]
         "counter", readJson counterBase, []

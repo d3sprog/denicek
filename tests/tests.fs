@@ -155,6 +155,25 @@ let moveBeforeTests =
       List.map formatEdit actual
       |> equals ["""recordAdd(budget,"count",na,/speakers/body)"""]
     }
+
+    // listAppend(items,"0.37a3bc43",na,li{}) [
+    //   recordAdd(items/#0.37a3bc43,"condition","lbl",x-formula{}); 
+    //   recordAdd(items/#0.37a3bc43/condition,"op",na,/$builtins/equals); 
+    //   recordAdd(items/#0.37a3bc43/condition,"left","op","checked"); 
+    //   recordAdd(items/#0.37a3bc43/condition,"right","left",./../../lbl/done/@checked); 
+    //   v.wrapRec(items/#0.37a3bc43/condition,"comp","span"); 
+    //   recordAdd(items/#0.37a3bc43/condition,"@style","comp","display:none")] String.js:169:41
+    //  * through: v.wrapRec(items/#0.71d8960d/condition,"comp","span")
+
+    test "moveBefore updates references added in extra edits" {
+      let actual = 
+        moveMultiBefore 
+          (WrapRecord(KeepReferences, "comp", "span", !/"/items/0/condition"))
+          ( ListAppend(!/"/items", "0", None, Record("li", OrdList.empty)),
+            [RecordAdd(!/"/items/0/condition", "left", None, Reference(Relative, !/"./../../done/@checked"))] )
+      formatEdit actual.[1]
+      |> equals """recordAdd(items/0/condition,"left",na,./../../../done/@checked)"""
+    }
 ]
 
 
@@ -389,9 +408,25 @@ open Tbd.OrdList
 
 [<Tests>]
 let ordListTests = 
-  let l = { Members = Map.ofList [ 1,"one"; 2,"two"; 3,"three" ]; Order = Map.ofList [ 1,2; 2,3; ]  }
-  let l2 = OrdList.empty |> OrdList.add (3, "three") None |> OrdList.add (1, "one") (Some 2)  |> OrdList.add (2, "two") (Some 3)
+  let l = 
+    { Members = Map.ofList [ 1,"one"; 2,"two"; 3,"three" ]; 
+      Order = Map.ofList [ 1,2; 2,3; ]  }
+  let l2 = 
+    OrdList.empty |> OrdList.add (3, "three") None 
+      |> OrdList.add (1, "one") (Some 2)  |> OrdList.add (2, "two") (Some 3)
+  let l3 = 
+    [ (0, "A"), None; (1, "A.A"), Some 0; (2, "A.A.A"), Some 1; (3, "A.A.A.A"), Some 2
+      (10, "A.B"), Some 0; (20, "A.B.A"), Some 10; (30, "A.B.A.A"), Some 20
+      (100, "A.C"), Some 0; (200, "A.C.A"), Some 100; (300, "A.C.A.A"), Some 200 ]
+    |> Seq.map (fun ((k1,v), k2) -> ((hash $"key {k1}", v), Option.map (fun k2 -> hash $"key {k2}") k2))
+    |> Seq.fold (fun ol (el, pred) -> OrdList.add el pred ol) OrdList.empty
+
   testList "OrdList tests" [
+    test "OrdLists sorting keeps things together" {
+      l3 |> OrdList.toSeq |> Seq.map snd |> List.ofSeq 
+        |> List.tail |> List.chunkBySize 3 |> List.sort
+        |> equals [["A.A"; "A.A.A"; "A.A.A.A"]; ["A.B"; "A.B.A"; "A.B.A.A"]; ["A.C"; "A.C.A"; "A.C.A.A"]]
+    }
     test "OrdList iterator works" {
       l |> List.ofSeq
       |> equals [(3, "three"); (2, "two"); (1, "one")]
