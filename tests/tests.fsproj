@@ -7,14 +7,29 @@
   </PropertyGroup>
 
   <ItemGroup>
-		<Compile Include="../src/parsec.fs" />
-    <Compile Include="../src/utils.fs" />
-		<Compile Include="../src/ordlist.fs" />
-		<Compile Include="../src/doc.fs" />
+		<Compile Include="../src/utils/parsec.fs">
+			<Link>utils/parsec.fs</Link>
+		</Compile>
+		<Compile Include="../src/utils/utils.fs">
+			<Link>utils/utils.fs</Link>
+		</Compile>
+		<Compile Include="../src/utils/ordlist.fs">
+			<Link>utils/ordlist.fs</Link>
+		</Compile>
+		<Compile Include="../src/doc/doc.fs">
+			<Link>doc/doc.fs</Link>
+		</Compile>
+		<Compile Include="../src/doc/apply.fs">
+			<Link>doc/apply.fs</Link>
+		</Compile>
+		<Compile Include="../src/doc/merge.fs">
+			<Link>doc/merge.fs</Link>
+		</Compile>
 		<Compile Include="../src/represent.fs" />
 		<Compile Include="../src/eval.fs" />
     <Compile Include="../src/demos.fs" />
-    <Compile Include="tests.fs" />
+		<Compile Include="utils.fs" />
+		<Compile Include="denicek.fs" />
     <Compile Include="main.fs" />
   </ItemGroup>
 

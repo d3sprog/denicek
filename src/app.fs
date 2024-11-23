@@ -1,9 +1,9 @@
-module Tbd.App.Main
+module Denicek.App.Main
 
-open Tbd
-open Tbd.Html
-open Tbd.Doc
-open Tbd.Demos
+open Denicek
+open Denicek.Html
+open Denicek.Doc
+open Denicek.Demos
 
 // --------------------------------------------------------------------------------------
 // Application state
@@ -180,7 +180,7 @@ module Helpers =
     h?a [
       "href" => "javascript:;"
       "click" =!> fun _ _ -> 
-          match takeUntilHash hist (fun e -> e.Edit) state.DocumentState.DisplayEdits with 
+          match Merge.takeUntilHash hist (fun e -> e.Edit) state.DocumentState.DisplayEdits with 
           | Some eds -> trigger(DocumentEvent(SetEditIndex(eds.Length - 1)))
           | _ -> ()
     ] [
@@ -196,7 +196,7 @@ module Helpers =
       "mouseover" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector(Some absSel)))
       "mouseout" =!> fun _ _ -> trigger(HistoryEvent(HighlightSelector None))
     ] [ 
-      yield text (formatReference ref)
+      yield text (Format.formatReference ref)
     ]
 
   let renderAbsoluteReference state trigger sel = 
@@ -207,16 +207,15 @@ module Helpers =
 
   let replacePrefixInEdits prefix replacementSel edits = 
     let updateSel sel = 
-      match removeSelectorPrefix prefix sel with 
+      match Merge.removeSelectorPrefix prefix sel with 
       | Some (_, rest) -> replacementSel @ rest
       | None -> sel
     edits |> List.map (fun op ->
       // First apply to all selectors (referenced), but then also to 
       // target selector which affects Append/AppendFrom operations
-      let newSels = getSelectors op |> List.map updateSel
-      let op = withSelectors newSels op
-      withTargetSelector (updateSel (getTargetSelector op)) op
-      )
+      let newSels = Merge.getSelectors op |> List.map updateSel
+      let op = Merge.withSelectors newSels op
+      Merge.withTargetSelector (updateSel (Merge.getTargetSelector op)) op )
   
   let makeUnique n = n + "." + hash(System.Guid.NewGuid()).ToString("x")
 
@@ -248,7 +247,7 @@ module Helpers =
 // --------------------------------------------------------------------------------------
 
 module Document =
-  open Tbd.Patterns
+  open Denicek.Patterns
 
   let (++) s1 s2 = if s1 <> "" then s1 + "_" + s2 else s2
   
@@ -329,7 +328,7 @@ module Document =
           let opss = opsf ()
           e.preventDefault()
           // TODO: Maybe this does the same thing as 'EditRecommendation' case in 'tryEnterCommand'?
-          let baseeds = takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
+          let baseeds = Merge.takeUntilHash histhash (fun x -> x) state.DocumentState.DocumentEdits 
           let baseeds = match baseeds with Some b -> b | _ -> failwith "getEventHandler: base history hash not found"
           for ops in opss do
             // Use unique ID to distinguish those edits from those occurring in the past
@@ -350,7 +349,7 @@ module Document =
                 let ops() = 
                   let targetSel = resolveReference path (targetKind, targetSel)
                   let condSel = resolveReference path (condKind, condSel)
-                  let condSel = match removeSelectorPrefix targetSel condSel with Some(_, condSel) -> condSel | _ -> failwith "getEventHandlers: target not prefix of condition"
+                  let condSel = match Merge.removeSelectorPrefix targetSel condSel with Some(_, condSel) -> condSel | _ -> failwith "getEventHandlers: target not prefix of condition"
                   let prefixSel = Represent.unrepresentSel prefixNd                  
                   Helpers.applySavedInteraction (id.Substring(0)) 
                     state.DocumentState.CurrentDocument targetSel prefixSel 
@@ -453,14 +452,14 @@ module Document =
             DisplayEditIndex = System.Int32.MaxValue }
   
     | MergeEdits edits ->
-        let merged, hashMap = mergeHistories IgnoreConflicts state.DocumentEdits edits
+        let merged, hashMap = Merge.mergeHistories Merge.IgnoreConflicts state.DocumentEdits edits
 
         // Merge histories produces map that maps original edits to  new edits.
         // We use this to fix all the saved interactions... (I guess this is a bit hacky?
         // The alternative would be to keep git-like tree and merge in more complex ways.)
         let fixhist =
           try
-            let doc = applyHistory state.Initial merged
+            let doc = Apply.applyHistory state.Initial merged
             let mked ed = { Kind = ed; GroupLabel = ""; Dependencies = [] } 
             [ for n, oldhash, ops in Helpers.getSavedInteractions doc do
               // Update the saved base hash for the saved interactions
@@ -564,7 +563,7 @@ module History =
         h?a [ 
           "class" => "" +? (i = state.DocumentState.DisplayEditIndex, "sel")
           "href" => "javascript:;"; "click" =!> fun _ _ -> 
-            let withHashAndIndex = withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed
+            let withHashAndIndex = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed
             let clicked, _ = withHashAndIndex |> List.find (fun (i, (hash, _)) -> hash = histhash)
             trigger(DocumentEvent(SetEditIndex clicked))
         ] [ 
@@ -646,7 +645,7 @@ module History =
           h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectAll) ] [ text "all" ]
         ]
         yield h?ol [] [    
-          let withHashAndIdx = withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
+          let withHashAndIdx = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
           let groups = withHashAndIdx |> List.chunkBy (fun (_, (_, ed)) -> ed.Edit.GroupLabel)
           for ieds in groups do
             for ied in ieds do
@@ -715,8 +714,8 @@ module Shortcuts =
 // --------------------------------------------------------------------------------------
 
 module Commands = 
-  open Tbd.Parsec
-  open Tbd.Parsec.Operators
+  open Denicek.Parsec
+  open Denicek.Parsec.Operators
 
   let isRecord = function Record _ -> true | _ -> false
   let isList = function List _ -> true | _ -> false
@@ -882,7 +881,7 @@ module Commands =
             Copy(KeepReferences, cursorSel, src) ))
 
     if not (state.HistoryState.SelectedEdits.IsEmpty) then 
-        let editsWithHash = state.DocumentState.DocumentEdits |> withHistoryHash 0 id 
+        let editsWithHash = state.DocumentState.DocumentEdits |> Merge.withHistoryHash 0 id 
         let recordedEds = [ for i in Seq.sort state.HistoryState.SelectedEdits -> editsWithHash.[i] ]
         let histHash = recordedEds |> Seq.last |> fst
         yield command NS RN "las la-save" "Save selected edits in the document"
@@ -967,7 +966,7 @@ module Commands =
         if kind = CurrentNode then " (current)", P.unit ()
         else " (marked)", P.char '*' |> P.map ignore
       if isString nd || isNumber nd then
-        for t in transformations do
+        for t in Apply.transformations do
           yield command sk rb "las la-at" (t.Label + lbl)
             ( P.char '@' <*> P.keyword t.Key <*> pAst <*>> t.Args |> mapEd (fun arg ->
               PrimitiveEdit(sel, t.Key, arg) )) 
@@ -981,7 +980,7 @@ module Commands =
       yield command CS RN "las la-at" ("Apply " + t + " to current")
         ( P.keyword $"@{t}!" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
                 yield commandh CS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t}! {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc cursorSel prefix None ops )) ]
@@ -989,7 +988,7 @@ module Commands =
       yield command GS RN "las la-at" ("Apply " + t + " to marked")
         ( P.keyword $"@{t}*" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
                 yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc genSel prefix None ops ))  ]
@@ -997,7 +996,7 @@ module Commands =
       yield command GS RN "las la-at" ("Apply " + t + " to some marked")
         ( P.keyword $"@{t}?" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
                 yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix ])
                   ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
                     Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) ]
@@ -1260,7 +1259,7 @@ module View =
         // Make sure the cursor is pointing to a visible thing
         let _, tr = trace nsel appstate.DocumentState.CurrentDocument |> Seq.exactlyOne
         match state.ViewSourceSelector with 
-        | Some srcSel when includes srcSel nsel -> 
+        | Some srcSel when prefix srcSel nsel -> 
             // The current location is inside view source region
             state 
         | _ ->
@@ -1324,12 +1323,12 @@ let updateDocument docState =
     [ for e in docState.DocumentEdits do yield { Edit = e; Evaluated = false }
       for e in docState.EvaluatedEdits do yield { Edit = e; Evaluated = true } ]
   let displayEditIndex = min docState.DisplayEditIndex (displayEdits.Length-1)
-  let currentDoc = try displayEdits.[0 .. displayEditIndex] |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
-  let finalDoc = try displayEdits |> List.map (fun x -> x.Edit) |> applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
+  let currentDoc = try displayEdits.[0 .. displayEditIndex] |> List.map (fun x -> x.Edit) |> Apply.applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
+  let finalDoc = try displayEdits |> List.map (fun x -> x.Edit) |> Apply.applyHistory docState.Initial with e -> Browser.Dom.console.error(e); rcd "root"
   { docState with 
       DisplayEdits = displayEdits; DisplayEditIndex = displayEditIndex
       CurrentDocument = currentDoc; FinalDocument = finalDoc 
-      FinalHash = hashEditList 0 docState.DocumentEdits }
+      FinalHash = Merge.hashEditList 0 docState.DocumentEdits }
 
 let rec tryEnterCommand trigger state = 
   match Commands.parseCommand state with
@@ -1454,25 +1453,8 @@ let asyncRequest file =
     req.``open``("GET", file)
     req.send())
 
-
-let orderEdits eds = 
-  let mutable doc = rcd "div"
-  [ for ed in eds do
-      let ed = 
-        match ed.Kind with 
-        | RecordAdd(sel, f, _, nd) ->
-            match select sel doc with 
-            | Record(_, nds)::_ -> 
-                let prev = OrdList.tryLastKey nds
-                { ed with Kind = RecordAdd(sel, f, prev, nd) }
-            | _ -> ed
-        | _ -> ed
-      yield ed
-      doc <- apply doc ed ]
-
 let readJsonOps json = 
   List.map (Represent.unrepresent >> fst) (Serializer.nodesFromJsonString json) 
-  |> orderEdits
 
 let readJson json = 
   readJsonOps json |> fromOperationsList
@@ -1491,31 +1473,13 @@ async {
     let demos = 
       [ 
         "empty", readJson "[]", []
-        
+        (*
         "?base", fromOperationsList (opsCore), []
         "?add", fromOperationsList (opsCore @ addSpeakerOps), []
         "?table", fromOperationsList (opsCore @ refactorListOps), []
         "?merge1", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerOps)), []
         "?merge2", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)), []
-
-        //"?1", fromOperationsList (todoBaseOps @ todoAddOps "first" "First work"), []
-        //"?2", fromOperationsList (todoBaseOps @ todoAddOps "second" "Second work"), []
-        //"?m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (todoBaseOps @ todoAddOps "first" "First work") (todoBaseOps @ todoAddOps "second" "Second work")), []
-
-        //"?1", fromOperationsList (opsCore @ opsBudget), []
-        //"?1m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ opsBudget)), []
-        //"?2", fromOperationsList (opsCore @ opsBudget), []
-        //"?2m", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ opsBudget) (opsCore @ refactorListOps)), []
-
-        //"?base", fromOperationsList (opsCore @ pbdAddInput), [ ]
-        //"?ref", fromOperationsList (opsCore @ pbdAddInput @ pbdAddFirstSpeaker @ refactorListOps), []
-        //"?add2", fromOperationsList (opsCore @ pbdAddInput @ pbdAddAnotherSpeaker), []
-        //"?merge", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ pbdAddInput @ pbdAddFirstSpeaker @ refactorListOps) (opsCore @ pbdAddInput @ pbdAddAnotherSpeaker)), []
-        //]
-      //let ops1 = merge (pbdCore @ refactorListOps) (pbdCore @ pbdAddFirstSpeaker @ pbdAddAnotherSpeaker) 
-      //let doc1 = applyHistory (rcd "div") ops1 
-      //let ops2 = merge (pbdCore @ pbdAddFirstSpeaker @ refactorListOps) (pbdCore @ pbdAddAnotherSpeaker)
-
+        *)
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]

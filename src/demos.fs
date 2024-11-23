@@ -1,8 +1,8 @@
-﻿module Tbd.Demos
-open Tbd
-open Tbd.Doc
-open Tbd.Parsec
-open Tbd.Parsec.Operators
+﻿module Denicek.Demos
+open Denicek
+open Denicek.Doc
+open Denicek.Parsec
+open Denicek.Parsec.Operators
 
 // --------------------------------------------------------------------------------------
 // Helper functions for constructing things
@@ -29,7 +29,7 @@ let ap0 s i n = mkEd <| ListAppend(s, i, None, n)
 let apf0 s i sel = mkEd <| ListAppendFrom(s, i, None, sel)
 let ap s i pi n = mkEd <| ListAppend(s, i, Some pi, n)
 let apf s i pi sel = mkEd <| ListAppendFrom(s, i, Some pi, sel)
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
+let ed sel fn f = Apply.transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
 let add sel f pred n = mkEd <| RecordAdd(sel, ffld f, Some pred, n)
 let add0 sel f n = mkEd <| RecordAdd(sel, ffld f, None, n)
 let ord s l = mkEd <| ListReorder(s, l)
@@ -244,21 +244,8 @@ let todoAddOps idwork work =
   ]
 
 // --------------------------------------------------------------------------------------
-// Leftovers
+// Counter demo
 // --------------------------------------------------------------------------------------
-
-  (*
-let addTransformOps = 
-  [
-    ap [] (nds "ttitle" "h2" "Transformers")
-    add [] (rcd "x-patterns" "x-patterns")
-    add [ Field "x-patterns") (rcd "head" "thead")
-    add [ Field "x-patterns/head" ] (rcd "*" "td")
-    add [ Field "x-patterns/head/*" ] (rcd "*" "x-hole")
-    add [ Field "x-patterns/head/*/*" ] (rcd "mq" "marquee")
-    add [ Field "x-patterns/head/*/*/mq" ] (rcd "" "x-match")
-  ] 
-  *)
 
 let opsBaseCounter = 
   [ 
@@ -290,14 +277,14 @@ let opsCounterHndl baseList =
   [ 
     yield add0 (!/"/") "saved-interactions" (rcd "x-saved-interactions")
     yield add0 (!/"/saved-interactions") "increment" (rcd "x-interaction")
-    yield add0 (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
+    yield add0 (!/"/saved-interactions/increment") "historyhash" (ps ((Merge.hashEditList 0 baseList).ToString("x")))
     yield add0 (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
     for i, op in Seq.indexed opsCounterInc ->
       ap0 (!/ "/saved-interactions/increment/interactions") (string i) (Represent.represent None op) 
     yield add0 (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
 
     yield add0 (!/"/saved-interactions") "decrement" (rcd "x-interaction")
-    yield add0 (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
+    yield add0 (!/"/saved-interactions/decrement") "historyhash" (ps ((Merge.hashEditList 0 baseList).ToString("x")))
     yield add0 (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
     for i, op in Seq.indexed opsCounterDec ->
       ap0 (!/ "/saved-interactions/decrement/interactions") (string i) (Represent.represent None op) 

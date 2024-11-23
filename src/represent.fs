@@ -1,6 +1,6 @@
-module Tbd.Represent
-open Tbd.Doc
-open Tbd.Patterns
+module Denicek.Represent
+open Denicek.Doc
+open Denicek.Patterns
 
 // --------------------------------------------------------------------------------------
 // Representing edits as nodes
@@ -14,6 +14,7 @@ let (|Findrb|_|) (d:System.Collections.Generic.IDictionary<_, Node>) =
   | true, Primitive(String "keep") -> Some(KeepReferences)
   | true, v -> failwith $"Findrb: expected 'update' or 'keep' but got '{v}'"
   | _ -> None
+
 let rcd id kvp = Record(id, OrdList.ofList kvp)
 
 let representRb = function
@@ -77,7 +78,8 @@ let unrepresent nd =
       PrimitiveEdit(unrepresentSel tgt, op, None) |> ret
   | Record("x-edit-updatetag", Lookup (Find "target" tgt & Finds "new" ntag)) ->
       UpdateTag(unrepresentSel tgt, ntag) |> ret
-  // Shared edits
+
+  // Shared edits (with reference behaviour)
   | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i & TryFind "pred" pred)) ->
       ListAppend(unrepresentSel sel, i, unrepresentStringOpt pred, nd) |> ret
   | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src & Finds "index" i & TryFind "pred" pred)) ->
@@ -97,6 +99,7 @@ let unrepresent nd =
   | Record("x-edit-listreorder", Lookup (Find "target" tgt & Find "perm" perm)) ->
       ListReorder(unrepresentSel tgt, unrepresentStringList perm) |> ret
   | _ -> failwith $"unrepresent - Missing case for: {nd}"
+
 
 let rec represent (hash:int option) op = 
   let ps v = Primitive(String v)
@@ -123,7 +126,8 @@ let rec represent (hash:int option) op =
       rcd "x-edit-listdelete" [ "target", representSel target; "index", ps i ]
   | ListReorder(target, perm) ->
       rcd "x-edit-listreorder" [ "target", representSel target; "perm", representStringList perm ]
-  // Structural edits
+  
+  // Structural edits (with reference behaviour)
   | WrapRecord(rb, tag, id, target) ->
       rcd "x-edit-wraprec" [ "tag", ps tag; "fld", ps id; "target", representSel target; representRb rb ] 
   | RecordRenameField(rb, target, fold, fnew) ->

@@ -1,14 +1,16 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="parsec.fs" />
-    <Compile Include="utils.fs" />
-    <Compile Include="ordlist.fs" />
-    <Compile Include="doc.fs" />
-		<Compile Include="represent.fs" />
+    <Compile Include="utils/parsec.fs" />
+    <Compile Include="utils/utils.fs" />
+    <Compile Include="utils/ordlist.fs" />
+    <Compile Include="doc/doc.fs" />
+    <Compile Include="doc/apply.fs" />
+    <Compile Include="doc/merge.fs" />
     <Compile Include="eval.fs" />
+		<Compile Include="represent.fs" />
     <Compile Include="demos.fs" />
     <Compile Include="matcher.fs" />
     <Compile Include="serializer.fs" />

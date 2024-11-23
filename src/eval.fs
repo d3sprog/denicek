@@ -1,7 +1,7 @@
-﻿module Tbd.Eval
+﻿module Denicek.Eval
 
-open Tbd
-open Tbd.Doc
+open Denicek
+open Denicek.Doc
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -72,7 +72,7 @@ let evaluateBuiltin op (args:Map<string, Node>)=
   | "count" | "sum" ->
       let sum = List.map (function 
         | Primitive(Number n) -> n 
-        | nd -> failwith $"evaluate: Argument of 'sum' is not a number but {formatNode nd}") >> List.sum 
+        | nd -> failwith $"evaluate: Argument of 'sum' is not a number but {Format.formatNode nd}") >> List.sum 
       let count = List.length >> float
       let f = (dict [ "count", count; "sum", sum ]).[op]
       match args.TryFind "arg" with
@@ -134,7 +134,7 @@ let evaluateAll doc =
   let rec loop doc = seq {
     let edits = evaluateOne doc
     yield! edits
-    let ndoc = applyHistory doc edits 
+    let ndoc = Apply.applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
   List.ofSeq (loop doc)
 
@@ -144,5 +144,5 @@ let evaluateAll doc =
 /// on the "side" of main history) and re-evaluate invalidated things.
 let updateEvaluatedEdits oldDocEdits newDocEdits evalEdits = 
   let editsAfterEval = List.skip (List.length oldDocEdits) newDocEdits
-  pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
+  Merge.pushEditsThroughSimple Merge.RemoveConflicting editsAfterEval evalEdits
   

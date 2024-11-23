@@ -1,4 +1,9 @@
-﻿namespace Tbd
+﻿namespace Denicek
+
+// --------------------------------------------------------------------------------------
+// Ordered list inspired by MRDT list that keeps order of its members
+// using an "occurs before" relation.
+// --------------------------------------------------------------------------------------
 
 module rec OrdList = 
 
@@ -9,7 +14,10 @@ module rec OrdList =
       member x.GetEnumerator() = (OrdList.toSeq x : seq<_>).GetEnumerator()
       member x.GetEnumerator () = (OrdList.toSeq x : System.Collections.IEnumerable).GetEnumerator()
 
-
+  // When turning OrdList into sorted list, we want to keep items that
+  // "occur before" just after each other (to avoid interleaving unrelated
+  // things). Do this by building a tree and DFS
+  
   type OrdTree<'K when 'K : comparison> = OrdNode of Map<'K, OrdTree<'K>>
   
   let orderPath o ol = 
@@ -29,8 +37,21 @@ module rec OrdList =
     
   let getOrderTree ol = 
     ol.Members |> Seq.fold (fun ord (KeyValue(k, v)) -> orderTreeAdd (orderPath k ol) ord) (OrdNode Map.empty)
+
+  let toList ol =
+    let rec loop acc (OrdNode nds) = 
+      nds |> Seq.fold (fun acc (KeyValue(k, sub)) ->
+        let acc = if ol.Members.ContainsKey(k) then (k, ol.Members.[k])::acc else acc
+        loop acc sub) acc
+    loop [] (getOrderTree ol) |> List.rev
+
+  // Various other operations for working with OrdTrees
+
+  let toSeq ol =
+    toList ol |> Seq.ofList
   
-  let neqAdd (k, v) (m:Map<_, _>) = if k <> v then m.Add(k, v) else m
+  let neqAdd (k, v) (m:Map<_, _>) = 
+    if k <> v then m.Add(k, v) else m
 
   let toListUnordered ol = 
     ol.Members |> Map.toList
@@ -46,16 +67,6 @@ module rec OrdList =
     match ol.Order.TryFind k1 with 
     | Some v -> k2 = v || after v k2 ol
     | _ -> false
-
-  let toList ol =
-    let rec loop acc (OrdNode nds) = 
-      nds |> Seq.fold (fun acc (KeyValue(k, sub)) ->
-        let acc = if ol.Members.ContainsKey(k) then (k, ol.Members.[k])::acc else acc
-        loop acc sub) acc
-    loop [] (getOrderTree ol) |> List.rev
-
-  let toSeq ol =
-    toList ol |> Seq.ofList
 
   let fold f st ol = 
     ol |> toSeq |> Seq.fold f st 
@@ -99,5 +110,9 @@ module rec OrdList =
 
   let (|Find|_|) k ol = 
     ol.Members.TryFind(k)
+
+// --------------------------------------------------------------------------------------
+// Type alias in the global namespace
+// --------------------------------------------------------------------------------------
 
 type OrdList<'K, 'V when 'K : comparison> = OrdList.OrdList<'K, 'V>

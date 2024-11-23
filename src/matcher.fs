@@ -1,5 +1,5 @@
-﻿module Tbd.Matcher
-open Tbd.Doc
+﻿module Denicek.Matcher
+open Denicek.Doc
 (*
 let rec matches nd pattern = 
   if (nd.ID <> pattern.ID && pattern.ID <> "*" && pattern.ID <> "#") then None else

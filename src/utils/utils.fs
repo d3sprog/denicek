@@ -1,4 +1,8 @@
-﻿namespace Tbd
+﻿namespace Denicek
+
+// --------------------------------------------------------------------------------------
+// Useful active patterns
+// --------------------------------------------------------------------------------------
 
 module Patterns =
   let (|As|) v i = (v, i)
@@ -10,6 +14,10 @@ module Patterns =
   let (|TryFind|) k (d:System.Collections.Generic.IDictionary<_, _>) = 
     if d.ContainsKey k then Some(d.[k]) else None
 
+// --------------------------------------------------------------------------------------
+// Additional functions for the List module
+// --------------------------------------------------------------------------------------
+
 module List = 
 
   let partitionBy sizes list = 
@@ -18,8 +26,6 @@ module List =
         let res = List.take s list 
         list <- List.skip s list 
         res ]
-
-  //partitionBy [0;1;2;3] (List.ofSeq "abcdef")
 
   let foldCollect (f:'st -> 'a -> 'b list * 'st) st list = 
     let st, acc = List.fold (fun (st, acc) v -> let res, st = f st v in (st, res::acc)) (st, []) list 
@@ -40,10 +46,6 @@ module List =
       let res, nstate = f state v
       nstate, res::acc) (init, []) 
     |> snd |> List.rev 
-
-  // filterWithState (fun i v -> 
-  //   if i < 3 && v % 2 = 0 then true, i+1
-  //   else false, i) 0 [10 .. 20]
 
   let prefixes list = 
     let rec loop prefix acc list = 
@@ -80,6 +82,3 @@ module List =
     match list with 
     | x::xs -> loop [] [x] (f x) xs
     | [] -> []
-
-  // chunkBy snd [1,'a'; 2,'a'; 3,'b'; 4,'c'; 5,'c'; 6,'c'; 7,'d']
-  // |> List.map List.length

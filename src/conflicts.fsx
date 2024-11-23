@@ -134,7 +134,7 @@ let getDependencies ed =
   | _ -> ed.Dependencies
 *)
 let addEffect effs (kindEff, selEff) = 
-  List.exists (fun (k, e) -> includesGeneral true false e selEff)
+  List.exists (fun (k, e) -> prefixGeneral true false e selEff)
 
 
 let e1eff = getEffects addSpeakerOps

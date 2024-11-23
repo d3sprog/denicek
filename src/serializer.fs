@@ -1,5 +1,5 @@
-﻿module Tbd.Serializer
-open Tbd.Doc
+﻿module Denicek.Serializer
+open Denicek.Doc
 open Fable.Core
 
 // --------------------------------------------------------------------------------------

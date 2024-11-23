@@ -1,4 +1,10 @@
-﻿module Tbd.Parsec
+﻿module Denicek.Parsec
+
+// --------------------------------------------------------------------------------------
+// Parser that can return partial match. If the start of the input can be parsed, this
+// returns a "template" showing how the rest of the input should look in order to be
+// fully parsed (used in the toolbox, to show completions)
+// --------------------------------------------------------------------------------------
 
 type Template = 
   | Fixed of string
@@ -13,6 +19,10 @@ type ParseResult<'T> =
   | Failed
 
 type Parser<'T> = Parser of (char list option -> ParseResult<'T>)
+
+// --------------------------------------------------------------------------------------
+// Parser primitives
+// --------------------------------------------------------------------------------------
 
 module P = 
 
@@ -156,6 +166,10 @@ module P =
   let run (Parser p) (s:string) = 
     p (Some (List.ofSeq s))
 
+// --------------------------------------------------------------------------------------
+// Operators
+// --------------------------------------------------------------------------------------
+
 module Operators = 
   open P
   
@@ -163,16 +177,3 @@ module Operators =
   let (<*>) p1 p2 = andThen p1 p2
   let (<<*>) p1 p2 = andThen p1 p2 |> map fst
   let (<*>>) p1 p2 = andThen p1 p2 |> map snd
-
-  (*
-  let p = keyword "hi" <*> char ' ' <*> hole "abc" (oneOrMore alphaNumeric)
-
-  let (Parser f) = p
-  f (Some (List.ofSeq "hi there"))
-  f (Some (List.ofSeq "hi "))
-  f (Some (List.ofSeq "hi"))
-  f (Some (List.ofSeq "h"))
-  f None
-
-
-  *)
