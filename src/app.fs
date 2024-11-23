@@ -202,12 +202,19 @@ module Helpers =
   let renderAbsoluteReference state trigger sel = 
     renderReference state trigger ([], (Absolute, sel))
 
+  let getTargetSelectorPrefixes eds = 
+    let sels = System.Collections.Generic.HashSet<_>()
+    for ed in eds do
+      let sel = getTargetSelector ed
+      for prefix in List.prefixes sel do ignore(sels.Add(prefix))
+    List.sort (List.ofSeq sels)
+
   let generalizeToStructuralSelector sels = 
     sels |> List.map (function Index _ -> All | s -> s)
 
   let replacePrefixInEdits prefix replacementSel edits = 
     let updateSel sel = 
-      match Merge.removeSelectorPrefix prefix sel with 
+      match removePrefix true false prefix sel with 
       | Some (_, rest) -> replacementSel @ rest
       | None -> sel
     edits |> List.map (fun op ->
@@ -349,7 +356,7 @@ module Document =
                 let ops() = 
                   let targetSel = resolveReference path (targetKind, targetSel)
                   let condSel = resolveReference path (condKind, condSel)
-                  let condSel = match Merge.removeSelectorPrefix targetSel condSel with Some(_, condSel) -> condSel | _ -> failwith "getEventHandlers: target not prefix of condition"
+                  let condSel = match removePrefix true false targetSel condSel with Some(_, condSel) -> condSel | _ -> failwith "getEventHandlers: target not prefix of condition"
                   let prefixSel = Represent.unrepresentSel prefixNd                  
                   Helpers.applySavedInteraction (id.Substring(0)) 
                     state.DocumentState.CurrentDocument targetSel prefixSel 
@@ -980,7 +987,7 @@ module Commands =
       yield command CS RN "las la-at" ("Apply " + t + " to current")
         ( P.keyword $"@{t}!" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Helpers.getTargetSelectorPrefixes ops) do 
                 yield commandh CS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t}! {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc cursorSel prefix None ops )) ]
@@ -988,7 +995,7 @@ module Commands =
       yield command GS RN "las la-at" ("Apply " + t + " to marked")
         ( P.keyword $"@{t}*" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Helpers.getTargetSelectorPrefixes ops) do 
                 yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix])
                   ( P.keyword $"@{t}* {string i}" |> mapEds (fun _ ->
                     Helpers.applySavedInteraction t doc genSel prefix None ops ))  ]
@@ -996,7 +1003,7 @@ module Commands =
       yield command GS RN "las la-at" ("Apply " + t + " to some marked")
         ( P.keyword $"@{t}?" |> P.map (fun _ -> 
             NestedRecommendation [
-              for i, prefix in Seq.indexed (Merge.getTargetSelectorPrefixes ops) do 
+              for i, prefix in Seq.indexed (Helpers.getTargetSelectorPrefixes ops) do 
                 yield commandh GS RN "las la-at" (fun state -> [text "Using current as "; Helpers.renderAbsoluteReference state trigger prefix ])
                   ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
                     Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) ]
@@ -1455,7 +1462,7 @@ let asyncRequest file =
 
 let readJsonOps json = 
   List.map (Represent.unrepresent >> fst) (Serializer.nodesFromJsonString json) 
-
+  
 let readJson json = 
   readJsonOps json |> fromOperationsList
 
