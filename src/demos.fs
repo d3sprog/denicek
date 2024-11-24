@@ -1,8 +1,8 @@
-﻿module Tbd.Demos
-open Tbd
-open Tbd.Doc
-open Tbd.Parsec
-open Tbd.Parsec.Operators
+﻿module Denicek.Demos
+open Denicek
+open Denicek.Doc
+open Denicek.Parsec
+open Denicek.Parsec.Operators
 
 // --------------------------------------------------------------------------------------
 // Helper functions for constructing things
@@ -13,42 +13,41 @@ let ffld f =
   else f
 
 // Node construction
-let rcd tag = Record(tag, [])
-let lst tag = List(tag, [])
+let rcd tag = Record(tag, OrdList.empty)
+let lst tag = List(tag, OrdList.empty)
 let ref sel = Reference(Absolute, sel)
 let ps s = Primitive(String s)
 let pn n = Primitive(Number n)
-let nds fld tag s = Record(tag, [ffld fld, Primitive(String s)])
-let ndn fld tag n = Record(tag, [ffld fld, Primitive(Number n)])
-let ndr fld tag sel = Record(tag, [ffld fld, Reference(sel)])
+let nds fld tag s = Record(tag, OrdList.singleton (ffld fld) (Primitive(String s)))
+let ndn fld tag n = Record(tag, OrdList.singleton (ffld fld) (Primitive(Number n)))
+let ndr fld tag sel = Record(tag, OrdList.singleton (ffld fld) (Reference(sel)))
 
-let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = ""; Disabled = false }
+let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
 
 // Value edits
-let apV s n = mkEd <| Shared(ValueKind, ListAppend(s, n))  
-let apS s n = mkEd <| Shared(StructuralKind, ListAppend(s, n))  
-let apfV s sel = mkEd <| Shared(ValueKind, ListAppendFrom(s, sel))  
-let apfS s sel = mkEd <| Shared(StructuralKind, ListAppendFrom(s, sel))  
-let ed sel fn f = transformationsLookup.["_" + fn] <- f; mkEd <| Value(PrimitiveEdit(sel, "_" + fn, None))  
-let add sel f n = mkEd <| Value(RecordAdd(sel, ffld f, n)) 
+let ap0 s i n = mkEd <| ListAppend(s, i, None, n)
+let ap s i pi n = mkEd <| ListAppend(s, i, Some pi, n)
+let ed sel fn f = Apply.transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
+let add sel f pred n = mkEd <| RecordAdd(sel, ffld f, Some pred, n)
+let add0 sel f n = mkEd <| RecordAdd(sel, ffld f, None, n)
+let ord s l = mkEd <| ListReorder(s, l)
+let tag s t = mkEd <| UpdateTag(s, t)
 
-// Shared structural
-let ordS s l = mkEd <| Shared(StructuralKind, ListReorder(s, l))  
-let delrV sel f = mkEd <| Shared(ValueKind, RecordDelete(sel, f)) 
-let wrV s fld tag = mkEd <| Shared(ValueKind, WrapRecord(ffld fld, tag, s)) 
-let wrS s fld tag = mkEd <| Shared(StructuralKind, WrapRecord(ffld fld, tag, s)) 
-let wlS s tag = mkEd <| Shared(StructuralKind, WrapList(tag, s)) 
-let cpS s1 s2 = mkEd <| Shared(StructuralKind, Copy(s2, s1)) 
-let cpV s1 s2 = mkEd <| Shared(ValueKind, Copy(s2, s1)) 
-let tagV s t = mkEd <| Value(UpdateTag(s, t)) 
-let uidS s fold fnew = mkEd <| Shared(StructuralKind, RecordRenameField(s, fold, ffld fnew)) 
-let uidV s fold fnew = mkEd <| Shared(ValueKind, RecordRenameField(s, fold, ffld fnew)) 
+// Structural edits
+let delrV sel f = mkEd <| RecordDelete(KeepReferences, sel, f)
+let wrV s fld tag = mkEd <| WrapRecord(KeepReferences, ffld fld, tag, s)
+let wrS s fld tag = mkEd <| WrapRecord(UpdateReferences, ffld fld, tag, s)
+let wlS s i tag = mkEd <| WrapList(UpdateReferences, tag, i, s)
+let cpS s1 s2 = mkEd <| Copy(UpdateReferences, s2, s1)
+let cpV s1 s2 = mkEd <| Copy(KeepReferences, s2, s1)
+let uidS s fold fnew = mkEd <| RecordRenameField(UpdateReferences, s, fold, ffld fnew)
+let uidV s fold fnew = mkEd <| RecordRenameField(KeepReferences, s, fold, ffld fnew)
 
 let selPart = 
   ( ((P.ident <|> P.atIdent <|> P.dollarIdent) |> P.map Field) <|>
     (P.char '*' |> P.map (fun _ -> All)) <|>
     (P.keyword ".." |> P.map (fun _ -> DotDot)) <|>
-    (P.num |> P.map Index) ) |> P.hole "sel"
+    (P.char '#' <*>> P.ident |> P.map Index) ) |> P.hole "sel"
   
 let refHoleBase = 
     (P.oneOrMoreEnd (P.char '/' <*>> selPart) |> P.map (fun xs -> Absolute, xs)) <|>
@@ -69,35 +68,43 @@ let (!/) s =
 // Creates <ul><li> list of speakers
 let opsCore = 
   [
-    add [] "t1" (nds "value" "h1" "Programming conference 2023")
-    add [] "t2" (nds "value" "h2" "Speakers")
-    add [] "speakers" (lst "ul")
-    apV (!/ "/speakers") (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
-    apV (!/ "/speakers") (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
-    apV (!/ "/speakers") (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
+    add0 [] "t1" (nds "value" "h1" "Programming conference 2023")
+    add [] "t2" "t1" (nds "value" "h2" "Speakers")
+    add [] "speakers" "t2" (lst "ul")
+    ap0 (!/ "/speakers") "goldberg" (nds "value" "li" "Adele Goldberg, adele@xerox.com") 
+    ap (!/ "/speakers") "hamilton" "goldberg" (nds "value" "li" "Margaret Hamilton, hamilton@mit.com") 
+    ap (!/ "/speakers") "jennings" "hamilton" (nds "value" "li" "Betty Jean Jennings, betty@rand.com") 
   ]
 
 // Add <li> and reorder items
 let addSpeakerOps = 
   [ 
-    apS (!/ "/speakers") (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    ordS (!/ "/speakers") [3; 0; 1; 2] 
+    ap0 (!/ "/speakers") "lovelace" (nds "value" "li" "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"] 
+  ]
+
+  // Add <li> and reorder items
+let addSpeakerTwoStepOps = 
+  [ 
+    ap0 (!/ "/speakers") "floyd" (rcd "li")
+    add0 (!/ "/speakers/#floyd") "value" (ps "Christiane Floyd, floyd@tu-berlin.de")
   ]
 
 // Create <li> as /temp and then copy into <ul>
 let addSpeakerViaTempOps = 
   [
-    add [] "temp" (rcd "li")
-    add (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apfS (!/ "/speakers") (!/ "/temp")
+    add0 [] "temp" (rcd "li")
+    add0 (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    ap0 (!/ "/speakers") "lovelace" (ps "")
+    cpV (!/"/temp") (!/ "/speakers/#lovelace")
     delrV (!/ "/") "temp"
-    ordS (!/ "/speakers") [3; 0; 1; 2] 
+    ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"]
   ]
 
 // String replace specific list item
 let fixSpeakerNameOps = 
   [
-    ed (!/ "/speakers/2/value") "rename Jean" <| function 
+    ed (!/ "/speakers/#jennings/value") "rename Jean" <| function 
       | (_, String s) -> String(s.Replace("Betty Jean Jennings", "Jean Jennings Bartik").Replace("betty@", "jean@"))
       | _ -> failwith "fixSpeakerNameOps - wrong primitive"
   ]
@@ -108,16 +115,18 @@ let refactorListOps =
     uidS (!/ "/speakers/*") "value" "name"
     wrS (!/ "/speakers/*/name") "contents" "td"
     
-    add (!/ "/speakers/*") "email" (nds "contents" "td" "")
-    tagV (!/ "/speakers/*") "tr"
-    tagV (!/ "/speakers") "tbody"
+    add (!/ "/speakers/*") "email" "name" (nds "contents" "td" "")
+    tag (!/ "/speakers/*") "tr"
+    tag (!/ "/speakers") "tbody"
     
     wrS (!/ "/speakers") "body" "table"
-    add (!/ "/speakers") "head" (rcd "thead")
-    add (!/ "/speakers/head") "name" (nds "value" "td" "Name")
-    add (!/ "/speakers/head") "email" (nds "value" "td" "E-mail")
+    
+    add0 (!/ "/speakers") "head" (rcd "thead")
+    add0 (!/ "/speakers/head") "name" (nds "value" "td" "Name")
+    add (!/ "/speakers/head") "email" "name" (nds "value" "td" "E-mail")
 
     cpS (!/ "/speakers/body/*/name") (!/ "/speakers/body/*/email")
+
     ed (!/ "/speakers/body/*/name/contents") "get name" <| function 
       | _, String s -> String(s.Substring(0, s.IndexOf(',')))
       | _ -> failwith "refactorListOps - invalid primitive"
@@ -129,88 +138,88 @@ let refactorListOps =
 // Add budget computation using formulas
 let opsBudget = 
   [
-    add [] "t3" (nds "v" "h2" "Budgeting")
-    add [] "t4" (nds "v" "h3" "Number of people")
-    add [] "counts" (rcd "ul")
-    add (!/ "/counts") "attendees" (ps "Attendees: ") 
+    add [] "t3" "speakers" (nds "v" "h2" "Budgeting")
+    add [] "t4" "t3" (nds "v" "h3" "Number of people")
+    add [] "counts" "t4" (rcd "ul")
+    add0 (!/ "/counts") "attendees" (ps "Attendees: ") 
     wrS (!/ "/counts/attendees") "lable" "li"    
-    add (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
-    add (!/ "/counts") "speakers" (ps "Speakers: ") 
+    add0 (!/ "/counts/attendees") "count" (ndn "value" "strong" 100)
+    add0 (!/ "/counts") "speakers" (ps "Speakers: ") 
     wrS (!/ "/counts/speakers") "label" "li"
     
     // NOTE: Reference list - not its items using 'speakers/*' because we copy node into another node
     // (and do not want to do any implicit wrapping...)
-    add (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
+    add0 (!/ "/counts/speakers") "count" (ref (!/ "/speakers")) 
     wrS (!/ "/counts/speakers/count") "arg" "x-formula"
-    add (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
+    add0 (!/ "/counts/speakers/count") "op" (ref (!/ "/$builtins/count"))
     wrS (!/ "/counts/speakers/count") "value" "strong"
-
-    add [] "t5" (nds "v" "h3" "Item costs")
-    add [] "costs" (rcd "ul")
-    add (!/ "/costs") "travel" (ps "Travel per speaker: ") 
-    wrS (!/ "/costs/travel") "label" "li"
-    add (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
-    add (!/ "/costs") "coffee" (ps "Coffee break per person: ") 
-    wrS (!/ "/costs/coffee") "label" "li"
-    add (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
-    add (!/ "/costs") "lunch" (ps "Lunch per person: ") 
-    wrS (!/ "/costs/lunch") "label" "li"
-    add (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
-    add (!/ "/costs") "dinner" (ps "Dinner per person: ") 
-    wrS (!/ "/costs/dinner") "label" "li"
-    add (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
     
-    add [] "t6" (nds "v" "h3" "Total costs")
-    add [] "totals" (lst "ul")
-    // NOTE: Construct things in a way where all structural edits (wrapping)
-    // are applied to the entire list using All (this should be required!)
-    // because otherwise we may end up with inconsistent structures
-    apV (!/ "/totals") (ps "Refreshments: ") 
-    apV (!/ "/totals") (ps "Speaker travel: ") 
+    add [] "t5" "counts" (nds "v" "h3" "Item costs")
+    add [] "costs" "t5" (rcd "ul")
+    add0 (!/ "/costs") "travel" (ps "Travel per speaker: ") 
+    wrS (!/ "/costs/travel") "label" "li"
+    add0 (!/ "/costs/travel") "cost" (ndn "value" "strong" 1000)
+    add (!/ "/costs") "coffee" "travel" (ps "Coffee break per person: ") 
+    wrS (!/ "/costs/coffee") "label" "li"
+    add0 (!/ "/costs/coffee") "cost" (ndn "value" "strong" 5)
+    add (!/ "/costs") "lunch" "coffee" (ps "Lunch per person: ") 
+    wrS (!/ "/costs/lunch") "label" "li"
+    add0 (!/ "/costs/lunch") "cost" (ndn "value" "strong" 20)
+    add (!/ "/costs") "dinner" "lunch" (ps "Dinner per person: ") 
+    wrS (!/ "/costs/dinner") "label" "li"
+    add0 (!/ "/costs/dinner") "cost" (ndn "value" "strong" 80)
+    
+    add [] "t6" "costs" (nds "v" "h3" "Total costs")
+    add [] "totals" "t6" (lst "ul")
+
+    ap0 (!/ "/totals") "0" (ps "Refreshments: ") 
+    ap (!/ "/totals") "1" "0" (ps "Speaker travel: ") 
     wrS (!/ "/totals/*") "label" "li"    
-    add (!/ "/totals/0") "item" (ref (!/ "/costs/coffee/cost/value"))
-    add (!/ "/totals/1") "item" (ref (!/ "/costs/travel/cost/value"))
+    add0 (!/ "/totals/#0") "item" (ref (!/ "/costs/coffee/cost/value"))
+    add0 (!/ "/totals/#1") "item" (ref (!/ "/costs/travel/cost/value"))
     
     wrS (!/ "/totals/*/item") "left" "x-formula"
     wrS (!/ "/totals/*/item") "formula" "strong"
-    add (!/ "/totals/0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
-    add (!/ "/totals/1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
-    add (!/ "/totals/0/item/formula") "op" (ref (!/ "/$builtins/mul"))
-    add (!/ "/totals/1/item/formula") "op" (ref (!/ "/$builtins/mul"))
+    add0 (!/ "/totals/#0/item/formula") "right" (ref (!/ "/counts/attendees/count/value"))
+    add0 (!/ "/totals/#1/item/formula") "right" (ref (!/ "/counts/speakers/count/value"))
+    add0 (!/ "/totals/#0/item/formula") "op" (ref (!/ "/$builtins/mul"))
+    add0 (!/ "/totals/#1/item/formula") "op" (ref (!/ "/$builtins/mul"))
     
-    add [] "ultimate" (ps "Total: ") 
+    add [] "ultimate" "totals" (ps "Total: ") 
     wrS (!/ "/ultimate") "t7" "h3"
-    add (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
+    add0 (!/ "/ultimate") "item" (ref (!/ "/totals/*/item/formula"))
     wrS (!/ "/ultimate/item") "arg" "x-formula"
-    add (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))    
+    add0 (!/ "/ultimate/item") "op" (ref (!/ "/$builtins/sum"))    
   ]
 
 // Create <input> 
 let pbdAddInput = 
   [
-    add [] "inp" (rcd "input")
+    add [] "inp" "speakers" (rcd "input")
   ]
 
 // Use existing <input> to add one speaker
 let pbdAddFirstSpeaker = 
   [
-    add (!/ "/inp") "@value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    add [] "temp" (rcd "li")
-    add (!/ "/temp") "value" (ps "(empty)") 
-    cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apfV (!/ "/speakers") (!/ "/temp")
-    delrV (!/ "/") "temp"
+    add0 (!/ "/inp") "@value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
+    add0 [] "templovelace" (rcd "li")
+    add0 (!/ "/templovelace") "value" (ps "(empty)") 
+    cpV (!/ "/inp/@value") (!/ "/templovelace/value") 
+    ap0 (!/ "/speakers") "lovelace" (ps "")
+    cpV (!/ "/speakers/#lovelace") (!/"/templovelace")
+    delrV (!/ "/") "templovelace"
   ]
 
 // Use existing <input> to add another speaker
 let pbdAddAnotherSpeaker = 
   [
-    add (!/ "/inp") "@value" (ps "Barbara Liskov, liskov@mit.edu")
-    add [] "temp" (rcd "li")
-    add (!/ "/temp") "value" (ps "(empty)") 
-    cpV (!/ "/inp/@value") (!/ "/temp/value") 
-    apfV (!/ "/speakers") (!/ "/temp")
-    delrV (!/ "/") "temp"
+    add0 (!/ "/inp") "@value" (ps "Barbara Liskov, liskov@mit.edu")
+    add0 [] "templiskov" (rcd "li")
+    add0 (!/ "/templiskov") "value" (ps "(empty)") 
+    cpV (!/ "/inp/@value") (!/ "/templiskov/value") 
+    ap0 (!/ "/speakers") "liskov" (ps "")
+    cpV (!/ "/speakers/#liskov") (!/"/templiskov")
+    delrV (!/ "/") "templiskov"
   ]
   
 
@@ -220,80 +229,68 @@ let pbdAddAnotherSpeaker =
 
 let todoBaseOps = 
   [
-    add [] "items" (lst "ul")
+    add0 [] "items" (lst "ul")
   ]
 
-let todoAddOps work = 
+let todoAddOps idwork work = 
   [ 
-    add [] "temp" (ps work)
-    apS (!/"/items") (rcd "li")
-    add (!/"/items/0") "entry" (rcd "label")
-    add (!/"/items/0/entry") "done" (rcd "input")
-    add (!/"/items/0/entry/done") "@type" (ps "checkbox")
-    add (!/"/items/0/entry") "work" (ps "")
-    cpV (!/"/temp") (!/"/items/0/entry/work")
-    delrV [] "temp"
+    add0 [] ("temp" + idwork) (ps work)
+    ap0 (!/"/items") idwork (rcd "li")
+    add0 (!/ $"/items/#{idwork}") "entry" (rcd "label")
+    add0 (!/ $"/items/#{idwork}/entry") "done" (rcd "input")
+    add0 (!/ $"/items/#{idwork}/entry/done") "@type" (ps "checkbox")
+    add (!/ $"/items/#{idwork}/entry") "work" "done" (ps "")
+    cpV (!/ $"/temp{idwork}") (!/ $"/items/#{idwork}/entry/work")
+    delrV [] $"temp{idwork}f"
   ]
 
 // --------------------------------------------------------------------------------------
-// Leftovers
+// Counter demo
 // --------------------------------------------------------------------------------------
-
-  (*
-let addTransformOps = 
-  [
-    ap [] (nds "ttitle" "h2" "Transformers")
-    add [] (rcd "x-patterns" "x-patterns")
-    add [ Field "x-patterns") (rcd "head" "thead")
-    add [ Field "x-patterns/head" ] (rcd "*" "td")
-    add [ Field "x-patterns/head/*" ] (rcd "*" "x-hole")
-    add [ Field "x-patterns/head/*/*" ] (rcd "mq" "marquee")
-    add [ Field "x-patterns/head/*/*/mq" ] (rcd "" "x-match")
-  ] 
-  *)
 
 let opsBaseCounter = 
   [ 
-    add [] "t" (nds "title" "h1" "Counter")
-    add [] "counter" (rcd "p")
-    add (!/ "/counter") "l" (nds "v" "strong" "Count: ")
-    add (!/ "/counter") "value" (pn 0)
-    add [] "inc" (nds "v" "button" "Increment")
-    add [] "dec" (nds "v" "button" "Decrement")
+    add0 [] "t" (nds "title" "h1" "Counter")
+    add [] "counter" "t" (rcd "p")
+    add0 (!/ "/counter") "l" (nds "v" "strong" "Count: ")
+    add (!/ "/counter") "value" "l" (pn 0)
+    add [] "inc" "counter" (nds "v" "button" "Increment")
+    add [] "dec" "inc" (nds "v" "button" "Decrement")
   ]
 
 let opsCounterInc = 
   [
     wrV (!/ "/counter/value") "value" "x-formula"
     uidV (!/ "/counter/value") "value" "right"
-    add (!/ "/counter/value") "left" (pn 1)
-    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
+    add0 (!/ "/counter/value") "left" (pn 1)
+    add0 (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterDec = 
   [
     wrV (!/ "/counter/value") "value" "x-formula"
     uidV (!/ "/counter/value") "value" "right"
-    add (!/ "/counter/value") "left" (pn -1)
-    add (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
+    add0 (!/ "/counter/value") "left" (pn -1)
+    add0 (!/ "/counter/value") "op" (ref (!/ "/$builtins/plus"))
   ]
 
 let opsCounterHndl baseList = 
   [ 
-    yield add (!/"/") "saved-interactions" (rcd "x-saved-interactions")
-    yield add (!/"/saved-interactions") "increment" (rcd "x-interaction")
-    yield add (!/"/saved-interactions/increment") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
-    yield add (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
-    for op in opsCounterInc ->
-      apV (!/ "/saved-interactions/increment/interactions") (Represent.represent None op) 
-    yield add (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
+    yield add0 (!/"/") "saved-interactions" (rcd "x-saved-interactions")
+    yield add0 (!/"/saved-interactions") "increment" (rcd "x-interaction")
+    yield add0 (!/"/saved-interactions/increment") "historyhash" (ps ((Merge.hashEditList 0 baseList).ToString("x")))
+    yield add0 (!/"/saved-interactions/increment") "interactions" (lst "x-interaction-list")
+    for i, op in Seq.indexed opsCounterInc ->
+      ap0 (!/ "/saved-interactions/increment/interactions") (string i) (Represent.represent None op) 
+    yield add0 (!/ "/inc") "@click" (ref (!/"/saved-interactions/increment"))
 
-    yield add (!/"/saved-interactions") "decrement" (rcd "x-interaction")
-    yield add (!/"/saved-interactions/decrement") "historyhash" (ps ((hashEditList 0 baseList).ToString("x")))
-    yield add (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
-    for op in opsCounterDec ->
-      apV (!/ "/saved-interactions/decrement/interactions") (Represent.represent None op) 
-    yield add (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) ]
+    yield add0 (!/"/saved-interactions") "decrement" (rcd "x-interaction")
+    yield add0 (!/"/saved-interactions/decrement") "historyhash" (ps ((Merge.hashEditList 0 baseList).ToString("x")))
+    yield add0 (!/"/saved-interactions/decrement") "interactions" (lst "x-interaction-list")
+    for i, op in Seq.indexed opsCounterDec ->
+      ap0 (!/ "/saved-interactions/decrement/interactions") (string i) (Represent.represent None op) 
+    yield add0 (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) 
+  ]
 
 
 

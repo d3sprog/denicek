@@ -1,7 +1,7 @@
-﻿module Tbd.Eval
+﻿module Denicek.Eval
 
-open Tbd
-open Tbd.Doc
+open Denicek
+open Denicek.Doc
 
 // --------------------------------------------------------------------------------------
 // Evaluation
@@ -17,29 +17,20 @@ open Tbd.Doc
 // We first replace all children with <x-evaluated> and then the formula itself.
 // <x-evaluated> has two children - 'formula' (original) and 'result' (the value).
 
-let rec evalSiteRecordChildren inFormula sels nds =
+let rec evalSiteChildren kind inFormula sels nds =
   let rec loop i = function 
     | (f, nd)::nds -> 
-        match evalSite inFormula (Field f::sels) nd with 
-        | Some res -> Some res
-        | None -> loop (i + 1) nds
-    | _ -> None
-  loop 0 nds 
-
-and evalSiteListChildren inFormula sels nds =
-  let rec loop i = function 
-    | nd::nds -> 
-        match evalSite inFormula (Index i::sels) nd with 
+        match evalSite inFormula (kind f::sels) nd with 
         | Some res -> Some res
         | None -> loop (i + 1) nds
     | _ -> None
   loop 0 nds 
 
 and (|EvalSiteRecordChildren|_|) inFormula sels nds = 
-  evalSiteRecordChildren inFormula sels nds
+  evalSiteChildren Field inFormula sels (OrdList.toList nds)
 
 and (|EvalSiteListChildren|_|) inFormula sels nds = 
-  evalSiteListChildren inFormula sels nds
+  evalSiteChildren Index inFormula sels (OrdList.toList nds)
 
 /// Evaluate references only if they are inside formula
 /// (they may be used for other things in the document, e.g. event handlers)
@@ -53,7 +44,7 @@ and evalSite (formulaSel:option<_>) sels nd : option<Selectors * Selectors> =
   // Formula - Call by value - evaluate children first
   | Record("x-formula", children), _ -> 
       let formulaSel = Option.defaultValue (List.rev sels) formulaSel
-      match evalSiteRecordChildren (Some formulaSel) sels children with 
+      match evalSiteChildren Field (Some formulaSel) sels (OrdList.toList children) with 
       | Some res -> Some res
       | None -> Some(formulaSel, List.rev sels)
   | Reference(Absolute, Field "$builtins"::_ ), _ -> None
@@ -70,7 +61,7 @@ let (|OpAndArgs|) args =
 
 let getEvaluatedResult nd =
   let rec loop = function
-    | Record("x-evaluated", Patterns.ListFind "result" r) -> loop r
+    | Record("x-evaluated", OrdList.Find "result" r) -> loop r
     | v -> v
   loop nd
 
@@ -81,12 +72,12 @@ let evaluateBuiltin op (args:Map<string, Node>)=
   | "count" | "sum" ->
       let sum = List.map (function 
         | Primitive(Number n) -> n 
-        | nd -> failwith $"evaluate: Argument of 'sum' is not a number but {formatNode nd}") >> List.sum 
+        | nd -> failwith $"evaluate: Argument of 'sum' is not a number but {Format.formatNode nd}") >> List.sum 
       let count = List.length >> float
       let f = (dict [ "count", count; "sum", sum ]).[op]
       match args.TryFind "arg" with
       | Some(EvaluatedResult(List(_, nds))) -> 
-          Primitive(Number(f (List.map getEvaluatedResult nds))), [Field "arg"]
+          Primitive(Number(f (List.map (snd >> getEvaluatedResult) (OrdList.toList nds)))), [Field "arg"]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
   | "equals" -> 
@@ -115,9 +106,9 @@ let evaluateRaw doc =
       match it with 
       | Reference(kind, p) ->
           let p = resolveReference sel (kind, p)
-          [ Shared(ValueKind, WrapRecord("reference", "x-evaluated", sel)), [p]
-            Value(RecordAdd(sel, "result", List("empty", []))), [p] // Allow 'slightly clever' case of Copy from doc.fs
-            Shared(ValueKind, Copy(sel @ [Field "result"], p)), [] ]
+          [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p]
+            RecordAdd(sel, "result", None, List("empty", OrdList.empty)), [p] // Allow 'slightly clever' case of Copy from doc.fs
+            Copy(KeepReferences, sel @ [Field "result"], p), [] ]
 
       | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, [ Field("$builtins"); Field op ]), args)) ->
           let res, deps = evaluateBuiltin op args
@@ -126,8 +117,8 @@ let evaluateRaw doc =
           // formula (the most top-level one) - which is safe overapproximation
           // (value edits can transform the formula, breaking the dependencies)
           let deps = [ formulaSel ] 
-          [ Shared(ValueKind, WrapRecord("formula", "x-evaluated", sel)), deps
-            Value(RecordAdd(sel, "result", res)), deps ]          
+          [ WrapRecord(KeepReferences, "formula", "x-evaluated", sel), deps
+            RecordAdd(sel, "result", None, res), deps ]
 
       | Record("x-formula", nds) -> 
           failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"
@@ -137,13 +128,13 @@ let evaluateRaw doc =
 let evaluateOne doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
   [ for ed, deps in evaluateRaw doc -> 
-      { Disabled = false; Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
+      { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
 let evaluateAll doc = 
   let rec loop doc = seq {
     let edits = evaluateOne doc
     yield! edits
-    let ndoc = applyHistory doc edits 
+    let ndoc = Apply.applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
   List.ofSeq (loop doc)
 
@@ -153,5 +144,5 @@ let evaluateAll doc =
 /// on the "side" of main history) and re-evaluate invalidated things.
 let updateEvaluatedEdits oldDocEdits newDocEdits evalEdits = 
   let editsAfterEval = List.skip (List.length oldDocEdits) newDocEdits
-  let updatedEvalEdits = pushEditsThroughSimple RemoveConflicting editsAfterEval evalEdits
-  updatedEvalEdits |> List.filter (fun ed -> not ed.Disabled)
+  Merge.pushEditsThroughSimple Merge.RemoveConflicting editsAfterEval evalEdits
+  

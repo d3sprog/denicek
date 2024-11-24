@@ -1,4 +1,4 @@
-﻿module Tbd.Html
+﻿module Denicek.Html
 
 open Browser
 open Browser.Types

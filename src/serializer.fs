@@ -1,5 +1,5 @@
-﻿module Tbd.Serializer
-open Tbd.Doc
+﻿module Denicek.Serializer
+open Denicek.Doc
 open Fable.Core
 
 // --------------------------------------------------------------------------------------
@@ -15,13 +15,13 @@ let selToJson = function
 let rec nodeToJson = function
   | Primitive(String s) -> box s
   | Primitive(Number n) -> box n
-  | List(tag, nds) -> JsInterop.createObj [ 
-        "kind", box "list" 
-        "tag", box tag
-        "nodes", box [| for nd in nds -> nodeToJson nd |]
-      ]
   | Record(tag, nds) -> JsInterop.createObj [ 
         "kind", box "record" 
+        "tag", box tag
+        "nodes", box [| for n, nd in nds -> [| box n; nodeToJson nd |] |]
+      ]
+  | List(tag, nds) -> JsInterop.createObj [ 
+        "kind", box "list" 
         "tag", box tag
         "nodes", box [| for n, nd in nds -> [| box n; nodeToJson nd |] |]
       ]
@@ -52,8 +52,8 @@ let selFromJson o =
 let rec nodeFromJson o =
   if jsTypeof o = "string" then Primitive(String(unbox o))
   elif jsTypeof o = "number" then Primitive(Number(unbox o))
-  elif o?kind = "list" then List(o?tag, [ for o in unbox<obj[]> o?nodes -> nodeFromJson o ])
-  elif o?kind = "record" then Record(o?tag, [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
+  elif o?kind = "list" then List(o?tag, OrdList.ofList [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
+  elif o?kind = "record" then Record(o?tag, OrdList.ofList [ for o in unbox<obj[][]> o?nodes -> unbox o.[0], nodeFromJson o.[1] ])
   elif o?kind = "reference" then 
     Reference
       ( (if o?refkind = "relative" then Relative else Absolute),
@@ -62,9 +62,7 @@ let rec nodeFromJson o =
 
 let nodesToJson nds = box [| for nd in nds -> nodeToJson nd |]
 let nodesFromJson obj = 
-  [ for os in unbox<obj[]> obj do 
-      if isArray os then yield! Array.map nodeFromJson (unbox os)  // Compatibility - previously, this was list of lists
-      else nodeFromJson os ]
+  [ for os in unbox<obj[]> obj -> nodeFromJson os ]
 
 let nodesToJsonString nds = JS.JSON.stringify(nodesToJson nds)
 let nodesFromJsonString s = nodesFromJson(JS.JSON.parse(s))

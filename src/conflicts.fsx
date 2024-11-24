@@ -7,7 +7,7 @@ open Tbd.Demos
 // --------------------------------------------------------------------------------------
 // Type checking - we can infer type of the resulting document!
 // --------------------------------------------------------------------------------------
-
+(*
 type PrimitiveType =
   | TyNumber 
   | TyString 
@@ -96,7 +96,7 @@ let transformType typ ed =
 opsCore @ refactorListOps |> List.fold transformType (TyRecord("div", []))
 opsCore @ opsBudget |> List.fold transformType (TyRecord("div", []))
 
-
+*)
 // --------------------------------------------------------------------------------------
 // Effect analysis
 // --------------------------------------------------------------------------------------
@@ -107,30 +107,42 @@ type Effect =
 
 let getEffect ed = 
   match ed.Kind with 
-  | Value _ 
-  | Shared(ValueKind, _) -> ValueEffect, getTargetSelector ed
-  | Shared(StructuralKind, _) -> StructureEffect, getTargetSelector ed
+  // Edits that can affect references in document
+  | RecordRenameField(UpdateReferences, _, _, _)
+  | Copy(UpdateReferences, _, _)
+  | WrapRecord(UpdateReferences, _, _, _)
+  | WrapList(UpdateReferences, _, _, _)
+  | RecordDelete(UpdateReferences, _, _) -> StructureEffect, getTargetSelector ed
+  // Edits that cannot affect references in document
+  | ListReorder _
+  | ListDelete _
+  | ListAppend _
+  | ListAppendFrom _
+  | UpdateTag _
+  | PrimitiveEdit _
+  | RecordAdd _ -> ValueEffect, getTargetSelector ed
+
 
 let getEffects eds =
   set (List.map getEffect eds)
 
+(*
 let getDependencies ed = 
   match ed.Kind with 
   | Shared(_, ListAppendFrom(_, src)) 
   | Shared(_, Copy(_, src)) -> src :: ed.Dependencies
   | _ -> ed.Dependencies
-
+*)
 let addEffect effs (kindEff, selEff) = 
-  List.exists (fun (k, e) -> includesStrict e selEff)
+  List.exists (fun (k, e) -> prefixGeneral true false e selEff)
 
-  effs |> Set.fi
 
 let e1eff = getEffects addSpeakerOps
 let e2eff = getEffects refactorListOps
-for e in addSpeakerOps do printfn $"{formatEdit e}"
-for e in refactorListOps do printfn $"{formatEdit e}"
+for e in addSpeakerOps do printfn $"{formatEdit e}\n  ({getEffect e})\n"
+for e in refactorListOps do printfn $"{formatEdit e}\n  ({getEffect e})\n"
 
-printfn "E1 (BASE) EFFECTS"
+printfn "E1 (ADD) EFFECTS"
 for eff in e1eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
 printfn "E2 (MERGE) EFFECTS"
 for eff in e2eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
