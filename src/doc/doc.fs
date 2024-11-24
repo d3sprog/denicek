@@ -221,7 +221,8 @@ type EditKind =
   | ListReorder of Selectors * permutation:list<string>
   | ListDelete of Selectors * index:string
   | ListAppend of Selectors * index:string * pred:string option * node:Node 
-  | ListAppendFrom of Selectors * index:string * pred:string option * source:Selectors 
+  // TODO: Delete this (but it will require recreating demo JSONs...)
+  | ListAppendFrom_DELETE_ME of Selectors * index:string * pred:string option * source:Selectors 
   | UpdateTag of Selectors * ntag:string
   | PrimitiveEdit of Selectors * op:string * args:string option
   | RecordAdd of Selectors * field:string * pred:string option * node:Node
@@ -277,8 +278,6 @@ module Format =
         fmtv "updateTag" [formatSelector sel; formatString tagNew]
     | ListAppend(sel, n, pred, nd) ->       
         fmtv "listAppend" [formatSelector sel; formatString n; formatStringOpt pred; formatNode nd ]
-    | ListAppendFrom(sel, n, pred, src) -> 
-        fmtv "appendFrom" [formatSelector sel; formatString n; formatStringOpt pred; formatSelector src ]
     | ListReorder(sel, ord) -> 
         fmtv "listReorder" [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
     | ListDelete(sel, i) -> 

@@ -162,7 +162,7 @@ module Helpers =
         OrdList.Find "interactions" (List("x-interaction-list", ops)) & 
         OrdList.Find "historyhash" (Primitive(String hash)) ) ->
           let ops = ops |> OrdList.toList |> List.sortBy (fst >> int) |> List.map snd
-          let opsWithHashes = ops |> List.map Represent.unrepresent |> List.map (fun (op, h) ->
+          let opsWithHashes = ops |> List.collect Represent.unrepresent |> List.map (fun (op, h) ->
             if h.IsNone then failwith "InteractionNode: Interaction nodes should have hashes!"
             else h.Value, op)
           Some(System.Convert.ToInt32(hash, 16), opsWithHashes)
@@ -205,7 +205,7 @@ module Helpers =
   let getTargetSelectorPrefixes eds = 
     let sels = System.Collections.Generic.HashSet<_>()
     for ed in eds do
-      let sel = getTargetSelector ed
+      let sel = Merge.getTargetSelector ed
       for prefix in List.prefixes sel do ignore(sels.Add(prefix))
     List.sort (List.ofSeq sels)
 
@@ -232,7 +232,7 @@ module Helpers =
 
   let generalizeSaved t ops = 
     let newItems = ops |> List.choose (function
-      | { Kind = ListAppend(s, n, _, _) | ListAppendFrom(s, n, _, _) } -> 
+      | { Kind = ListAppend(s, n, _, _) } -> 
           Some(s @ [Index n], s @ [Index (makeUnique n)]) 
       | _ -> None)
     let ops = newItems |> List.fold (fun ops (osel, nsel) -> replacePrefixInEdits osel nsel ops) ops
@@ -605,7 +605,6 @@ module History =
     | RecordAdd(sel, f, prev, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev prev
     | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
     | ListAppend(sel, i, prev, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev prev
-    | ListAppendFrom(sel, i, prev, src) -> renderv "appfrom" "fa-paperclip" sel <| ["i", text i; "node", Helpers.renderAbsoluteReference state trigger src ] @ fmtprev prev
     | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
@@ -950,8 +949,9 @@ module Commands =
         | None -> ()
         | Some src ->
             yield command sk rb "las la-paste" ("Add copied node to " + cl)
-              ( fieldAssignment <<*> P.keyword "!v" |> mapEd (fun idx ->
-                ListAppendFrom(sel, idx, pred, src) ))
+              ( fieldAssignment <<*> P.keyword "!v" |> mapEdg (fun idx ->
+                [ ListAppend(sel, idx, pred, Primitive(String ""))
+                  Copy(KeepReferences, sel @ [Index idx], src) ]))
         yield command sk rb "las la-id-card" ("Add record item to " + cl)
           ( fieldAssignment <*> recordTag |> mapEd (fun (idx, tag) ->
             ListAppend(sel, idx, pred, Record(tag, OrdList.empty)) ))
@@ -1461,7 +1461,7 @@ let asyncRequest file =
     req.send())
 
 let readJsonOps json = 
-  List.map (Represent.unrepresent >> fst) (Serializer.nodesFromJsonString json) 
+  List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json) 
   
 let readJson json = 
   readJsonOps json |> fromOperationsList
@@ -1480,13 +1480,7 @@ async {
     let demos = 
       [ 
         "empty", readJson "[]", []
-        (*
-        "?base", fromOperationsList (opsCore), []
-        "?add", fromOperationsList (opsCore @ addSpeakerOps), []
-        "?table", fromOperationsList (opsCore @ refactorListOps), []
-        "?merge1", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ refactorListOps) (opsCore @ addSpeakerOps)), []
-        "?merge2", fromOperationsList (mergeHistoriesSimple IgnoreConflicts (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)), []
-        *)
+        //"?t1", fromOperationsList (opsCore @ addSpeakerViaTempOps), []
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]

@@ -11,7 +11,7 @@ let getLastIndex tgt =
 // --------------------------------------------------------------------------------------
 // getSelectors/withSelectors 
 //
-// Selector pointing to the used nodes, at a location where it is before the edit
+// Selector pointing to involved nodes, at a location where they are before the edit
 // (i.e., the only modified selectors are the Rename & Delete ones)
 // --------------------------------------------------------------------------------------
 
@@ -21,7 +21,6 @@ let getSelectors ed =
   | ListReorder(s, _) 
   | UpdateTag(s, _) 
   | PrimitiveEdit(s, _, _) -> [s]
-  | ListAppendFrom(s1, _, _, s2)
   | Copy(_, s1, s2) -> [s1; s2]
   // Pointing at a node that will be modified by the edit
   | WrapRecord(_, _, _, s) 
@@ -41,7 +40,6 @@ let withSelectors sels ed =
   | UpdateTag(_, t) -> UpdateTag(List.exactlyOne sels, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(List.exactlyOne sels, f, arg) |> ret
   | Copy(rb, _, _) -> Copy(rb, List.head sels, List.exactlyOne (List.tail sels)) |> ret
-  | ListAppendFrom(_, n, pred, _) -> ListAppendFrom(List.head sels, n, pred, List.exactlyOne (List.tail sels)) |> ret
   // Pointing at a node that will be modified by the edit
   | WrapRecord(rb, id, t, _) -> WrapRecord(rb, id, t, List.exactlyOne sels) |> ret
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, List.exactlyOne sels) |> ret
@@ -56,7 +54,7 @@ let withSelectors sels ed =
 // getTargetSelector/withTargetSelector
 //
 // Selector pointing at the target of the edit, after the edit was done
-// (i.e., add Index/Field to the target whenever possible)
+// (i.e., use new names, add Index/Field to the target whenever possible)
 // --------------------------------------------------------------------------------------
 
 let getTargetSelector ed = 
@@ -64,16 +62,15 @@ let getTargetSelector ed =
   // Selector is already pointing directly at the affected node
   | ListReorder(s, _) 
   | UpdateTag(s, _) 
-  | Copy(_, s, _) 
   | PrimitiveEdit(s, _, _)
-  | WrapList(_, _, _, s) -> s 
+  | Copy(_, s, _) -> s
   // Add selector to the end, pointing at the affected node
   | ListAppend(s, i, _, _) 
-  | ListAppendFrom(s, i, _, _) 
   | ListDelete(s, i) -> s @ [Index i]
-  | RecordRenameField(_, s, id, _) 
+  | RecordRenameField(_, s, _, id) 
   | RecordDelete(_, s, id)
   | WrapRecord(_, _, id, s) 
+  | WrapList(_, id, _, s)
   | RecordAdd(s, id, _, _) -> s @ [Field id]
 
 let withTargetSelector tgt ed = 
@@ -82,16 +79,15 @@ let withTargetSelector tgt ed =
   // Selector is already pointing directly at the affected node
   | ListReorder(_, m) -> ListReorder(tgt, m) |> ret
   | UpdateTag(_, t) -> UpdateTag(tgt, t) |> ret
-  | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
-  | WrapList(rb, f, t, _) -> WrapList(rb, f, t, tgt) |> ret
+  | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
   // Remove added selector, pointing at the affected node
-  | ListAppendFrom(_, _, pred, s) -> ListAppendFrom(List.dropLast tgt, getLastIndex tgt, pred, s) |> ret
   | ListAppend(_, _, pred, nd) -> ListAppend(List.dropLast tgt, getLastIndex tgt, pred, nd) |> ret
   | ListDelete(_, _) -> ListDelete(List.dropLast tgt, getLastIndex tgt) |> ret
-  | RecordRenameField(rb, _, _, n) -> RecordRenameField(rb, List.dropLast tgt, getLastField tgt, n) |> ret
+  | RecordRenameField(rb, _, o, _) -> RecordRenameField(rb, List.dropLast tgt, o, getLastField tgt) |> ret
   | RecordDelete(rb, _, _) -> RecordDelete(rb, List.dropLast tgt, getLastField tgt) |> ret
   | WrapRecord(rb, t, _, _) -> WrapRecord(rb, t, getLastField tgt, List.dropLast tgt) |> ret
+  | WrapList(rb, _, t, _) -> WrapList(rb, getLastField tgt, t, List.dropLast tgt) |> ret
   | RecordAdd(_, _, pred, nd) -> RecordAdd(List.dropLast tgt, getLastField tgt, pred, nd) |> ret
 
 
@@ -102,17 +98,6 @@ let withTargetSelector tgt ed =
 // (i.e., like getTargetSelector, but returns the new field name)
 // --------------------------------------------------------------------------------------
 
-let getAfterTargetSelector ed = 
-  match ed.Kind with
-  | RecordRenameField(_, s, _, f) -> s @ [Field f]
-  | _ -> getTargetSelector ed
-
-let withAfterTargetSelector tgt ed = 
-  let ret nk = { ed with Kind = nk }
-  match ed.Kind with 
-  | RecordRenameField(rb, _, n, _) -> RecordRenameField(rb, List.dropLast tgt, n, getLastField tgt) |> ret
-  | _ -> withTargetSelector tgt ed
-
 let getBaseTargetSelector ed = 
   match ed.Kind with 
   | Copy(_, _, s)
@@ -121,7 +106,6 @@ let getBaseTargetSelector ed =
   | PrimitiveEdit(s, _, _) 
   | WrapList(_, _, _, s) 
   | ListAppend(s, _, _, _) 
-  | ListAppendFrom(s, _, _, _) 
   | ListDelete(s, _) -> s 
   | RecordDelete(_, s, _)
   | RecordAdd(s, _, _, _) 
@@ -138,7 +122,6 @@ let withBaseTargetSelector tgt ed =
   | UpdateTag(_, t) -> UpdateTag(tgt, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, tgt) |> ret
-  | ListAppendFrom(_, i, pred, s) -> ListAppendFrom(tgt, i, pred, s) |> ret
   | ListAppend(_, i, pred, nd) -> ListAppend(tgt, i, pred, nd) |> ret
   | ListDelete(_, i) -> ListDelete(tgt, i) |> ret
   | RecordRenameField(rb, _, _, fn) -> RecordRenameField(rb, List.dropLast tgt, getLastField tgt, fn) |> ret
@@ -163,12 +146,8 @@ module UpdateSelectors =
     | _ -> sels  // Not matching, but that's OK, we only want to subsitute prefix
 
   let copyEdit e1 srcSel tgtSel = 
-    // For cases when the copied thing is directly the target of the edit 'e1'
-    let e1tgtSel = getTargetSelector e1
-    if matches e1tgtSel srcSel then 
-      Some [e1; withTargetSelector tgtSel e1]
-    else
-    // For cases when the edit 'e1' targets something inside the copied (from srcSel to tgtSel)
+    // Works both when the copied thing is directly the target of the edit 'e1'
+    // and when the edit 'e1' targets something inside the copied
     let origSels = getSelectors e1 
     let newSels = origSels |> List.map (fun sel ->
       match removePrefix true false srcSel sel with 
@@ -233,12 +212,7 @@ module UpdateSelectors =
     | Copy(UpdateReferences, tgtSel, srcSel) -> 
         match copyEdit e2 srcSel tgtSel with 
         | Some res -> res 
-        | _ ->
-            // TODO: What does this even do?
-            let target = getTargetSelector e2
-            let conflict = removePrefix true false srcSel target |> Option.isSome
-            if conflict then failwith $"CONFLICT!!!\ne1={e2}\ne2={e1}"
-            else [e2]
+        | None -> [e2]
 
     // Value edits do not affect other selectors
     | _ -> [e2]
@@ -273,7 +247,7 @@ module ApplyToAdded =
     | _ -> e
 
   let destructsTarget conflicting e = 
-    let target = getAfterTargetSelector e
+    let target = getTargetSelector e
     match e.Kind with 
     | RecordDelete _ | RecordAdd _ | Copy _ | WrapRecord _ -> matches target conflicting
     | _ -> false
@@ -290,7 +264,8 @@ module ApplyToAdded =
   let simpleScopeEdit e1 e2 = 
     // Scope e1 based on a selector that points to copy source / location before the edit is applied
     // (because this is what e2 is adding and so we want to scope e1 if it affects the sources)
-    let e2sel, e1sel = getAfterTargetSelector e2, getBaseTargetSelector e1
+    let e1sel = getBaseTargetSelector e1
+    let e2sel = getTargetSelector e2
     match e2.Kind, removePrefix false true e2sel e1sel with 
     | _ when destructsTarget e2sel e1 ->
         None
@@ -325,7 +300,6 @@ module ApplyToAdded =
   //
   let applyToAdded e1 (e2, e2extras) = 
     match e2.Kind with   
-    | ListAppendFrom _
     | ListAppend _
     | Copy _
     | RecordAdd _ -> 
@@ -390,7 +364,6 @@ let takeAfterHash hashToFind eds =
 
 let getDependencies ed = 
   match ed.Kind with 
-  | ListAppendFrom(_, _, _, src)
   | Copy(_, _, src) ->  getTargetSelector ed :: src :: ed.Dependencies
   | _ -> getTargetSelector ed :: ed.Dependencies
   

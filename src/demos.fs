@@ -26,9 +26,7 @@ let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
 
 // Value edits
 let ap0 s i n = mkEd <| ListAppend(s, i, None, n)
-let apf0 s i sel = mkEd <| ListAppendFrom(s, i, None, sel)
 let ap s i pi n = mkEd <| ListAppend(s, i, Some pi, n)
-let apf s i pi sel = mkEd <| ListAppendFrom(s, i, Some pi, sel)
 let ed sel fn f = Apply.transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
 let add sel f pred n = mkEd <| RecordAdd(sel, ffld f, Some pred, n)
 let add0 sel f n = mkEd <| RecordAdd(sel, ffld f, None, n)
@@ -97,7 +95,8 @@ let addSpeakerViaTempOps =
   [
     add0 [] "temp" (rcd "li")
     add0 (!/ "/temp") "value" (ps "Ada Lovelace, lovelace@royalsociety.ac.uk")
-    apf0 (!/ "/speakers") "lovelace" (!/ "/temp")
+    ap0 (!/ "/speakers") "lovelace" (ps "")
+    cpV (!/"/temp") (!/ "/speakers/#lovelace")
     delrV (!/ "/") "temp"
     ord (!/ "/speakers") ["lovelace"; "goldberg"; "jennings"; "hamilton"]
   ]
@@ -206,7 +205,8 @@ let pbdAddFirstSpeaker =
     add0 [] "templovelace" (rcd "li")
     add0 (!/ "/templovelace") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/templovelace/value") 
-    apf0 (!/ "/speakers") "lovelace" (!/ "/templovelace")
+    ap0 (!/ "/speakers") "lovelace" (ps "")
+    cpV (!/ "/speakers/#lovelace") (!/"/templovelace")
     delrV (!/ "/") "templovelace"
   ]
 
@@ -217,7 +217,8 @@ let pbdAddAnotherSpeaker =
     add0 [] "templiskov" (rcd "li")
     add0 (!/ "/templiskov") "value" (ps "(empty)") 
     cpV (!/ "/inp/@value") (!/ "/templiskov/value") 
-    apf0 (!/ "/speakers") "liskov" (!/ "/templiskov")
+    ap0 (!/ "/speakers") "liskov" (ps "")
+    cpV (!/ "/speakers/#liskov") (!/"/templiskov")
     delrV (!/ "/") "templiskov"
   ]
   

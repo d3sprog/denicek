@@ -77,13 +77,6 @@ let apply doc edit =
             Some(List(tag, OrdList.add (n, nd) pred nds))
         | _ -> None ) doc
       
-  | ListAppendFrom(sel, n, pred, src) ->
-      replace (fun p el ->
-        match el with
-        | List(tag, nds) when matches p sel -> 
-            Some(List(tag, OrdList.add (n, selectSingle src doc) pred nds))
-        | _ -> None ) doc
-      
   | UpdateTag(sel, tagNew) ->
       replace (fun p el ->
         match el with 

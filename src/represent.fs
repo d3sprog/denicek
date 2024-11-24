@@ -66,8 +66,8 @@ let unrepresent nd =
   let ret ed = 
     let res = { Kind = ed; Dependencies = []; GroupLabel = "" }
     match nd with 
-    | Record(_, Lookup (Finds "hash" hash)) -> res, Some (System.Convert.ToInt32(hash, 16))
-    | _ -> res, None
+    | Record(_, Lookup (Finds "hash" hash)) -> [res, Some (System.Convert.ToInt32(hash, 16))]
+    | _ -> [res, None]
   match nd with
   // Value edits
   | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd & TryFind "pred" pred)) ->
@@ -82,8 +82,6 @@ let unrepresent nd =
   // Shared edits (with reference behaviour)
   | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i & TryFind "pred" pred)) ->
       ListAppend(unrepresentSel sel, i, unrepresentStringOpt pred, nd) |> ret
-  | Record("x-edit-appendfrom", Lookup (Find "target" sel & Find "src" src & Finds "index" i & TryFind "pred" pred)) ->
-      ListAppendFrom(unrepresentSel sel, i, unrepresentStringOpt pred, unrepresentSel src) |> ret
   | Record("x-edit-wraprec", Lookup(Findrb rb & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       WrapRecord(rb, tag, id, unrepresentSel target) |> ret
   | Record("x-edit-renamefld", Lookup (Findrb rb & Find "target" sel & Finds "old" fold & Finds "new" fnew)) ->
@@ -103,7 +101,6 @@ let unrepresent nd =
 
 let rec represent (hash:int option) op = 
   let ps v = Primitive(String v)
-  let pn i = Primitive(Number i)
   let rcd k args = 
     match hash with 
     | Some hash -> rcd k (args @ ["hash", ps (hash.ToString("x"))])
@@ -120,8 +117,6 @@ let rec represent (hash:int option) op =
       rcd "x-edit-updatetag" [ "target", representSel target; "new", ps ntag ]
   | ListAppend(target, n, pred, nd) ->
       rcd "x-edit-append" <| [ "target", representSel target; "node", nd; "index", ps n ] @ (representStringOpt "pred" pred)
-  | ListAppendFrom(target, n, pred, src) ->
-      rcd "x-edit-appendfrom" <| [ "target", representSel target; "src", representSel src; "index", ps n ] @ (representStringOpt "pred" pred)
   | ListDelete(target, i) ->
       rcd "x-edit-listdelete" [ "target", representSel target; "index", ps i ]
   | ListReorder(target, perm) ->
