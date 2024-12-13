@@ -1,8 +1,10 @@
 #nowarn "3353"
-#load "utils.fs" "parsec.fs" "doc.fs" "represent.fs" "eval.fs" "demos.fs"
-open Tbd
-open Tbd.Doc
-open Tbd.Demos
+#load "utils/utils.fs" "utils/parsec.fs" "utils/ordlist.fs" "doc/doc.fs" "doc/apply.fs" "doc/merge.fs" "represent.fs" "eval.fs" "demos.fs" 
+open Denicek
+open Denicek.Doc
+open Denicek.Demos
+open Denicek.Merge
+open Denicek.Doc.Format
 
 // --------------------------------------------------------------------------------------
 // Type checking - we can infer type of the resulting document!
@@ -101,7 +103,42 @@ opsCore @ opsBudget |> List.fold transformType (TyRecord("div", []))
 // Effect analysis
 // --------------------------------------------------------------------------------------
 
+let doc1 = Apply.applyHistory (rcd "div") (opsBaseCounter @ opsCounterInc)
+let evalOps = Eval.evaluateAll doc1
+
+Merge.mergeHistories Merge.RemoveConflicting 
+  (opsBaseCounter @ opsCounterInc @ opsCounterInc) 
+  (opsBaseCounter @ opsCounterInc @ evalOps)
+
+let e1s = (*opsBaseCounter @ opsCounterInc @*) opsCounterInc
+let e2s = (*opsBaseCounter @ opsCounterInc @*) evalOps
+
+
+
+let getDependencies ed = 
+  match ed.Kind with 
+  | Copy(_, _, src) ->  getTargetSelector ed :: src :: ed.Dependencies
+  | _ -> getTargetSelector ed :: ed.Dependencies
+  
+let filterConflicting = 
+  List.filterWithState (fun modsels ed ->
+    printfn "MODSELS:\n * %s" (String.concat "\n * " (List.map formatSelector modsels))
+    // Conflict if any dependency depends on any of the modified locations
+    let conflict = getDependencies ed |> List.exists (fun dep -> 
+      List.exists (fun modsel -> prefix dep modsel || prefix modsel dep) modsels)
+    if conflict then false, (getTargetSelector ed)::modsels
+    else true, modsels) 
+
+
+let e1ModSels = e1s |> List.map getTargetSelector
+filterConflicting e1ModSels e2s
+
+
+
+
+
 type Effect = 
+  | TagEffect
   | ValueEffect 
   | StructureEffect 
 
@@ -114,18 +151,25 @@ let getEffect ed =
   | WrapList(UpdateReferences, _, _, _)
   | RecordDelete(UpdateReferences, _, _) -> StructureEffect, getTargetSelector ed
   // Edits that cannot affect references in document
-  | ListReorder _
-  | ListDelete _
-  | ListAppend _
-  | ListAppendFrom _
-  | UpdateTag _
-  | PrimitiveEdit _
-  | RecordAdd _ -> ValueEffect, getTargetSelector ed
+  | UpdateTag _ -> TagEffect, getTargetSelector ed
+  | _ -> ValueEffect, getTargetSelector ed
 
+
+let conflicts (ef1kind, ef1sel) (ef2kind, ef2sel) = 
+  ef1kind = ef2kind && (prefix ef1sel ef2sel || prefix ef2sel ef1sel)
+
+let conflictsWith ef effs = 
+  List.exists (conflicts ef) effs
 
 let getEffects eds =
   set (List.map getEffect eds)
 
+let formatEffect (kind, sels) = 
+  sprintf 
+    ( match kind with 
+      | ValueEffect -> "val(%s)" 
+      | TagEffect -> "tag(%s)"
+      | StructureEffect -> "struct(%s)") (formatSelector sels)
 (*
 let getDependencies ed = 
   match ed.Kind with 
@@ -136,15 +180,16 @@ let getDependencies ed =
 let addEffect effs (kindEff, selEff) = 
   List.exists (fun (k, e) -> prefixGeneral true false e selEff)
 
+//let e1s = addSpeakerOps
+//let e2s = refactorListOps
+let e1eff = getEffects e1s
+let e2eff = getEffects e2s
+for e in e1s do printfn $"{formatEdit e}\n  ({formatEffect (getEffect e)})\n"
+for e in e2s do printfn $"{formatEdit e}\n  ({formatEffect (getEffect e)})\n"
 
-let e1eff = getEffects addSpeakerOps
-let e2eff = getEffects refactorListOps
-for e in addSpeakerOps do printfn $"{formatEdit e}\n  ({getEffect e})\n"
-for e in refactorListOps do printfn $"{formatEdit e}\n  ({getEffect e})\n"
-
-printfn "E1 (ADD) EFFECTS"
+printfn "E1 EFFECTS"
 for eff in e1eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
-printfn "E2 (MERGE) EFFECTS"
+printfn "E2 EFFECTS"
 for eff in e2eff do printfn $"  {fst eff} {formatSelector (snd eff)}"
 
 (*

@@ -1480,7 +1480,7 @@ async {
     let demos = 
       [ 
         "empty", readJson "[]", []
-        //"?t1", fromOperationsList (opsCore @ addSpeakerViaTempOps), []
+        //"?t1", fromOperationsList (opsCore @ addSpeakerOps), []
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
         ]

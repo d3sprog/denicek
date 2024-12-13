@@ -1,7 +1,7 @@
 ﻿#if INTERACTIVE
 #nowarn "3353"
-#I "../src" "../src/utils" "../src/doc"
-#load "utils.fs" "parsec.fs" "ordlist.fs" "doc.fs" "apply.fs" "merge.fs" "represent.fs" "eval.fs" "demos.fs"
+#I "../src"
+#load "utils/utils.fs" "utils/parsec.fs" "utils/ordlist.fs" "doc/doc.fs" "doc/apply.fs" "doc/merge.fs" "represent.fs" "eval.fs" "demos.fs"
 let equals a b = a = b
 #else
 module Denicek.DenicekTests

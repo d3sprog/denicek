@@ -214,7 +214,7 @@ type EditKind =
   | RecordRenameField of ReferenceBehaviour * target:Selectors * fold:string * fnew:string
   | Copy of ReferenceBehaviour * target:Selectors * source:Selectors
   | WrapRecord of ReferenceBehaviour * field:string * tag:string * target:Selectors
-  | WrapList of ReferenceBehaviour * field:string * tag:string * target:Selectors
+  | WrapList of ReferenceBehaviour * index:string * tag:string * target:Selectors
   | RecordDelete of ReferenceBehaviour * target:Selectors * field:string
 
   // Edits that cannot affect references in document

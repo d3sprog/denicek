@@ -331,7 +331,7 @@ let moveAllBefore e1 e2s =
   List.collect (moveBefore e1) e2s
 
 // --------------------------------------------------------------------------------------
-// Edit groups
+// Hash operations
 // --------------------------------------------------------------------------------------
 
 let hashEditList initial (eds:Edit list) = 
@@ -362,55 +362,110 @@ let takeAfterHash hashToFind eds =
 // takeUntilHash -1539880934 eds
 // takeAfterHash -1539880934 eds
 
-let getDependencies ed = 
-  match ed.Kind with 
-  | Copy(_, _, src) ->  getTargetSelector ed :: src :: ed.Dependencies
-  | _ -> getTargetSelector ed :: ed.Dependencies
-  
-let filterConflicting = 
-  List.filterWithState (fun modsels ed ->
-    // Conflict if any dependency depends on any of the modified locations
-    let conflict = getDependencies ed |> List.exists (fun dep -> 
-      List.exists (fun modsel -> prefix dep modsel || prefix modsel dep) modsels)
-    if conflict then false, (getTargetSelector ed)::modsels
-    else true, modsels) 
-
+// --------------------------------------------------------------------------------------
+// Effect system
+// --------------------------------------------------------------------------------------
 
 type ConflictResolution = 
   | IgnoreConflicts
   | RemoveConflicting
 
-let counter = let mutable n = 0 in (fun () -> n <- n + 1; n)
+type Effect = 
+  | TagEffect
+  | ValueEffect 
+  | StructureEffect 
+
+
+/// Format effect info in a readable way
+let formatEffect (kind, sels) = 
+  sprintf 
+    ( match kind with 
+      | ValueEffect -> "val(%s)" 
+      | TagEffect -> "tag(%s)"
+      | StructureEffect -> "struct(%s)") (Format.formatSelector sels)
+
+
+/// Returns information about the effect caused by the edit
+let getEditEffect ed = 
+  match ed.Kind with 
+  // Edits that affect structure of document 
+  // (for the purpose of effects, we ignore reference behaviour)
+  | RecordRenameField(_, t, _, _) | Copy(_, t, _)
+  | WrapRecord(_, _, _, t) | WrapList(_, _, _, t)
+  | RecordDelete(_, t, _) -> StructureEffect, t
+
+  // Edit that affects the tag of a node
+  | UpdateTag _ -> TagEffect, getTargetSelector ed
+
+  // Edits that affect the value of a node
+  | ListReorder(t, _) | ListDelete(t, _) | ListAppend(t, _, _, _)
+  | UpdateTag(t, _) | PrimitiveEdit(t, _, _)
+  | RecordAdd(t, _, _, _) -> ValueEffect, t
+
+let getEditsEffects eds =
+  set (List.map getEditEffect eds)
+
+
+/// Returns the target effect alongside with all dependencies
+/// (edit conflicts if any of those returned conflict)
+let getEditDependencies ed = 
+  let cs = match ed.Kind with Copy(_, _, s) -> [s] | _ -> [] 
+  getEditEffect ed :: [for d in cs @ ed.Dependencies -> ValueEffect, d]
+
+let getEditsDependencies eds =
+  set (List.collect getEditDependencies eds)
+
+
+/// Two effects are in conflict
+let conflicts (ef1kind, ef1sel) (ef2kind, ef2sel) = 
+  ef1kind = ef2kind && (prefix ef1sel ef2sel || prefix ef2sel ef1sel)
+
+/// Effect is in conflict with any other effect
+let conflictsWith ef effs = 
+  List.exists (conflicts ef) effs
+
+/// Any effect is in conflict with any other effect
+let conflictsWithAny effs1 effs2 = 
+  List.exists (fun e -> conflictsWith e effs1) effs2
+
+
+/// Return all effects of a nested edit list (as used inside pushEditsThrough)
+let getAllEffects x = 
+  x |> List.collect (fun (e, es) -> e::es) |> getEditsEffects |> List.ofSeq
+/// Return all dependencies of a nested edit list (as used inside pushEditsThrough)
+let getAllDependencies x = 
+  x |> List.collect (fun (e, es) -> e::es) |> getEditsDependencies |> List.ofSeq
+
 
 // Push edits 'e2s' through 'e1s'
 let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
-  (*
-  printfn "PUSH EDITS"
-  for e in e2s do printfn $"  {formatEdit e}"
-  printfn "THROUGH"
-  for e in e1s do printfn $"  {formatEdit e}"
-  //*)
-  let e2s = 
-    if crmode = RemoveConflicting then
-      let e1ModSels = e1s |> List.map getTargetSelector
-      filterConflicting e1ModSels e2s
-    else e2s
-
-  let log = false //|| true
   let e2smap =  
-    e2s |> List.map (fun e2 ->
-      if log then
-        printfn "========================"
-        printfn $"PUSHING EDIT\n  * {Format.formatEdit e2}"
-      let res = e1s |> List.fold (fun e2s e1 -> 
-        if log then printfn $"  * through: {Format.formatEdit e1}"
-        let res = moveAllBefore e1 e2s //moveAllBefore e1 e2s
-        if log then printfn "    -> now have: %s" (String.concat "," [ for e, es in res do $"  {Format.formatEdit e} {List.map Format.formatEdit es}" ])
-        res           ) [e2, []]
-      //printfn $"GOT"
-      //for e in res do printfn $"  * {formatEdit e}"
-      e2, [ for e,ee in res do yield! e::ee ]
-    )
+    // Push each individual 'e2' edit through all 'e1s'. The edit 'e2'
+    // may become multiple edits. We keep this as list<Edit * list<Edit>>
+    // where the outer list is multiple copied edits (via Copy) and the
+    // nested list keeps edits that need to be applied after the Edit
+    // (they were generated to transform things added by the edit).
+    //
+    // For conflict detection, we keep 'dropped', which are effects of
+    // all edits 'e2' that we dropped because of conflict. If a subsequent
+    // edit 'e2' conflicts with any 'dropped', it also must be dropped!
+    //
+    e2s |> List.mapWithState (fun dropped e2 ->
+      let conflict = conflictsWithAny (getEditDependencies e2) dropped 
+
+      let res, conflict = 
+        e1s |> List.fold (fun (e2s, conflict) e1 -> 
+          // e2 conflicts with e1s if it conflicted with anything before or
+          // if its effects (TODO: dependencies?) conflict with effects of e1
+          let conflict = conflict || (crmode = RemoveConflicting &&
+              conflictsWith (getEditEffect e1) (getAllDependencies e2s))
+          moveAllBefore e1 e2s, conflict)  ([e2, []], conflict)
+
+      // If 'e2' was conflicting, replace with [] and add its effects to dropped list
+      // Otherwise, flatten edits and keep original dropped list
+      if conflict then (e2, []), dropped @ getAllEffects res
+      else (e2, [ for e,ee in res do yield! e::ee ]), dropped) []
+
 
   // Compute before and after hashes for original and new edits
   let hashMap = 
@@ -418,23 +473,28 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
       let hashBefore = hash(hashBefore, e2)
       let e2afterHashed = withHistoryHash hashAfter id e2after
       let hashAfter = hashEditList hashAfter e2after
-      (hashBefore, (hashAfter, e2afterHashed)), (hashBefore, hashAfter)) (hashBefore, hashAfter) |> dict
+      (hashBefore, (hashAfter, e2afterHashed)), (hashBefore, hashAfter)
+    ) (hashBefore, hashAfter) |> dict
 
-  List.collect snd e2smap,
-  hashMap
+  // Return the new edits and hashmap for mapping old edits to new
+  List.collect snd e2smap, hashMap
 
+
+/// Push edits e1s through e2s and return just new edits
 let pushEditsThroughSimple crmode e1s e2s = 
   pushEditsThrough crmode 0 0 e1s e2s |> fst
 
+
+/// Merge histories - find common prefix, push remaining 'h2' edits 
+/// through 'h1' and append them to the end of the history
 let mergeHistories crmode (h1:Edit list) (h2:Edit list) =
   let shared, (e1s, e2s) = List.sharedPrefix h1 h2
-  //printfn "MERGE EDITS"
-  //for e in e2s do printfn $"  {formatEdit e}"
-  //printfn "AFTER"
-  //for e in e1s do printfn $"  {formatEdit e}"
-  let e2sAfter, hashMap = pushEditsThrough crmode (hashEditList 0 (shared)) (hashEditList 0 (shared @ e1s)) e1s e2s
+  let hashBefore, hashAfter = hashEditList 0 (shared), hashEditList 0 (shared @ e1s)
+  let e2sAfter, hashMap = pushEditsThrough crmode hashBefore hashAfter e1s e2s
   shared @ e1s @ e2sAfter, hashMap
 
+/// Merge histories - find common prefix, push remaining 'h2' edits 
+/// through 'h1' and append them to the end of the history (ignore hashtable)
 let mergeHistoriesSimple crmode h1 h2 = 
   mergeHistories crmode h1 h2 |> fst
 
