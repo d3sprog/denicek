@@ -395,12 +395,11 @@ let getEditEffect ed =
   | RecordDelete(_, t, _) -> StructureEffect, t
 
   // Edit that affects the tag of a node
-  | UpdateTag _ -> TagEffect, getTargetSelector ed
+  | UpdateTag(t, _) -> TagEffect, t
 
   // Edits that affect the value of a node
   | ListReorder(t, _) | ListDelete(t, _) | ListAppend(t, _, _, _)
-  | UpdateTag(t, _) | PrimitiveEdit(t, _, _)
-  | RecordAdd(t, _, _, _) -> ValueEffect, t
+  | PrimitiveEdit(t, _, _) | RecordAdd(t, _, _, _) -> ValueEffect, t
 
 let getEditsEffects eds =
   set (List.map getEditEffect eds)
