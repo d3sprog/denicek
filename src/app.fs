@@ -19,7 +19,8 @@ type DocumentState =
   { Initial : Node 
     DocumentEdits : Edit list
     EvaluatedEdits : Edit list
-    DisplayEditIndex : int 
+    DisplayEditIndex : int
+    ForkedFrom : DocumentState option
     // The following are computed by 'updateDocument'
     DisplayEdits : DisplayEdit list
     FinalHash : int
@@ -72,7 +73,8 @@ and CommandState =
 // (5) Demos - state
 
 and DemoState = 
-  { Demos : option<list<string * ApplicationState * list<string * Edit list>>> }
+  { Demos : option<list<string * ApplicationState * list<string * Edit list>>>
+    Data : Map<string, Node> }
 
 // All the states grouped together
 
@@ -95,6 +97,8 @@ type DocumentEvent =
   | MergeEdits of Edit list
   | SetEditIndex of int
   | MoveEditIndex of int 
+  | ForkHistory
+  | MergeHistory
 
 // (2) Edit history panel - events
 
@@ -132,7 +136,7 @@ type CommandEvent =
 // (5) Demos - events
 
 type DemoEvent = 
-  | LoadDemos of list<string * ApplicationState * list<string * Edit list>>
+  | LoadDemos of list<string * ApplicationState * list<string * Edit list>> * Map<string, Node>
 
 // All the events grouped together
 // (EnterCommand is here because entering a command affects global application 
@@ -443,7 +447,19 @@ module Document =
     loop [] ""
     
 
-  let update appstate state = function
+  let rec update appstate state = function
+    | MergeHistory when state.ForkedFrom.IsNone ->
+        failwith "No history to merge into!"
+
+    | MergeHistory ->
+        let orig = state.ForkedFrom.Value
+        update appstate orig (MergeEdits state.DocumentEdits)
+
+    | ForkHistory ->
+        { state with 
+            DocumentEdits = state.DocumentEdits |> List.truncate (state.DisplayEditIndex + 1)
+            EvaluatedEdits = []; ForkedFrom = Some state }
+
     | UndoLastEdit when not (List.isEmpty state.EvaluatedEdits) ->
         let nedits = state.EvaluatedEdits |> List.truncate (state.EvaluatedEdits.Length - 1) 
         { state with EvaluatedEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }        
@@ -453,7 +469,9 @@ module Document =
         { state with DocumentEdits = nedits; DisplayEditIndex = min state.DisplayEditIndex (state.DisplayEdits.Length - 2) }
 
     | Evaluate all -> 
-        let extraEval = if all then Eval.evaluateAll state.FinalDocument else Eval.evaluateOne state.FinalDocument
+        let extraEval = 
+          if all then Eval.evaluateAll appstate.DemoState.Data state.FinalDocument 
+          else Eval.evaluateOne appstate.DemoState.Data state.FinalDocument
         { state with 
             EvaluatedEdits = state.EvaluatedEdits @ extraEval              
             DisplayEditIndex = System.Int32.MaxValue }
@@ -689,10 +707,18 @@ module Shortcuts =
       Header = "Evaluate all formulas"
       IconCode = "las la-play"
       Events = [ DocumentEvent(Evaluate(true)) ] }
+    { Key = "f"
+      Header = "Fork from current history"
+      IconCode = "las la-code-branch"
+      Events = [ DocumentEvent(ForkHistory) ] }
     { Key = "h"
       Header = "Toggle edit history view"
       IconCode = "las la-history"
       Events = [ HistoryEvent(ToggleEditHistory) ] }
+    { Key = "m"
+      Header = "Merge into the main branch"
+      IconCode = "las la-code-branch"
+      Events = [ DocumentEvent(MergeHistory) ] }
     { Key = "p"
       Header = "Toggle formula provenance view"
       IconCode = "las la-database"
@@ -1286,7 +1312,7 @@ module View =
   
 module Demos = 
   let update appstate state = function
-    | LoadDemos ds -> { Demos = Some ds }
+    | LoadDemos(ds, data) -> { Demos = Some ds; Data = data }
 
   let renderDemos trigger state = h?div [] [
     h?header ["style" => "padding-bottom:0px"] [ 
@@ -1417,7 +1443,7 @@ let render trigger state =
 let fromOperationsList ops = 
   let init = rcd "div"
   { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
-      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; 
+      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; ForkedFrom = None;
       CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
     ViewState = { CursorLocation = [], Before; CursorSelector = []; ProvenanceSelectors = [];
       GeneralizedStructuralSelector = []; ViewSourceSelector = None }
@@ -1425,30 +1451,11 @@ let fromOperationsList ops =
       SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
     HistoryState = { HighlightedSelector = None; 
       SelectedEdits = Set.empty; Display = true }
-    DemoState = { Demos = None }
+    DemoState = { Demos = None; Data = Map.empty }
   }
 
 let initial = fromOperationsList []
 let trigger, _, getState = createVirtualDomApp "out" initial render update
-
-
-//let ops = merge (opsCore @ addSpeakerOps) (opsCore @ refactorListOps)
-//let ops = merge (opsCore @ fixSpeakerNameOps) (opsCore @ refactorListOps)
-//let ops = merge (opsCore @ refactorListOps) (opsCore @ fixSpeakerNameOps)
-//let ops1 = merge (opsCore @ refactorListOps) (merge (opsCore @ fixSpeakerNameOps) (opsCore @ addSpeakerOps))
-//let ops = merge ops1 (opsCore @ opsBudget)
-//let ops = merge (opsCore @ opsBudget) ops1
-
-//let ops = opsCore @ opsBudget
-//let ops = opsBaseCounter
-//let ops = opsBaseCounter @ opsCounterInc @ opsCounterHndl
-
-          // TODO: This needs to move into demos (and does not belong here anyway)
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget))) ] [text "Add budget"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ opsBudget @ addSpeakerOps))) ] [text "Add speaker"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ fixSpeakerNameOps))) ] [text "Fix name"]
-          //h?button ["click" =!> fun _ _ -> triggerDoc((MergeEdits(opsCore @ refactorListOps))) ] [text "Refacor list"]
-          //h?button ["click" =!> fun _ _ -> trigger (MergeEdits(opsCore @ addTransformOps)) ] [text "Add transformers"]
 
 
 open Browser.XMLHttpRequest
@@ -1472,14 +1479,37 @@ let startWithHandler op = Async.StartImmediate <| async {
 
 let pbdCore = opsCore @ pbdAddInput
 
+let readPrimitive (s:string) = 
+  match System.Double.TryParse(s) with 
+  | true, n -> Number(n)
+  | _ -> String(s)
+
+let readCsv (s:string) = 
+  let lines = s.Replace("\r", "").Split('\n')
+  let cols = lines.[0].Split(',')
+  let rows = lines.[1..] |> Seq.map (fun l ->
+    let data = l.Split(',') |> Array.map (fun s -> 
+      Record("td", OrdList.ofList [ "value", Primitive(readPrimitive s) ]))
+    let fields = Seq.zip cols data |> List.ofSeq |> OrdList.ofList
+    Record("tr", fields) ) |> List.ofSeq
+  List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
+
 async { 
-  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-hide"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; ]
+  let data = [ "avia.csv"; "rail.csv" ]
+  let! csvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
+  let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readCsv csvs))
+
+  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-hide"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; "traffic-base"; "traffic-copy"; "traffic-correct" ]
   let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
   match jsons with 
-  | [| helloBase; helloSaved; todoBase; todoCond; todoHide; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; |] ->
+  | [| helloBase; helloSaved; todoBase; todoCond; todoHide; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; trafficBase; trafficCopy; trafficCorrect |] ->
     let demos = 
       [ 
         "empty", readJson "[]", []
+        "traffic", readJson trafficBase, [
+          "copy", readJsonOps trafficCopy
+          "fix", readJsonOps trafficCorrect
+        ]
         //"?t1", fromOperationsList (opsCore @ addSpeakerOps), []
         "hello", readJson helloBase, [
           "saved", readJsonOps helloSaved 
@@ -1497,7 +1527,7 @@ async {
           "budget", readJsonOps confBudget
         ]
       ]
-    trigger (DemoEvent(LoadDemos demos))
+    trigger (DemoEvent(LoadDemos(demos, dataFiles)))
   | _ -> failwith "wrong number of demos" }
 |> startWithHandler
 

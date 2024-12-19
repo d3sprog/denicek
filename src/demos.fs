@@ -291,6 +291,3 @@ let opsCounterHndl baseList =
       ap0 (!/ "/saved-interactions/decrement/interactions") (string i) (Represent.represent None op) 
     yield add0 (!/ "/dec") "@click" (ref (!/"/saved-interactions/decrement")) 
   ]
-
-
-

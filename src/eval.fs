@@ -67,8 +67,14 @@ let getEvaluatedResult nd =
 
 let (|EvaluatedResult|) nd = getEvaluatedResult nd
 
-let evaluateBuiltin op (args:Map<string, Node>)= 
+let evaluateBuiltin (data:Map<string, Node>) op (args:Map<string, Node>)= 
   match op with 
+  | "read-csv" ->
+      match args.TryFind "url" with
+      | Some(EvaluatedResult(Primitive(String fname))) -> 
+          data.[fname], [Field "url"]      
+      | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
+
   | "count" | "sum" ->
       let sum = List.map (function 
         | Primitive(Number n) -> n 
@@ -89,15 +95,21 @@ let evaluateBuiltin op (args:Map<string, Node>)=
           // (and so left/right is <empty> list added by Reference evaluation)
           Primitive(String("false")), [Field "left"; Field "right"]
 
-  | "plus" | "mul" | "minus" -> 
-      let f = (dict [ "plus",(+); "mul",(*); "minus",(-) ]).[op]
+  | "round" ->
+      match args.TryFind "arg", args.TryFind "digits" with
+      | Some(EvaluatedResult(Primitive(Number f))), Some(EvaluatedResult(Primitive(Number d))) -> 
+          Primitive(Number(System.Math.Round(f, int d))), [Field "arg"; Field "digits"]
+      | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
+      
+  | "plus" | "mul" | "minus" | "div" -> 
+      let f = (dict [ "plus",(+); "mul",(*); "minus",(-); "div",(/) ]).[op]
       match args.TryFind "left", args.TryFind "right" with
       | Some(EvaluatedResult(Primitive(Number n1))), Some(EvaluatedResult(Primitive(Number n2))) -> 
           Primitive(Number(f n1 n2)), [Field "left"; Field "right"]
       | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
   | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"          
 
-let evaluateRaw doc =
+let evaluateRaw data doc =
   match evalSite None [] doc with
   | None -> []
   | Some(formulaSel, sel) ->
@@ -111,7 +123,7 @@ let evaluateRaw doc =
             Copy(KeepReferences, sel @ [Field "result"], p), [] ]
 
       | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, [ Field("$builtins"); Field op ]), args)) ->
-          let res, deps = evaluateBuiltin op args
+          let res, deps = evaluateBuiltin data op args
           // More fine grained dependency would be [ for p in deps -> sel @ [p] ]
           // but this does not seem to work so we just add dependency on the entire
           // formula (the most top-level one) - which is safe overapproximation
@@ -125,14 +137,14 @@ let evaluateRaw doc =
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
 
-let evaluateOne doc =
+let evaluateOne data doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
-  [ for ed, deps in evaluateRaw doc -> 
+  [ for ed, deps in evaluateRaw data doc -> 
       { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
-let evaluateAll doc = 
+let evaluateAll data doc = 
   let rec loop doc = seq {
-    let edits = evaluateOne doc
+    let edits = evaluateOne data doc
     yield! edits
     let ndoc = Apply.applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }
