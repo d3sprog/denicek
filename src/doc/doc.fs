@@ -220,12 +220,10 @@ type EditKind =
   // Edits that cannot affect references in document
   | ListReorder of Selectors * permutation:list<string>
   | ListDelete of Selectors * index:string
-  | ListAppend of Selectors * index:string * pred:string option * node:Node 
-  // TODO: Delete this (but it will require recreating demo JSONs...)
-  | ListAppendFrom_DELETE_ME of Selectors * index:string * pred:string option * source:Selectors 
+  | ListAppend of Selectors * index:string * pred:string option * succ:string option * node:Node 
   | UpdateTag of Selectors * ntag:string
   | PrimitiveEdit of Selectors * op:string * args:string option
-  | RecordAdd of Selectors * field:string * pred:string option * node:Node
+  | RecordAdd of Selectors * field:string * pred:string option * succ:string option * node:Node
 
 type Edit = 
   { Kind : EditKind 
@@ -272,12 +270,12 @@ module Format =
         fmtv "primitive" [formatSelector sel; formatString op]
     | PrimitiveEdit(sel, op, Some arg) -> 
         fmtv "primitive" [formatSelector sel; formatString op; formatString arg]
-    | RecordAdd(sel, n, pred, nd) -> 
-        fmtv "recordAdd" [formatSelector sel; formatString n; formatStringOpt pred; formatNode nd]
+    | RecordAdd(sel, n, pred, succ, nd) -> 
+        fmtv "recordAdd" [formatSelector sel; formatString n; formatStringOpt pred; formatStringOpt succ; formatNode nd]
     | UpdateTag(sel, tagNew) -> 
         fmtv "updateTag" [formatSelector sel; formatString tagNew]
-    | ListAppend(sel, n, pred, nd) ->       
-        fmtv "listAppend" [formatSelector sel; formatString n; formatStringOpt pred; formatNode nd ]
+    | ListAppend(sel, n, pred, succ, nd) ->       
+        fmtv "listAppend" [formatSelector sel; formatString n; formatStringOpt pred; formatStringOpt succ; formatNode nd ]
     | ListReorder(sel, ord) -> 
         fmtv "listReorder" [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
     | ListDelete(sel, i) -> 

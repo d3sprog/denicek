@@ -25,8 +25,8 @@ let getSelectors ed =
   // Pointing at a node that will be modified by the edit
   | WrapRecord(_, _, _, s) 
   | WrapList(_, _, _, s) 
-  | ListAppend(s, _, _, _) 
-  | RecordAdd(s, _, _, _) -> [s]
+  | ListAppend(s, _, _, _, _) 
+  | RecordAdd(s, _, _, _, _) -> [s]
   // Add selector pointing to the previously existing thing 
   | RecordDelete(_, s, fld) 
   | RecordRenameField(_,s, fld, _) -> [s @ [Field fld]]
@@ -43,8 +43,8 @@ let withSelectors sels ed =
   // Pointing at a node that will be modified by the edit
   | WrapRecord(rb, id, t, _) -> WrapRecord(rb, id, t, List.exactlyOne sels) |> ret
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, List.exactlyOne sels) |> ret
-  | ListAppend(_, n, pred, nd) -> ListAppend(List.head sels, n, pred, nd) |> ret
-  | RecordAdd(_, s, pred, nd) -> RecordAdd(List.head sels, s, pred, nd) |> ret
+  | ListAppend(_, n, pred, succ, nd) -> ListAppend(List.head sels, n, pred, succ, nd) |> ret
+  | RecordAdd(_, s, pred, succ, nd) -> RecordAdd(List.head sels, s, pred, succ, nd) |> ret
   // Add selector pointing to the previously existing thing 
   | ListDelete(_, _) -> ListDelete(List.dropLast (List.exactlyOne sels), getLastIndex (List.exactlyOne sels)) |> ret
   | RecordDelete(rb, _, f) -> RecordDelete(rb, List.dropLast (List.exactlyOne sels), getLastField (List.exactlyOne sels)) |> ret
@@ -65,13 +65,13 @@ let getTargetSelector ed =
   | PrimitiveEdit(s, _, _)
   | Copy(_, s, _) -> s
   // Add selector to the end, pointing at the affected node
-  | ListAppend(s, i, _, _) 
+  | ListAppend(s, i, _, _, _) 
   | ListDelete(s, i) -> s @ [Index i]
   | RecordRenameField(_, s, _, id) 
   | RecordDelete(_, s, id)
   | WrapRecord(_, _, id, s) 
   | WrapList(_, id, _, s)
-  | RecordAdd(s, id, _, _) -> s @ [Field id]
+  | RecordAdd(s, id, _, _, _) -> s @ [Field id]
 
 let withTargetSelector tgt ed = 
   let ret nk = { ed with Kind = nk }
@@ -82,13 +82,13 @@ let withTargetSelector tgt ed =
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
   | Copy(rb, _, s) -> Copy(rb, tgt, s) |> ret
   // Remove added selector, pointing at the affected node
-  | ListAppend(_, _, pred, nd) -> ListAppend(List.dropLast tgt, getLastIndex tgt, pred, nd) |> ret
+  | ListAppend(_, _, pred, succ, nd) -> ListAppend(List.dropLast tgt, getLastIndex tgt, pred, succ, nd) |> ret
   | ListDelete(_, _) -> ListDelete(List.dropLast tgt, getLastIndex tgt) |> ret
   | RecordRenameField(rb, _, o, _) -> RecordRenameField(rb, List.dropLast tgt, o, getLastField tgt) |> ret
   | RecordDelete(rb, _, _) -> RecordDelete(rb, List.dropLast tgt, getLastField tgt) |> ret
   | WrapRecord(rb, t, _, _) -> WrapRecord(rb, t, getLastField tgt, List.dropLast tgt) |> ret
   | WrapList(rb, _, t, _) -> WrapList(rb, getLastField tgt, t, List.dropLast tgt) |> ret
-  | RecordAdd(_, _, pred, nd) -> RecordAdd(List.dropLast tgt, getLastField tgt, pred, nd) |> ret
+  | RecordAdd(_, _, pred, succ, nd) -> RecordAdd(List.dropLast tgt, getLastField tgt, pred, succ, nd) |> ret
 
 
 // --------------------------------------------------------------------------------------
@@ -105,10 +105,10 @@ let getBaseTargetSelector ed =
   | UpdateTag(s, _) 
   | PrimitiveEdit(s, _, _) 
   | WrapList(_, _, _, s) 
-  | ListAppend(s, _, _, _) 
+  | ListAppend(s, _, _, _, _) 
   | ListDelete(s, _) -> s 
   | RecordDelete(_, s, _)
-  | RecordAdd(s, _, _, _) 
+  | RecordAdd(s, _, _, _, _) 
   | WrapRecord(_, _, _, s) -> s
   | RecordRenameField(_, s, f, _) -> s @ [Field f]
 
@@ -122,12 +122,12 @@ let withBaseTargetSelector tgt ed =
   | UpdateTag(_, t) -> UpdateTag(tgt, t) |> ret
   | PrimitiveEdit(_, f, arg) -> PrimitiveEdit(tgt, f, arg) |> ret
   | WrapList(rb, id, t, _) -> WrapList(rb, id, t, tgt) |> ret
-  | ListAppend(_, i, pred, nd) -> ListAppend(tgt, i, pred, nd) |> ret
+  | ListAppend(_, i, pred, succ, nd) -> ListAppend(tgt, i, pred, succ, nd) |> ret
   | ListDelete(_, i) -> ListDelete(tgt, i) |> ret
   | RecordRenameField(rb, _, _, fn) -> RecordRenameField(rb, List.dropLast tgt, getLastField tgt, fn) |> ret
   | RecordDelete(rb, _, f) -> RecordDelete(rb, tgt, f) |> ret
   | WrapRecord(rb, i, t, _) -> WrapRecord(rb, i, t, tgt) |> ret
-  | RecordAdd(_, f, pred, nd) -> RecordAdd(tgt, f, pred, nd) |> ret
+  | RecordAdd(_, f, pred, succ, nd) -> RecordAdd(tgt, f, pred, succ, nd) |> ret
  
 
 // --------------------------------------------------------------------------------------
@@ -161,8 +161,8 @@ module UpdateSelectors =
 
   let getInNodeReferences ed = 
     match ed.Kind with 
-    | ListAppend(s, _, _, nd) 
-    | RecordAdd(s, _, _, nd) -> getNodeReferences s nd
+    | ListAppend(s, _, _, _, nd) 
+    | RecordAdd(s, _, _, _, nd) -> getNodeReferences s nd
     | _ -> []
 
   let getAllReferences = 
@@ -175,8 +175,8 @@ module UpdateSelectors =
   let withInNodeReferences refs ed = 
     let ret nk = { ed with Kind = nk }
     match ed.Kind with 
-    | ListAppend(sel, i, pred, nd) -> ListAppend(sel, i, pred, withNodeReferences nd refs) |> ret
-    | RecordAdd(sel, f, pred, nd) -> RecordAdd(sel, f, pred, withNodeReferences nd refs) |> ret
+    | ListAppend(sel, i, pred, succ, nd) -> ListAppend(sel, i, pred, succ, withNodeReferences nd refs) |> ret
+    | RecordAdd(sel, f, pred, succ, nd) -> RecordAdd(sel, f, pred, succ, withNodeReferences nd refs) |> ret
     | _ -> ed
 
 
@@ -398,8 +398,8 @@ let getEditEffect ed =
   | UpdateTag(t, _) -> TagEffect, t
 
   // Edits that affect the value of a node
-  | ListReorder(t, _) | ListDelete(t, _) | ListAppend(t, _, _, _)
-  | PrimitiveEdit(t, _, _) | RecordAdd(t, _, _, _) -> ValueEffect, t
+  | ListReorder(t, _) | ListDelete(t, _) | ListAppend(t, _, _, _, _)
+  | PrimitiveEdit(t, _, _) | RecordAdd(t, _, _, _, _) -> ValueEffect, t
 
 let getEditsEffects eds =
   set (List.map getEditEffect eds)

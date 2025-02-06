@@ -61,20 +61,20 @@ let apply doc edit =
         | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
-  | RecordAdd(sel, fld, pred, nd) ->
+  | RecordAdd(sel, fld, pred, succ, nd) ->
       replace (fun p el -> 
         match el with 
         | Record(tag, nds) when matches p sel -> 
             let nds = nds |> OrdList.remove fld
-            Some(Record(tag, OrdList.add (fld, nd) pred nds))
+            Some(Record(tag, OrdList.insert (fld, nd) pred succ nds))
         | _ -> None ) doc
     
-  | ListAppend(sel, n, pred, nd) ->
+  | ListAppend(sel, n, pred, succ, nd) ->
       replace (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> 
             // Similar to 'RecordAdd' but we do not remove duplicates (but what this does is untested)
-            Some(List(tag, OrdList.add (n, nd) pred nds))
+            Some(List(tag, OrdList.insert (n, nd) pred succ nds))
         | _ -> None ) doc
       
   | UpdateTag(sel, tagNew) ->

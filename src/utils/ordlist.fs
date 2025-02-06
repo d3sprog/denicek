@@ -76,6 +76,12 @@ module rec OrdList =
     | Some pred -> { Members = ol.Members.Add(k, v); Order = ol.Order |> neqAdd (k, pred) }
     | None -> { Members = ol.Members.Add(k, v); Order = ol.Order }
 
+  let insert (k, v) pred succ ol = 
+    let nmembers = ol.Members.Add(k, v)
+    let norder = match pred with None -> ol.Order | Some pred -> ol.Order |> neqAdd (k, pred)
+    let norder = match succ with None -> norder | Some succ -> norder |> neqAdd (succ, k)
+    { Members = nmembers; Order = norder }
+
   let tryLastKey ol = 
     let mutable lk = None
     for k in ol.Members.Keys do

@@ -47,7 +47,7 @@ and evalSite (formulaSel:option<_>) sels nd : option<Selectors * Selectors> =
       match evalSiteChildren Field (Some formulaSel) sels (OrdList.toList children) with 
       | Some res -> Some res
       | None -> Some(formulaSel, List.rev sels)
-  | Reference(Absolute, Field "$builtins"::_ ), _ -> None
+  | Reference(Absolute, Field b::_ ), _ when b.StartsWith("$") -> None
   | Reference _, Some(formulaSel) -> Some (formulaSel, List.rev sels)
   | Reference _, _ -> None
   // Look recursively
@@ -109,7 +109,7 @@ let evaluateBuiltin (data:Map<string, Node>) op (args:Map<string, Node>)=
       | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
   | _ -> failwith $"evaluate: Built-in op '{op}' not implemented!"          
 
-let evaluateRaw data doc =
+let evaluateRaw evaluateBuiltin doc =
   match evalSite None [] doc with
   | None -> []
   | Some(formulaSel, sel) ->
@@ -119,32 +119,40 @@ let evaluateRaw data doc =
       | Reference(kind, p) ->
           let p = resolveReference sel (kind, p)
           [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p]
-            RecordAdd(sel, "result", None, List("empty", OrdList.empty)), [p] // Allow 'slightly clever' case of Copy from doc.fs
+            RecordAdd(sel, "result", None, None, List("empty", OrdList.empty)), [p] // Allow 'slightly clever' case of Copy from doc.fs
             Copy(KeepReferences, sel @ [Field "result"], p), [] ]
 
-      | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, [ Field("$builtins"); Field op ]), args)) ->
-          let res, deps = evaluateBuiltin data op args
+      | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, op & (Field ophd)::_), args)) when ophd.StartsWith("$") ->
+          //
+          // let res, deps = evaluateBuiltin data op args
+          //
           // More fine grained dependency would be [ for p in deps -> sel @ [p] ]
           // but this does not seem to work so we just add dependency on the entire
-          // formula (the most top-level one) - which is safe overapproximation
+          // formula (the most top-level one) - which is a safe overapproximation
           // (value edits can transform the formula, breaking the dependencies)
+          let res = evaluateBuiltin op args          
           let deps = [ formulaSel ] 
           [ WrapRecord(KeepReferences, "formula", "x-evaluated", sel), deps
-            RecordAdd(sel, "result", None, res), deps ]
+            RecordAdd(sel, "result", None, None, res), deps ]
 
       | Record("x-formula", nds) -> 
           failwith $"evaluate: Unexpected format of arguments {[for f, _ in nds -> f]}: {nds}"
       | _ -> failwith $"evaluate: Evaluation site returned unevaluable thing: {it}"
 
 
-let evaluateOne data doc =
+let webnicekEvaluateBuiltins data op args = 
+  match op with 
+  | [Field "$builtins"; Field op ] -> fst (evaluateBuiltin data op args)
+  | _ -> failwith $"evaluate: Unknown builtin {op}"
+
+let evaluateOne evaluateBuiltins doc =
   let lbl = "evaluate." + System.Guid.NewGuid().ToString("N")
-  [ for ed, deps in evaluateRaw data doc -> 
+  [ for ed, deps in evaluateRaw evaluateBuiltins doc -> 
       { Kind = ed; Dependencies = deps; GroupLabel = lbl } ]
   
-let evaluateAll data doc = 
+let evaluateAll evaluateBuiltins doc = 
   let rec loop doc = seq {
-    let edits = evaluateOne data doc
+    let edits = evaluateOne evaluateBuiltins doc
     yield! edits
     let ndoc = Apply.applyHistory doc edits 
     if doc <> ndoc then yield! loop ndoc }

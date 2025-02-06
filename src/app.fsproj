@@ -15,7 +15,9 @@
     <Compile Include="matcher.fs" />
     <Compile Include="serializer.fs" />
     <Compile Include="html.fs" />
-    <Compile Include="app.fs" />
+    <Compile Include="webnicek.fs" />
+	  <Compile Include="datnicek.fs" />
+	  <Compile Include="main.fs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Fable.Browser.XMLHttpRequest" Version="1.4.0" />

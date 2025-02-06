@@ -25,11 +25,11 @@ let ndr fld tag sel = Record(tag, OrdList.singleton (ffld fld) (Reference(sel)))
 let mkEd ed = { Kind = ed; Dependencies = []; GroupLabel = "" }
 
 // Value edits
-let ap0 s i n = mkEd <| ListAppend(s, i, None, n)
-let ap s i pi n = mkEd <| ListAppend(s, i, Some pi, n)
+let ap0 s i n = mkEd <| ListAppend(s, i, None, None, n)
+let ap s i pi n = mkEd <| ListAppend(s, i, Some pi, None, n)
 let ed sel fn f = Apply.transformationsLookup.["_" + fn] <- f; mkEd <| PrimitiveEdit(sel, "_" + fn, None)
-let add sel f pred n = mkEd <| RecordAdd(sel, ffld f, Some pred, n)
-let add0 sel f n = mkEd <| RecordAdd(sel, ffld f, None, n)
+let add sel f pred n = mkEd <| RecordAdd(sel, ffld f, Some pred, None, n)
+let add0 sel f n = mkEd <| RecordAdd(sel, ffld f, None, None, n)
 let ord s l = mkEd <| ListReorder(s, l)
 let tag s t = mkEd <| UpdateTag(s, t)
 
