@@ -76,6 +76,12 @@ module rec OrdList =
     | Some pred -> { Members = ol.Members.Add(k, v); Order = ol.Order |> neqAdd (k, pred) }
     | None -> { Members = ol.Members.Add(k, v); Order = ol.Order }
 
+  let tryFindPred k ol = 
+    ol.Order.TryFind(k)
+
+  let tryFindSucc k ol = 
+    ol.Order |> Seq.tryPick (fun (KeyValue(succ, key)) -> if k = key then Some succ else None)
+
   let insert (k, v) pred succ ol = 
     let nmembers = ol.Members.Add(k, v)
     let norder = match pred with None -> ol.Order | Some pred -> ol.Order |> neqAdd (k, pred)

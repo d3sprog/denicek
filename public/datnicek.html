@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
   <style type="text/css">
     * { margin:0px; padding:0px; }
     body { padding:20px; background:#f0f0f0; font-family:Quicksand, sans-serif; }
@@ -25,11 +25,33 @@
     .notebook .cell-text .links a, .notebook .cell-text .title { color:#92D1C6; }
     .notebook .cell-code .links a, .notebook .cell-code .title { color:#F9B56B; }
     .notebook .cell-grid .links a, .notebook .cell-grid .title { color:#BDB9D7; }
-    .notebook .cell-code .actions { position:relative; top:20px; text-align:left;}
+    .notebook .cell-code .actions { position:relative; top:20px; text-align:left; display:inline-block; }
     .notebook .cell-code .actions a { margin-left:0px; }
 
+    /* source code view */
+    .treedoc * { font:400 8pt 'roboto mono',monospace; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
+
+    .cell-code .code-block { padding-left:10px; }
+    .cell-code .flist { font: 400 9pt 'roboto mono',monospace; }
+    .cell-code .flist li { list-style-type:none; }
+    .cell-code .flist .flist-eq { padding-left: 20px; }
+    .cell-code .expr { background:#f9b46b30; padding:3px 5px; border-radius: 4px; margin:2px; display:inline-block; }
+    .cell-code .expr.hover { background:#f9b46b80; }
+    .cell-code .code-block a { color:black; text-decoration:none; font-style:italic;}
     .cell-code .dropdown { display:inline-block; }
-    .cell-code .expr { background:#f9b46b40; padding:2px 4px; border-radius: 4px;}
+    .cell-code .dropdown ul { position:absolute; background:#E0903A; padding:3px; border-radius:2px; z-index:1000; min-width:100px;}
+    .cell-code .dropdown ul li { list-style-type:none; }
+    .cell-code .dropdown ul li:hover { background:#F9B56B; }
+    .cell-code .dropdown ul li a { font:600 normal 9pt Quicksand,sans-serif; color:white; width:100%; display:inline-block;  padding:1px 3px;  }
+    .cell-code button { border-style:none; background:#E0903A; color:white; border-radius:4px; padding:0px 3px 1px 3px; cursor: pointer; font-weight:700; font-size:9pt; }
+    .cell-code button:hover, .cell-code button.opened { background:#F9B56B;  }
+    .cell-code input { outline:none; border:1px solid #F9B56B; background:#ffffff90; font:italic 400 9pt 'roboto mono',monospace; margin:0px 2px; padding:2px 5px; width:80px; }
   </style>
 </head>
 <body>
