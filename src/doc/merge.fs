@@ -397,9 +397,11 @@ let getEditEffect ed =
   // Edit that affects the tag of a node
   | UpdateTag(t, _) -> TagEffect, t
 
+  | RecordAdd(t, f, _, _, _) -> ValueEffect, t @ [Field f]    // DATNICEK: Needs more precise tracking
+  | ListAppend(t, i, _, _, _) -> ValueEffect, t @ [Index i]   // dtto.
+
   // Edits that affect the value of a node
-  | ListReorder(t, _) | ListDelete(t, _) | ListAppend(t, _, _, _, _)
-  | PrimitiveEdit(t, _, _) | RecordAdd(t, _, _, _, _) -> ValueEffect, t
+  | ListReorder(t, _) | ListDelete(t, _) | PrimitiveEdit(t, _, _) -> ValueEffect, t
 
 let getEditsEffects eds =
   set (List.map getEditEffect eds)
@@ -458,6 +460,7 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
           // if its effects (TODO: dependencies?) conflict with effects of e1
           let conflict = conflict || (crmode = RemoveConflicting &&
               conflictsWith (getEditEffect e1) (getAllDependencies e2s))
+          //printfn $"PUSHING {List.map (fst >> Format.formatEdit) e2s}\n  THROUGH {Format.formatEdit e1}  CONFLICT={conflict}"
           moveAllBefore e1 e2s, conflict)  ([e2, []], conflict)
 
       // If 'e2' was conflicting, replace with [] and add its effects to dropped list

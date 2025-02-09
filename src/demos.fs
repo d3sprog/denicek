@@ -13,8 +13,8 @@ let ffld f =
   else f
 
 // Node construction
-let rcd tag = Record(tag, OrdList.empty)
-let lst tag = List(tag, OrdList.empty)
+let rcd tag = Record(tag, OrdList.empty ())
+let lst tag = List(tag, OrdList.empty ())
 let ref sel = Reference(Absolute, sel)
 let ps s = Primitive(String s)
 let pn n = Primitive(Number n)

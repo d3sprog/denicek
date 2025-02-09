@@ -4,6 +4,19 @@ open Browser
 open Browser.Types
 open Fable.Core
 
+module Log = 
+  let colors = ["#1f77b4";"#ff7f0e";"#2ca02c";"#d62728";"#9467bd";"#8c564b";"#e377c2";"#7f7f7f";"#bcbd22";"#17becf"]
+  let categories = System.Collections.Generic.Dictionary<string, string>()
+  let timestamp() = System.DateTime.Now.ToString("HH:mm:ss.fff")
+  let log cat m = 
+    if not (categories.ContainsKey(cat)) then categories.Add(cat, colors.[categories.Count % colors.Length])
+    console.log("%c[" + timestamp() + "] %c[" + cat + "] " + m, "color:#808080", "color:" + categories.[cat])
+  let logOp cat op f = 
+    log cat ("starting " + op)
+    let res = f () 
+    log cat ("finished " + op)
+    res
+
 module Virtualdom = 
   [<Import("h","virtual-dom")>]
   let h(arg1: string, arg2: obj, arg3: obj[]): obj = failwith "JS only"
@@ -96,17 +109,28 @@ let createVirtualDomApp id initial r u =
   let mutable state = initial
 
   let setState newState = 
+    Log.log "render" "Callling app render"
     state <- newState
     let newTree, op = r trigger state |> renderVirtual
+    Log.log "render" "app render completed"
     let patches = Virtualdom.diff tree newTree
+    Log.log "render" "diff completed"
     container <- Virtualdom.patch container patches
     tree <- newTree
     op ()
+    Log.log "render" "patch completed"
   let getState() = 
     state
   
   setState initial
-  event.Publish.Add(fun e -> setState (u state trigger e))
+  event.Publish.Add(fun e -> 
+    let en = sprintf "%A" e
+    let en = if en.IndexOf(' ') > 0 then en.Substring(0, en.IndexOf(' ')) else en
+    Log.log "event" $"triggered: {en}"
+    Log.log "event" "calling update"
+    let newState = u state trigger e
+    Log.log "event" "update finished"
+    setState newState)
   trigger, setState, getState
   
 let text s = Text(s)

@@ -11,6 +11,7 @@ module.exports = {
         path: path.join(__dirname, "./public"),
         filename: "bundle.js",
     },
+    devtool: 'source-map',
     devServer: {
         static: {
             directory: path.resolve(__dirname, "./public"),

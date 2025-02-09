@@ -118,9 +118,9 @@ let evaluateRaw evaluateBuiltin doc =
       match it with 
       | Reference(kind, p) ->
           let p = resolveReference sel (kind, p)
-          [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p]
-            RecordAdd(sel, "result", None, None, List("empty", OrdList.empty)), [p] // Allow 'slightly clever' case of Copy from doc.fs
-            Copy(KeepReferences, sel @ [Field "result"], p), [] ]
+          [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p;formulaSel]
+            RecordAdd(sel, "result", None, None, List("empty", OrdList.empty ())), [p;formulaSel] // Allow 'slightly clever' case of Copy from doc.fs
+            Copy(KeepReferences, sel @ [Field "result"], p), [p;formulaSel] ] // DENICEK: add [p] ref here too (because of weaker effect checker)
 
       | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, op & (Field ophd)::_), args)) when ophd.StartsWith("$") ->
           //

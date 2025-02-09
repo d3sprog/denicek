@@ -503,7 +503,7 @@ module Document =
                     | _ -> yield hash, op ]
 
               if newOps <> ops then
-                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", None, None, List("x-interaction-list", OrdList.empty))
+                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", None, None, List("x-interaction-list", OrdList.empty ()))
                 for i, (hash, op) in Seq.indexed newOps ->
                   ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
                     (if i = 0 then None else Some(string(i-1))), None, Represent.represent (Some hash) op) ]
@@ -919,11 +919,11 @@ module Commands =
         yield command NS RN "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
-                yield RecordAdd([], "saved-interactions", None, None, Record("x-saved-interactions", OrdList.empty))
+                yield RecordAdd([], "saved-interactions", None, None, Record("x-saved-interactions", OrdList.empty ()))
               yield RecordAdd([Field "saved-interactions"], fld, None, None,
                 Record("x-interaction", OrdList.ofList [ 
                   "historyhash", Primitive(String(histHash.ToString("x"))); 
-                  "interactions", List("x-interaction-list", OrdList.empty) ]))
+                  "interactions", List("x-interaction-list", OrdList.empty ()) ]))
               for i, (hash, op) in Seq.indexed recordedEds ->
                 ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
                   string i, (if i = 0 then None else Some(string(i-1))), None, 
@@ -952,10 +952,10 @@ module Commands =
                   Copy(rb.Value, sel @ [Field fld], src) ] ))
         yield command sk rb "las la-id-card" ("Add record field to " + cr)
           ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, pred, None, Record(tag, OrdList.empty)) ))
+            RecordAdd(sel, fld, pred, None, Record(tag, OrdList.empty ())) ))
         yield command sk rb "las la-list" ("Add list field to " + cr)
           ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, pred, None, List(tag, OrdList.empty)) ))
+            RecordAdd(sel, fld, pred, None, List(tag, OrdList.empty ())) ))
         yield command sk rb "las la-link" ("Add reference field to " + cr)
           ( fieldAssignment <*> refHole |> mapEd (fun (fld, ref) ->
             RecordAdd(sel, fld, pred, None, Reference(ref)) ))
@@ -980,10 +980,10 @@ module Commands =
                   Copy(KeepReferences, sel @ [Index idx], src) ]))
         yield command sk rb "las la-id-card" ("Add record item to " + cl)
           ( fieldAssignment <*> recordTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, pred, None, Record(tag, OrdList.empty)) ))
+            ListAppend(sel, idx, pred, None, Record(tag, OrdList.empty ())) ))
         yield command sk rb "las la-list" ("Add list item to " + cl)
           ( fieldAssignment <*> listTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, pred, None, List(tag, OrdList.empty)) ))
+            ListAppend(sel, idx, pred, None, List(tag, OrdList.empty ())) ))
         yield command sk rb "las la-hashtag" ("Add numerical item to " + cl)
           ( fieldAssignment <*> numHole |> mapEd (fun (idx, num) ->
             ListAppend(sel, idx, pred, None, Primitive(Number (int num))) ))
