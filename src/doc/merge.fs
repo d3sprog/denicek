@@ -419,7 +419,8 @@ let getEditsDependencies eds =
 
 /// Two effects are in conflict
 let conflicts (ef1kind, ef1sel) (ef2kind, ef2sel) = 
-  ef1kind = ef2kind && (prefix ef1sel ef2sel || prefix ef2sel ef1sel)
+  // ef1kind = ef2kind &&                                 // DATNICEK: needs stricter handling here
+  (prefix ef1sel ef2sel || prefix ef2sel ef1sel)
 
 /// Effect is in conflict with any other effect
 let conflictsWith ef effs = 
@@ -460,7 +461,7 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
           // if its effects (TODO: dependencies?) conflict with effects of e1
           let conflict = conflict || (crmode = RemoveConflicting &&
               conflictsWith (getEditEffect e1) (getAllDependencies e2s))
-          //printfn $"PUSHING {List.map (fst >> Format.formatEdit) e2s}\n  THROUGH {Format.formatEdit e1}  CONFLICT={conflict}"
+          printfn $"PUSHING {List.map (fst >> Format.formatEdit) e2s}\n  THROUGH {Format.formatEdit e1}  CONFLICT={conflict}"
           moveAllBefore e1 e2s, conflict)  ([e2, []], conflict)
 
       // If 'e2' was conflicting, replace with [] and add its effects to dropped list
