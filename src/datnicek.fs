@@ -61,10 +61,12 @@ let rec chartObj =
         Invoke = fun _ -> failwith "chart.with title: not implemented" }
   ]}
 
+
 let parsePrimitive (s:string) =
   match System.Double.TryParse(s) with
   | true, n -> Number(n)
   | _ -> String(s)
+
 
 let rec tableObj =
 
@@ -164,7 +166,7 @@ let rec (|FormulaGlobal|FormulaMember|FormulaReference|FormulaPrimitive|) nd =
       FormulaMember(ns, op, inst, otherArgs)
   | Primitive(p) ->
       FormulaPrimitive(p)
-  | _ -> failwith $"FormulaGlobal|FormulaMember|FormulaPrimitive: Not a formula or missing op: {nd}"
+  | _ -> failwith $"Formula: Not a formula or missing op: {nd}"
 
 let rec getFormulaType bindings nd =
   match nd with
@@ -264,6 +266,22 @@ let evaluateBuiltin evalCtx op args =
 // Application state
 // --------------------------------------------------------------------------------------
 
+type GridEdit =
+  { Title : string
+    Icon : string
+    EditType : string
+    Description : string
+    Edits : EditKind list }
+
+type GridLocation =
+  { CellId:string;
+    RowIndex:string;
+    Field:string }
+
+type GridCellState =
+  { Data : (Node * Node) option 
+    Source : Selectors }
+
 type State =
   {
     SourceEdits : Edit list
@@ -283,7 +301,10 @@ type State =
     EditingBindingPath : Selectors option
     EditingValuePath : Selectors option
     // Grid editing
-    EditingGridPath : {| cellId:string; rowIndex:string; field:string |} option 
+    EditingGridPath : GridLocation option
+    GridRecommendations : Map<string, GridEdit list>
+
+    GridCellState : Map<string, GridCellState>
   }
 
 type CellKind =
@@ -304,8 +325,10 @@ type Event =
   | EditValue of sel:Selectors option
   | EditBinding of sel:Selectors option
   // Grid editing
-  | EditGrid of sel:{| cellId:string; rowIndex:string; field:string |} option 
-
+  | EditGrid of sel:GridLocation option
+  | GridRecommend of cell:string * kind:string * GridEdit option
+  | GridApplyEdit of cell:string * edits:GridEdit
+  | UpdateGridState of cell:string
 
 // --------------------------------------------------------------------------------------
 // Document edits
@@ -316,9 +339,10 @@ let getBindings doc =
   | Record(_, cells) ->
       cells |> OrdList.toList |> List.collect (fun (ck, cv) ->
         match cv with
-        | Record(_, formulas) ->
+        | Record("cell-code", formulas) ->
             formulas |> OrdList.toList |> List.map (fun (fk, fv) ->
               [Field ck; Field fk], fv)
+        | Record(_, _) -> [] // No formulas in grid or text cells
         | _ -> failwith "getBindings: Expected record of formulas")
   | _ -> failwith "getBindings: Expected record of cells"
 
@@ -361,8 +385,8 @@ let ofCellKindName = function
 
 type Cell =
   { Kind : CellKind
-    ID : string
-    NextID : string option
+    Id : string
+    NextId : string option
     Node : Node }
 
 let getNotebookCells nd =
@@ -374,9 +398,67 @@ let getNotebookCells nd =
         match nd with
         | Record(typ, _) when typ.StartsWith("cell-") ->
             { Kind = ofCellKindName (typ.Substring(5))
-              ID = id; NextID = next; Node = nd }
+              Id = id; NextId = next; Node = nd }
         | _ -> failwith "getNotebookCells: expected record cell")
   | _ -> failwith "getNotebookCells: expected document node"
+
+// --------------------------------------------------------------------------------------
+// Grid state
+// --------------------------------------------------------------------------------------
+
+let getAppliedEditsMetadata cellNode = 
+  match cellNode with 
+  | Record("cell-grid", { Members = Find "edits" (List("edits", edits)) }) ->
+      edits |> OrdList.toList |> List.map (function
+        | _, Record("simple-edit", { Members = Find "title" (PS title) 
+          & Find "icon" (PS icon) & Find "description" (PS description) }) -> 
+          {| icon = icon; description = description; title = title |}
+        | _ -> failwith "updateGridState: not simple-edit")
+  | _ -> failwith "getAppliedEditsMetadata: no edits in cell-grid" 
+
+let updateGridState cellId state =
+  let cellNode =
+    match select [Field cellId] state.Document with
+    | [ Record(_, { Members = Find "target" (Reference(Absolute, src))
+          & Find "edits" (List("edits", edits)) }) ] ->
+        Some(src, OrdList.toList edits)
+    | _ -> None
+
+  match cellNode with 
+  | Some(src, edits) ->
+      let cellState = state.GridCellState.TryFind(cellId) |> Option.defaultValue { Source = src; Data = None }
+      let cellData = cellState.Data |> Option.orElseWith (fun () ->
+        match select src state.Document with
+        | [ FormulaEvaluated(table & List("table", _), _) ] -> Some(table, table)
+        | _ -> None )
+      let cellData = cellData |> Option.map (fun (input, _) ->
+        let edits = edits |> List.collect (function
+          | _, Record("simple-edit", { Members = Find "edits" (List(_, eds)) }) -> 
+            eds |> OrdList.toList |> List.collect (snd >> Represent.unrepresent) |> List.map fst
+          | _ -> failwith "updateGridState: not simple-edit")
+        input, Apply.applyHistory input edits)
+      { state with GridCellState = state.GridCellState.Add(cellId, { cellState with Data = cellData })  }
+
+  | None -> state
+
+
+let applyGridEdits cellId recm state =
+  let state = { state with GridRecommendations = Map.empty }
+  let editsSel = [Field cellId; Field "edits"]
+  let prevIndex = 
+    match select editsSel state.Document with
+    | [List(_, items)] -> OrdList.tryLastKey items | _ -> None
+  let index = match prevIndex with Some i -> (int i) + 1 | _ -> 0
+
+  let edits = OrdList.ofList [ 
+    for i, ed in Seq.indexed recm.Edits -> 
+      string i, Represent.represent None (mkEd ed) ]
+  let simpleEd = Record("simple-edit", OrdList.ofList [
+    "title", ps recm.Title; "icon", ps recm.Icon; "description", ps recm.Description; 
+      "edits", List("edits", edits) ])
+  [ ListAppend(editsSel, string index, prevIndex, None, simpleEd) ]
+  |> mergeEdits { state with EditingGridPath = None } "add edits"
+  |> updateGridState cellId
 
 // --------------------------------------------------------------------------------------
 // Update operation
@@ -407,6 +489,13 @@ let update state trigger evt =
   | EditBinding path -> { state with EditingBindingPath = path }
 
   | EditGrid path -> { state with EditingGridPath = path }
+  | GridRecommend(id, kind, recm) ->
+      let oldrecs = state.GridRecommendations.TryFind(id) |> Option.defaultValue []
+      let newrecs = List.filter (fun r -> r.EditType <> kind) oldrecs @ (Option.toList recm)
+      { state with GridRecommendations = state.GridRecommendations.Add(id, newrecs) }
+
+  | GridApplyEdit(cellId, recm) -> applyGridEdits cellId recm state 
+  | UpdateGridState(cellId) -> updateGridState cellId state      
 
 // --------------------------------------------------------------------------------------
 // Render source tree (from Webnicek)
@@ -480,7 +569,7 @@ let renderEvalLink trigger label cellId =
       text label ]
   ]
 
-let renderCompletion trigger state path completions = h?div [ "class" => "dropdown" ] [
+let renderCompletion trigger state path extra completions = h?div [ "class" => "dropdown" ] [
     let opened = state.DisplayMenuPath = Some path
     if not (List.isEmpty completions) then
       h?button [
@@ -496,7 +585,8 @@ let renderCompletion trigger state path completions = h?div [ "class" => "dropdo
             let action : CompletionAction = f ()
             trigger (ApplyEdits(action.ActionName, action.ActionEdits))
             trigger (EditValue action.EditPath)
-            trigger (ToggleMenu None) ] [ text k ]
+            trigger (ToggleMenu None) 
+            extra |> Option.iter trigger ] [ text k ]
         ]
       ]
   ]
@@ -665,7 +755,7 @@ let getCellFormulas nd =
   | _ -> failwith "getCellFormulas: expected cell node"
 
 let renderCodeCell trigger state cell =
-    Log.logOp "apprender" $"renderCodeCell {cell.ID}" <| fun () ->
+    Log.logOp "apprender" $"renderCodeCell {cell.Id}" <| fun () ->
   h?div [ "class" => "code-block" ] [
     let formulas = getCellFormulas cell.Node
     h?ul [ "class" => "flist" ] [
@@ -673,13 +763,13 @@ let renderCodeCell trigger state cell =
         h?li [] [
           h?div [ "class" => "flist-let" ] [
             h?strong [] [ text "let " ]
-            renderBinding trigger state [Field cell.ID] fid
+            renderBinding trigger state [Field cell.Id] fid
             text " = "
           ]
           h?div [ "class" => "flist-eq" ] [
-            renderCodeFormula trigger state [Field cell.ID; Field fid] formula
-            renderCompletion trigger state [cell.ID; fid] <|
-              getCompletions state.Bindings [Field cell.ID; Field fid] formula
+            renderCodeFormula trigger state [Field cell.Id; Field fid] formula
+            renderCompletion trigger state [cell.Id; fid] None <|
+              getCompletions state.Bindings [Field cell.Id; Field fid] formula
             match formula with
             | FormulaEvaluated(res, _) ->
                 h?div [ ] [ renderResult res ]
@@ -687,10 +777,10 @@ let renderCodeCell trigger state cell =
           ]
         ]
     ]
-    renderCompletion trigger state [cell.ID] <|
+    renderCompletion trigger state [cell.Id] None <|
       let lastFormulaId = List.tryLast formulas |> Option.map fst
       let fid = withUniqueId "unnamed" None
-      getGlobalCompletions state.Bindings [Field cell.ID] fid lastFormulaId
+      getGlobalCompletions state.Bindings [Field cell.Id] fid lastFormulaId
   ]
 
 // --------------------------------------------------------------------------------------
@@ -707,30 +797,50 @@ let sharedSuffixLength (s1:string) (s2:string) =
     if i < s1.Length && i < s2.Length && s1.[s1.Length-i-1] = s2.[s2.Length-i-1] then loop (i+1) else i
   loop 0
 
-let inferValueEdit prev current = 
-  match prev, current with 
+let suggestRowFilters trigger loc current =
+  let s = match current with String s -> s | Number n -> string n
+  let recm =
+    { Icon = "fa-circle-xmark"; Title = "Delete rows by value"; EditType = "deleterows"
+      Description = $"Delete rows with value `{s}' in column `{loc.Field}'"; Edits = [] }
+  trigger(GridRecommend(loc.CellId, "deleterows", Some recm))
+  let recm =
+    { Icon = "fa-circle-check"; Title = "Keep rows by value"; EditType = "keeprows"
+      Description = $"Keep only rows with value `{s}' in column `{loc.Field}'"; Edits = [] }
+  trigger(GridRecommend(loc.CellId, "keeprows", Some recm))
+
+
+let inferValueEdit trigger loc prev current =
+  match prev, current with
   | String(sp), String(sc) ->
       let prefix = sharedPrefixLength sp sc
       let suffix = sharedSuffixLength sp sc
-      printfn $"REPLACE(\"{sp.[prefix .. sp.Length-suffix-1]}\",\"{sc.[prefix .. sc.Length-suffix-1]}\")"
+      let olds = sp.[prefix .. sp.Length-suffix-1]
+      let news = sc.[prefix .. sc.Length-suffix-1]
+      let recm =
+        if olds = news then None else
+        { Icon = "fa-pencil"; Title = "Replace string in column"; EditType = "replace"
+          Description = $"Replace `{olds}' with `{news}' in column `{loc.Field}'"; Edits = [
+            PrimitiveEdit([All; Field loc.Field],"replace",Some $"{olds}/{news}") ] } |> Some
+      trigger(GridRecommend(loc.CellId, "replace", recm))
   | _ -> ()
-  
+
 let renderGridEditorCell trigger state cell loc v =
   let s = renderPrimitive v
   let v = getPrimitive v
-  if state.EditingGridPath <> Some loc then text s 
+  if state.EditingGridPath <> Some loc then text s
   else
     let s, parse = parseFormat v
-    h?input [ 
+    h?input [
       "type" => "text"
       "value" => s
       "keyup" =!> fun el evt ->
         let ke = unbox<KeyboardEvent> evt
         let ie = unbox<HTMLInputElement> el
         match ke.key, parse ie.value with
-        //| "Enter", Some p ->
-        | "Escape", _ -> trigger(EditGrid None)
-        | _, Some p -> inferValueEdit v p
+        | ("Enter" | "Escape"), _ -> trigger(EditGrid None)
+        | _, Some p ->
+            inferValueEdit trigger loc v p
+            suggestRowFilters trigger loc p
         | _ -> () ] []
 
 let renderGridEditor trigger state cell (table:OrdList.OrdList<_, _>) =
@@ -739,14 +849,19 @@ let renderGridEditor trigger state cell (table:OrdList.OrdList<_, _>) =
   h?div ["class" => "table-box"] [
     h?table [] [
       h?thead [] [ h?tr [] [
-        for f in flds -> h?th [] [ text f ]
+        h?th [] []
+        for f in flds do h?th [] [ text f ]
       ] ]
       h?tbody [] [
         for idx, obj in getTableRows flds table -> h?tr [] [
-          for f, v in obj ->
-            let loc = {| cellId=cell.ID; field=f; rowIndex=idx |}
+          h?th [] [ text idx ]
+          for f, v in obj do
+            let loc = { CellId=cell.Id; Field=f; RowIndex=idx }
             h?td [
-              "click" =!> fun _ _ -> trigger(EditGrid(Some loc))
+              "click" =!> fun _ _ -> 
+                inferValueEdit trigger loc (getPrimitive v) (getPrimitive v)
+                suggestRowFilters trigger loc (getPrimitive v)
+                trigger(EditGrid(Some loc))
             ] [ renderGridEditorCell trigger state cell loc v ]
         ]
       ]
@@ -755,36 +870,73 @@ let renderGridEditor trigger state cell (table:OrdList.OrdList<_, _>) =
 
 let getEditCompletions state cell =
   [ for ref, formula in state.Bindings do
+      printfn "%A %A" ref formula
       let fld = match List.last ref with Field f -> f | _ -> failwith "getEditCompletions: Path didn't end with field"
       if "table" = getFormulaType state.Bindings formula && not (fld.StartsWith "unnamed-") then
         "edit " + fld, fun () ->
           let eds =
-            [ RecordAdd([Field cell.ID], "target", None, None, Reference(Absolute, ref))
-              RecordAdd([Field cell.ID], "edits", None, None, List("edits", OrdList.empty ())) ]
-          { ActionName = $"choose edit for {cell.ID}"; ActionEdits = eds; EditPath = None } ]
+            [ RecordAdd([Field cell.Id], "target", None, None, Reference(Absolute, ref))
+              RecordAdd([Field cell.Id], "edits", None, None, List("edits", OrdList.empty ())) ]
+          { ActionName = $"choose edit for {cell.Id}"; ActionEdits = eds; EditPath = None } ]
 
-let getGridState cell =
-  match cell.Node with
-  | Record(_, { Members = Find "target" (Reference(Absolute, src))
-        & Find "edits" (List("edits", edits)) }) ->
-      Some(src, OrdList.toList edits)
-  | _ -> None
+let textWithCode (s:string) =
+  let tos cs = System.String(Array.rev (Array.ofList cs)) |> text
+  let quote (s:string) = if s.Trim() <> s || s = "" then $"'{s}'" else s
+  let toc cs = h?code [] [ text (quote (System.String(Array.rev (Array.ofList cs)))) ]
+  let rec loop acc curacc s =
+    match s with 
+    | '`'::s -> loop (tos curacc::acc) [] s
+    | '\''::s -> loop (toc curacc::acc) [] s
+    | c::s -> loop acc (c::curacc) s
+    | [] -> (tos curacc)::acc |> List.rev
+  loop [] [] (List.ofSeq s)
 
 let renderGridCell trigger state cell =
-    Log.logOp "apprender" $"renderCodeCell {cell.ID}" <| fun () ->
-  match getGridState cell with
+    Log.logOp "apprender" $"renderCodeCell {cell.Id}" <| fun () ->
+  match state.GridCellState.TryFind(cell.Id) with
   | None ->
       h?div [ "class" => "grid-block" ] [
-        renderCompletion trigger state [cell.ID] <|
+        renderCompletion trigger state [cell.Id] (Some(UpdateGridState(cell.Id))) <|
           getEditCompletions state cell ]
-  | Some(src, edits) ->
-      match src, select src state.Document with
-      | _, [ FormulaEvaluated(List("table", rows), _) ] ->
-          h?div [ "class" => "grid-block" ] [
-            renderGridEditor trigger state cell rows ]
-      | [Field cell; _], _ ->
-          renderEvalLink trigger "evaluate source" cell
-      | _ -> failwith "renderGridCell: invalid source reference"
+  | Some { Data = Some(_, List("table", rows)) } ->
+      h?div [ "class" => "grid-container" ] [
+        h?div [ "class" => "grid-block" ] [
+          renderGridEditor trigger state cell rows ]
+        h?div [ "class" => "grid-context" ] [
+          let recs = state.GridRecommendations.TryFind(cell.Id) |> Option.defaultValue []
+          if not (List.isEmpty recs) then
+            h?div [ "class" => "panel" ] [
+              h?h3 [] [ text "Suggested edits" ]
+              h?div [ "class" => "panel-body" ] [
+                for recm in recs do
+                  h?h4 [] [ h?i ["class" => "fa " + recm.Icon] []; text recm.Title ]
+                  h?p [ "class" => "break" ] (textWithCode recm.Description)
+                  h?p [ "class" => "action" ] [
+                    h?a [ 
+                      "href" => "javascript:;" 
+                      "click" =!> fun _ _ -> trigger(GridApplyEdit(cell.Id, recm))
+                    ] [ h?i ["class" => "fa fa-play"] []; text "apply edit "]]
+              ]
+            ]
+          h?div [ "class" => "panel" ] [            
+            h?h3 [] [ text "Applied edits" ]
+            h?div [ "class" => "panel-body" ] [
+              let eds = getAppliedEditsMetadata cell.Node
+              if List.isEmpty eds then
+                h?p [] [ h?em [] [ text "Click on a column, row or a cell to edit the table and get edit suggestions!" ] ]
+              h?ul [] [ 
+                for ed in eds -> h?li [] [
+                  yield h?i ["class" => $"fa {ed.icon}"] []
+                  yield! textWithCode ed.description ] ]
+            ]
+          ]
+        ]
+      ]
+  | Some { Source = (Field srcCell)::_ } ->
+      let t e = trigger e; trigger (UpdateGridState cell.Id) 
+      renderEvalLink t "evaluate source" srcCell
+  | _ ->
+      failwith "renderGridCell: No data and invalid source reference"
 
 // --------------------------------------------------------------------------------------
 // Rendering of history
@@ -893,7 +1045,7 @@ let renderTitle kind =
 let render trigger state = h?div [ "id" => "main" ] [
   let cells = getNotebookCells state.Document
   h?div [ "id" => "notebook" ] [
-    let firstid = match cells with c::_ -> Some c.ID | _ -> None
+    let firstid = match cells with c::_ -> Some c.Id | _ -> None
     renderAddLinks trigger None firstid
 
     for cell in cells do h?div [ "class" => $"cell cell-{asCellKindName cell.Kind}" ] [
@@ -902,17 +1054,17 @@ let render trigger state = h?div [ "id" => "main" ] [
       match cell.Kind with
       | ck when state.ViewSource ->
           h?div ["class" => "treedoc"] [
-            renderSourceTree state trigger [Field cell.ID] [] cell.Node
+            renderSourceTree state trigger [Field cell.Id] [] cell.Node
           ]
           if ck = CodeCell then
-            renderEvalLink trigger "evaluate" cell.ID
+            renderEvalLink trigger "evaluate" cell.Id
       | CodeCell ->
           renderCodeCell trigger state cell
-          renderEvalLink trigger "evaluate" cell.ID
+          renderEvalLink trigger "evaluate" cell.Id
       | GridCell ->
           renderGridCell trigger state cell
       | _ -> () // TODO
-      renderAddLinks trigger (Some cell.ID) cell.NextID
+      renderAddLinks trigger (Some cell.Id) cell.NextId
     ]
 
     h?script [ "type" => "application/json"; "id" => "serialized" ] [
@@ -930,6 +1082,36 @@ let render trigger state = h?div [ "id" => "main" ] [
 
 module Loader =
   open Browser.XMLHttpRequest
+
+  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]}]"""
+  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-c842cd9e"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",10]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",100]]}]"""
+
+  // incremental evaluation demo using math.random
+  let random = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-c842cd9e"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",10]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",100]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-c842cd9e"],["new","nf"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","nf"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-d2aa98a3"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}],["pred","nf"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","min"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","nf"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","max"],["node",100]]}]"""
+
+  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]}]"""
+  let traffic = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-a3d603f1"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railTable"]}],["pred","railTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","replace"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",":"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node","0"]]}]"""
+  let traffic2 = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-a3d603f1"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railTable"]}],["pred","railTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","replace"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",":"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node","0"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","drop"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node","fof"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node","freq,unit,accident,victim,pers_cat,geo\\\\TIME_PERIOD"]]}]"""
+
+  //
+  let _json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-89855e93"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","eurostat/sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-89855e93"],["new","rail"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","rail"]]}],["field","file"],["node","eurostat/sf_railvi_totalkil.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","target"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","rail"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","edits"],["node",{"kind":"list","tag":"edits","nodes":[]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","rail"],["new","avia"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","avia"]]}],["field","file"],["node","eurostat/sf_aviaca_eukil.tsv"]]}]"""
+//  let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]}]"""
+  let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-89855e93"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","eurostat/sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-89855e93"],["new","rail"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","rail"]]}],["field","file"],["node","eurostat/sf_railvi_totalkil.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","target"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","rail"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","edits"],["node",{"kind":"list","tag":"edits","nodes":[]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","rail"],["new","avia"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","avia"]]}],["field","file"],["node","eurostat/sf_aviaca_eukil.tsv"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"],["1","edits"]]}],["node",{"kind":"record","tag":"simple-edit","nodes":[["title","Replace string in column"],["icon","fa-pencil"],["description","Replace ` p' with `' in column `2021'"],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2021"]]}],["op","replace"],["arg"," p/"]]}]]}]]}],["index","0"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"],["1","edits"]]}],["node",{"kind":"record","tag":"simple-edit","nodes":[["title","Replace string in column"],["icon","fa-pencil"],["description","Replace ` p' with `' in column `2023'"],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2023"]]}],["op","replace"],["arg"," p/"]]}]]}]]}],["index","1"],["pred","0"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"],["1","edits"]]}],["node",{"kind":"record","tag":"simple-edit","nodes":[["title","Replace string in column"],["icon","fa-pencil"],["description","Replace ` p' with `' in column `2022'"],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2022"]]}],["op","replace"],["arg"," p/"]]}]]}]]}],["index","2"],["pred","1"]]}]"""
+  let readJsonOps json =
+    List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json)
+
+  let initial =
+    { DisplayMenuPath = None; SelectedCell = None; ViewSource = false; EditingBindingPath = None
+      SourceEdits = readJsonOps json; EvaluatedEdits = Map.empty; ShowHistory = false; EditingGridPath = None
+      Document = rcd "notebook"; EditingValuePath = None; Bindings = []; DataFiles = Map.empty; GridCellState = Map.empty
+      GridRecommendations = Map.empty }
+    |> updateDocument
+
+
+  let updateGridCells trigger doc = 
+    let cells = match doc with Record(_, cells) -> cells |> OrdList.toListUnordered | _ -> []
+    let gridIds = cells |> List.choose(function cellId, Record("cell-grid", _) -> Some cellId | _ -> None)
+    for gi in gridIds do trigger(UpdateGridState gi)
 
   let asyncRequest file =
     Async.FromContinuations(fun (cont, econt, ccont) ->
@@ -953,34 +1135,12 @@ module Loader =
     let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readTsv tsvs))
     trigger(LoadData dataFiles)
     trigger(Evaluate("cell-c2")) // REMOVE THIS
+    updateGridCells trigger initial.Document // DTTO
     }
-
-
-  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]}]"""
-  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-c842cd9e"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",10]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",100]]}]"""
-
-  // incremental evaluation demo using math.random
-  let random = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-c842cd9e"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","min"],["node",10]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-c842cd9e"]]}],["field","max"],["node",100]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-c842cd9e"],["new","nf"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","nf"]]}],["field","min"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-d2aa98a3"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math"]}],["pred","nf"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","math","random"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","min"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","nf"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","max"],["node",0]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-d2aa98a3"]]}],["field","max"],["node",100]]}]"""
-
-  //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]}]"""
-  let traffic = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-a3d603f1"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railTable"]}],["pred","railTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","replace"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",":"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node","0"]]}]"""
-  let traffic2 = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-719ef4da"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","aviaTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-719ef4da"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railFile"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-719ef4da"],["new","railTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-a3d603f1"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","railTable"]}],["pred","railTable"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","replace"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","substring"],["node",":"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","replacement"],["node","0"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","drop"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node","fof"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-a3d603f1"]]}],["field","column"],["node","freq,unit,accident,victim,pers_cat,geo\\\\TIME_PERIOD"]]}]"""
-
-  //
-  let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-89855e93"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-89855e93"]]}],["field","file"],["node","eurostat/sf_railvi.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-89855e93"],["new","rail"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","rail"]]}],["field","file"],["node","eurostat/sf_railvi_totalkil.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","target"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","rail"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c3"]]}],["field","edits"],["node",{"kind":"list","tag":"edits","nodes":[]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","rail"],["new","avia"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","avia"]]}],["field","file"],["node","eurostat/sf_aviaca_eukil.tsv"]]}]"""
-//  let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c1"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c2"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-c1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-c2"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7a7a0dc"],["node","eurostat/sf_aviaca.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7a7a0dc"],["new","aviaFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-7588a399"],["node",""],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-7588a399"],["new","railFile"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","railFile"],["node","eurostat/sf_railvi.tsv"],["pred","aviaFile"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["field","unnamed-52a1d32c"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}],["pred","railFile"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","unnamed-52a1d32c"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"]]}],["old","unnamed-52a1d32c"],["new","aviaTable"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c2"],["1","aviaTable"]]}],["field","file"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-c2","aviaFile"]}]]}]"""
-
-  let readJsonOps json =
-    List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json)
-
-  let initial =
-    { DisplayMenuPath = None; SelectedCell = None; ViewSource = false; EditingBindingPath = None
-      SourceEdits = readJsonOps json; EvaluatedEdits = Map.empty; ShowHistory = false; EditingGridPath = None
-      Document = rcd "notebook"; EditingValuePath = None; Bindings = []; DataFiles = Map.empty }
-    |> updateDocument
 
   let start () =
     let trigger, _, _ = createVirtualDomApp "out" initial render update
+    updateGridCells trigger initial.Document
     loadData trigger |> Async.Start
     Browser.Dom.window.onkeydown <- fun e ->
       if e.altKey && e.key = "u" then
@@ -989,3 +1149,11 @@ module Loader =
         e.preventDefault(); trigger(ToggleShowHistory)
       if e.altKey && e.key = "z" then
         e.preventDefault(); trigger(UndoLastEdit)
+
+
+
+
+
+
+
+//[ 1 .. 10 ] |> Some

@@ -13,7 +13,7 @@
     body { background:#f0f0f0; font-family:Quicksand, sans-serif; }
 
     #main { display:flex; }
-    #notebook { flex:20; padding:20px;  }
+    #notebook { flex:1; padding:20px; max-width:1200px;  }
     #history { flex:0 0 40%; position:sticky; top:0px; align-self:flex-start; }    
 
     #history { font:500 8pt Quicksand, sans-serif; height:100vh; overflow:scroll; padding:20px }
@@ -21,7 +21,7 @@
     #history h3 { color:#808080; }
     #history ol li { margin:4px 0px 6px 0px; padding:0px; padding-left:10px; color:#808080; }
 
-    #notebook { max-width:1000px; margin:0px auto; }
+    #notebook { margin:0px auto; }
     #notebook .cell { background:white; margin:15px 0px 15px 0px; border-left:5px solid #f0f0f0; border-right:5px solid #f0f0f0; padding:8px 12px; }
     #notebook .cell-text { border-color:#92D1C6; }
     #notebook .cell-code { border-color:#F9B56B; }
@@ -70,23 +70,38 @@
     .cell-grid .dropdown ul li:hover, .cell-grid button:hover, .cell-grid button.opened { background:#BDB9D7;  }
 
     /* pretty table formatting in code cells */ 
-    .cell-code .table-box { border:4px solid #F9B56B; max-height:200px; overflow-y:auto; font:400 9pt Quicksand, sans-serif; margin:0px 0px 15px 0px; overscroll-behavior:none; }
-    .cell-code table { width:100%; border-collapse:collapse; }
+    .cell-code .table-box { width:0px; min-width:calc(100% - 10px); border:4px solid #F9B56B; max-height:200px; overflow:auto; font:400 9pt Quicksand, sans-serif; overscroll-behavior:none; }
+    .cell-code table { border-collapse:collapse; width:100%; }
     .cell-code th, td { padding:2px 4px; text-align: left; }
     .cell-code thead { position:sticky; top:0px; z-index:2; }
     .cell-code table thead { background:#F9B56B; color:white; }
     .cell-code table tr:nth-child(even) td {background: #f9b46b30;}
     
     /* pretty table formatting in grid cells */ 
-    .cell-grid .table-box { border:4px solid #BDB9D7; max-height:400px; overflow-y:auto; font:400 9pt Quicksand, sans-serif; margin:0px 0px 15px 0px; overscroll-behavior:none; }
+    .cell-grid .table-box { width:0px; min-width:calc(100% - 10px); border:4px solid #BDB9D7; max-height:400px; overflow:auto; font:400 9pt Quicksand, sans-serif; overscroll-behavior:none; }
     .cell-grid table { width:100%; border-collapse:collapse; }
-    .cell-grid th, td { padding:2px 4px; text-align: left; height:20px; }
+    .cell-grid th, td { padding:2px 4px; text-align: left; height:20px; cursor:pointer; }
     .cell-grid thead { position:sticky; top:0px; z-index:2; }
     .cell-grid table thead { background:#BDB9D7; color:white; }
     .cell-grid table tr:nth-child(even) td {background: #BDB9D730;}
-    
-    .cell-grid .grid-block { padding:0px 20px; }
+    .cell-grid table tbody th { background:#BDB9D7; color:white; padding:2px 4px 2px 2px; font-weight:400; position:sticky; left:0px; }
     .cell-grid input { outline:none; border:1px solid #BDB9D7; background:#ffffff90; font:400 9pt Quicksand, sans-serif; margin:0px; padding:2px 5px; width:calc(100% - 10px); }
+    
+    .cell-grid .grid-container { padding:0px 20px; display:flex; margin-bottom:15px; }
+    .cell-grid .grid-block { width:calc(100% - 250px); }
+    .cell-grid .grid-context { margin-left:10px; width:250px; }
+    .cell-grid .grid-context .panel { border:4px solid #BDB9D7; font:400 9pt Quicksand, sans-serif; margin-bottom:15px; }
+    .cell-grid .grid-context h3 { height:20px; padding:2px 4px; background:#BDB9D7; color:white; font:800 9pt Quicksand, sans-serif;  }
+    .cell-grid .grid-context .panel-body h4 { padding:6px; background:#BDB9D730; color:#968FC4; font:600 9pt Quicksand, sans-serif;  }
+    .cell-grid .grid-context .panel-body h4 i { font-size: 8pt; margin-right:6px; }
+    .cell-grid .grid-context .panel-body p { margin:6px 8px; line-height:1.4em; font-size:9pt; }
+    .cell-grid .grid-context .panel-body p.break { overflow-wrap:anywhere; word-break: break-all; }
+    .cell-grid .grid-context .panel-body p.action { text-align:right; margin-right:12px; }
+    .cell-grid .grid-context .panel-body p a { font:800 9pt Quicksand, sans-serif; color:#BDB9D7; text-decoration:none; }
+    .cell-grid .grid-context .panel-body p a i { margin-right:8px;}
+    .cell-grid .grid-context .panel-body li { text-indent:-9px; padding-left:22px; font:400 9pt Quicksand, sans-serif; line-height:1.4em; list-style-type: none; margin:6px 4px; overflow-wrap:anywhere; word-break: break-all;  }
+    .cell-grid .grid-context .panel-body li i { margin-right:6px; color:#968FC4; }    
+    .cell-grid .grid-context .panel-body code { color:#968FC4; }
   </style>
 </head>
 <body>
