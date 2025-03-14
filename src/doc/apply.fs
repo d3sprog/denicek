@@ -59,13 +59,13 @@ let apply doc edit =
   // things. We could check this using some kind of type system.
 
   | PrimitiveEdit(sel, f, arg) ->
-      replace (fun p el -> 
+      replaceAt sel (fun p el -> 
         match el with 
         | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
   | RecordAdd(sel, fld, pred, succ, nd) ->
-      replace (fun p el -> 
+      replaceAt sel (fun p el -> 
         match el with 
         | Record(tag, nds) when matches p sel -> 
             let nds = nds |> OrdList.remove fld
@@ -73,7 +73,7 @@ let apply doc edit =
         | _ -> None ) doc
     
   | ListAppend(sel, n, pred, succ, nd) ->
-      replace (fun p el ->
+      replaceAt sel (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> 
             // Similar to 'RecordAdd' but we do not remove duplicates (but what this does is untested)
@@ -81,20 +81,20 @@ let apply doc edit =
         | _ -> None ) doc
       
   | UpdateTag(sel, tagNew) ->
-      replace (fun p el ->
+      replaceAt sel (fun p el ->
         match el with 
         | Record(_, nds) when matches p sel -> Some(Record(tagNew, nds))
         | List(_, nds) when matches p sel -> Some(List(tagNew, nds))
         | _ -> None ) doc
 
   | ListDelete(sel, idel) ->
-      replace (fun p -> function
+      replaceAt sel (fun p -> function
         | List(t, items) when matches p sel -> 
             Some(List(t, OrdList.remove idel items))
         | _ -> None) doc
 
   | ListReorder(sel, ord) ->
-      replace (fun p el ->
+      replaceAt sel (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> 
             Some(List(tag, OrdList.withOrder ord nds))
@@ -108,7 +108,7 @@ let apply doc edit =
   | RecordDelete(rb, sel, fdel) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordDelete - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p -> function
+      let doc = replaceAt sel (fun p -> function
         | Record(t, nds) when matches p sel ->
             let nds = nds |> OrdList.remove fdel
             Some(Record(t, nds))
@@ -131,14 +131,14 @@ let apply doc edit =
           let nsels = getDocumentReferences doc |> List.map (Transforms.wrapRecordSelectors id sel)
           withNodeReferences doc nsels
         else doc
-      replace (fun p el -> 
+      replaceAt sel (fun p el -> 
         if matches p sel then Some(Record(tag, OrdList.singleton id el))
         else None ) doc
 
   | WrapList(rb, id, tag, sel) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.WrapList - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p el -> 
+      let doc = replaceAt sel (fun p el -> 
         if matches p sel then Some(List(tag, OrdList.singleton id el))
         else None ) doc
       if rb = UpdateReferences then
@@ -149,10 +149,9 @@ let apply doc edit =
   | RecordRenameField(rb, sel, fold, fnew) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordRenameField - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p el -> 
+      let doc = replaceAt sel (fun p el -> 
         match el with 
-        | Record(t, nds) when matches p sel -> 
-            Some(Record(t, OrdList.renameKey fold fnew nds))
+        | Record(t, nds) when matches p sel -> Some(Record(t, OrdList.renameKey fold fnew nds))
         | _ -> None ) doc
       if rb = UpdateReferences then
         let nsels = getDocumentReferences doc |> List.map (Transforms.renameFieldSelectors fold fnew sel)
@@ -177,7 +176,7 @@ let apply doc edit =
      
       if proceed then 
         let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
-        let doc = replace (fun p el -> 
+        let doc = replaceAt sel (fun p el -> 
           if matches p sel then Some(next())
           else None ) doc
 

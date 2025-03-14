@@ -334,7 +334,7 @@ let moveAllBefore e1 e2s =
 // Hash operations
 // --------------------------------------------------------------------------------------
 
-let hashEditList initial (eds:Edit list) = 
+let hashEditList initial eds = 
   eds |> List.fold (fun hashSoFar edit -> hash (hashSoFar, edit)) initial
 
 let withHistoryHash initial (f:_ -> Edit) eds = 

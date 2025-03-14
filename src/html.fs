@@ -144,3 +144,4 @@ type El(ns) =
     Element(el.Namespace, n, Array.ofList a, Array.ofList b, None)
   
 let h = El(null)
+let s = El("http://www.w3.org/2000/svg")

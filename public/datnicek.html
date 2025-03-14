@@ -13,7 +13,7 @@
     body { background:#f0f0f0; font-family:Quicksand, sans-serif; }
 
     #main { display:flex; }
-    #notebook { flex:1; padding:20px; max-width:1200px;  }
+    #notebook { flex:1; padding:20px; max-width:1200px; padding-bottom:800px;  }
     #history { flex:0 0 40%; position:sticky; top:0px; align-self:flex-start; }    
 
     #history { font:500 8pt Quicksand, sans-serif; height:100vh; overflow:scroll; padding:20px }
@@ -51,7 +51,9 @@
     .cell-code .code-block { padding-left:10px; padding-right:20px; }
     .cell-code .flist { font: 400 9pt 'roboto mono',monospace; }
     .cell-code .flist li { list-style-type:none; }
-    .cell-code .flist .flist-eq { padding-left: 20px; }
+    .cell-code .flist .flist-eq { padding-left: 50px; text-indent:-25px; }
+    .cell-code .flist .flist-eq * { text-indent:0px; }
+    .cell-code .flist .flist-eq .flist-out { margin-left:-25px; }
     .cell-code .expr { background:#f9b46b30; padding:3px 5px; border-radius: 4px; margin:2px; display:inline-block; }
     .cell-code .expr.hover { background:#f9b46b80; }
     .cell-code .code-block a { color:black; text-decoration:none; font-style:italic;}
@@ -76,8 +78,13 @@
     .cell-code thead { position:sticky; top:0px; z-index:2; }
     .cell-code table thead { background:#F9B56B; color:white; }
     .cell-code table tr:nth-child(even) td {background: #f9b46b30;}
+
+    .cell-code .compost { padding-top:10px; }
     
     /* pretty table formatting in grid cells */ 
+    .cell-grid .table-caption { width:0px; min-width:calc(100% - 10px); border:4px solid #BDB9D7; border-bottom-style:none; background:#BDB9D7; color:white; text-align:center; font:700 9pt Quicksand, sans-serif; }
+    .cell-grid .table-caption span { cursor:pointer; }
+    .cell-grid .table-caption input { max-width:100px; }
     .cell-grid .table-box { width:0px; min-width:calc(100% - 10px); border:4px solid #BDB9D7; max-height:400px; overflow:auto; font:400 9pt Quicksand, sans-serif; overscroll-behavior:none; }
     .cell-grid table { width:100%; border-collapse:collapse; }
     .cell-grid th, td { padding:2px 4px; text-align: left; height:20px; cursor:pointer; }

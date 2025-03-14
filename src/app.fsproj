@@ -15,6 +15,7 @@
     <Compile Include="matcher.fs" />
     <Compile Include="serializer.fs" />
     <Compile Include="html.fs" />
+		<Compile Include="compost.fs" />
     <Compile Include="webnicek.fs" />
     <Compile Include="datnicek.fs" />
     <Compile Include="main.fs" />

@@ -95,6 +95,22 @@ let prefixOfReference p1 (p2base, p2ref) =
 // Document transformations
 // --------------------------------------------------------------------------------------
 
+let replaceAt target f nd = 
+  let rec loop path target nd = 
+    match nd, target with
+    | nd, [] ->
+        match f path nd with 
+        | Some res -> res
+        | _ -> nd
+    | List(tag, nds), All::target ->
+        List(tag, nds |> OrdList.mapValues (fun n nd -> loop (path @ [Index n]) target nd))
+    | List(tag, nds), (Index i)::target ->
+        List(tag, nds |> OrdList.replace i (loop (path @ [Index i]) target nds.Members.[i]))
+    | Record(tag, nds), (Field f)::target when nds.Members.ContainsKey f -> 
+        Record(tag, nds |> OrdList.replace f (loop (path @ [Field f]) target nds.Members.[f]))
+    | _ -> nd       
+  loop [] target nd
+
 let replace f nd = 
   let rec loop path nd =
     match f path nd with 
@@ -120,9 +136,20 @@ let fold f st value =
         st
   loop [] st value
 
-let select sel doc = 
-  doc |> fold (fun p value st -> 
-    if matches sel p then value::st else st) [] |> List.rev
+let select target nd = 
+  let res = ResizeArray<_>()
+  let rec loop path target nd = 
+    match nd, target with
+    | nd, [] -> res.Add(nd)
+    | List(tag, nds), All::target ->
+        for k, nd in nds do loop (path @ [Index k]) target nd
+    | List(tag, nds), (Index k)::target ->
+        nds.Members.TryFind(k) |> Option.iter (fun nd -> loop (path @ [Index k]) target nd)
+    | Record(tag, nds), (Field k)::target ->
+        nds.Members.TryFind(k) |> Option.iter (fun nd -> loop (path @ [Field k]) target nd)
+    | _ -> ()
+  loop [] target nd
+  List.ofSeq res
 
 let selectSingle sel doc = 
   match select sel doc with

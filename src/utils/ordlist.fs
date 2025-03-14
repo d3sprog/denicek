@@ -89,6 +89,9 @@ module rec OrdList =
     | Some pred -> makeOrdList (ol.Members.Add(k, v)) (ol.Order |> neqAdd (k, pred))
     | None -> makeOrdList (ol.Members.Add(k, v)) ol.Order
 
+  let replace k v ol =
+    { ol with Members = ol.Members.Add(k, v) }
+
   let tryFindPred k ol = 
     ol.Order.TryFind(k)
 

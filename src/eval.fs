@@ -86,10 +86,11 @@ let evaluateBuiltin (data:Map<string, Node>) op (args:Map<string, Node>)=
           Primitive(Number(f (List.map (snd >> getEvaluatedResult) (OrdList.toList nds)))), [Field "arg"]
       | _ -> failwith $"evaluate: Invalid argument of built-in op '{op}'."
 
-  | "equals" -> 
+  | "equals" | "nequals" -> 
+      let cmp = if op = "equals" then (=) else (<>)
       match args.TryFind "left", args.TryFind "right" with
       | Some(EvaluatedResult(Primitive(p1))), Some(EvaluatedResult(Primitive(p2))) -> 
-          Primitive(String(if p1 = p2 then "true" else "false")), [Field "left"; Field "right"]
+          Primitive(String(if cmp p1 p2 then "true" else "false")), [Field "left"; Field "right"]
       | _ -> 
           // NOTE: This also works on references that failed to evaluate 
           // (and so left/right is <empty> list added by Reference evaluation)
@@ -118,9 +119,10 @@ let evaluateRaw evaluateBuiltin doc =
       match it with 
       | Reference(kind, p) ->
           let p = resolveReference sel (kind, p)
+          //printfn "Reference: %A" p
           [ WrapRecord(KeepReferences, "reference", "x-evaluated", sel), [p;formulaSel]
             RecordAdd(sel, "result", None, None, List("empty", OrdList.empty ())), [p;formulaSel] // Allow 'slightly clever' case of Copy from doc.fs
-            Copy(KeepReferences, sel @ [Field "result"], p), [p;formulaSel] ] // DENICEK: add [p] ref here too (because of weaker effect checker)
+            Copy(KeepReferences, sel @ [Field "result"], p), [p;formulaSel] ] // DATNICEK: add [p] ref here too (because of weaker effect checker)
 
       | Record("x-formula", allArgs & OpAndArgs(Reference(Absolute, op & (Field ophd)::_), args)) when ophd.StartsWith("$") ->
           //
@@ -158,6 +160,15 @@ let evaluateAll evaluateBuiltins doc =
     if doc <> ndoc then yield! loop ndoc }
   List.ofSeq (loop doc)
 
+/// Like evaluateAll, but looks for evaluation site only in document
+/// obtained by calling 'scope doc' (but edits are applied to 'doc')
+let evaluateAllScoped evaluateBuiltins scope doc = 
+  let rec loop doc = seq {
+    let edits = evaluateOne evaluateBuiltins (scope doc)
+    yield! edits
+    let ndoc = Apply.applyHistory doc edits 
+    if doc <> ndoc then yield! loop ndoc }
+  List.ofSeq (loop doc)
 
 /// Push evalauted edits through document edits that were added after the
 /// document was evaluated (we always assume evaluated edits are attached 
