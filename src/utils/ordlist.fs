@@ -1,4 +1,5 @@
-﻿namespace Denicek
+﻿#nowarn "40"
+namespace Denicek
 
 // --------------------------------------------------------------------------------------
 // Ordered list inspired by MRDT list that keeps order of its members
@@ -9,10 +10,15 @@ module rec OrdList =
 
   type OrdList<'K, 'V when 'K : comparison> = 
     { Members : Map<'K, 'V> 
-      Order : Map<'K, 'K> }
+      Order : Map<'K, 'K> 
+      OrdTree : Lazy<OrdTree<'K>> }
     interface System.Collections.Generic.IEnumerable<'K * 'V> with
       member x.GetEnumerator() = (OrdList.toSeq x : seq<_>).GetEnumerator()
       member x.GetEnumerator () = (OrdList.toSeq x : System.Collections.IEnumerable).GetEnumerator()
+
+  let makeOrdList mems order = 
+    let rec res = { Members = mems; Order = order; OrdTree = lazy buildOrderTree res }
+    res
 
   // When turning OrdList into sorted list, we want to keep items that
   // "occur before" just after each other (to avoid interleaving unrelated
@@ -35,8 +41,11 @@ module rec OrdList =
     | x::xs ->
         OrdNode (nds.Add(x, orderTreeAdd xs (OrdNode Map.empty)))
     
-  let getOrderTree ol = 
+  let buildOrderTree ol = 
     ol.Members |> Seq.fold (fun ord (KeyValue(k, v)) -> orderTreeAdd (orderPath k ol) ord) (OrdNode Map.empty)
+
+  let getOrderTree ol = 
+    ol.OrdTree.Value
 
   let toList ol =
     let rec loop acc (OrdNode nds) = 
@@ -48,7 +57,11 @@ module rec OrdList =
   // Various other operations for working with OrdTrees
 
   let toSeq ol =
-    toList ol |> Seq.ofList
+    let rec loop (OrdNode nds) = seq {
+      for (KeyValue(k, sub)) in nds do
+        if ol.Members.ContainsKey(k) then yield k, ol.Members.[k]
+        yield! loop sub }
+    loop (getOrderTree ol)
   
   let neqAdd (k, v) (m:Map<_, _>) = 
     if k <> v then m.Add(k, v) else m
@@ -73,8 +86,23 @@ module rec OrdList =
 
   let add (k, v) pred ol = 
     match pred with 
-    | Some pred -> { Members = ol.Members.Add(k, v); Order = ol.Order |> neqAdd (k, pred) }
-    | None -> { Members = ol.Members.Add(k, v); Order = ol.Order }
+    | Some pred -> makeOrdList (ol.Members.Add(k, v)) (ol.Order |> neqAdd (k, pred))
+    | None -> makeOrdList (ol.Members.Add(k, v)) ol.Order
+
+  let replace k v ol =
+    { ol with Members = ol.Members.Add(k, v) }
+
+  let tryFindPred k ol = 
+    ol.Order.TryFind(k)
+
+  let tryFindSucc k ol = 
+    ol.Order |> Seq.tryPick (fun (KeyValue(succ, key)) -> if k = key then Some succ else None)
+
+  let insert (k, v) pred succ ol = 
+    let nmembers = ol.Members.Add(k, v)
+    let norder = match pred with None -> ol.Order | Some pred -> ol.Order |> neqAdd (k, pred)
+    let norder = match succ with None -> norder | Some succ -> norder |> neqAdd (succ, k)
+    makeOrdList nmembers norder 
 
   let tryLastKey ol = 
     let mutable lk = None
@@ -82,7 +110,7 @@ module rec OrdList =
       if lk.IsNone || lk.IsSome && after k lk.Value ol then lk <- Some k
     lk
 
-  let empty = { Members = Map.empty; Order = Map.empty }
+  let empty () = { Members = Map.empty; Order = Map.empty; OrdTree = lazy OrdNode(Map.empty) }
 
   let remove k ol = 
     if not(ol.Members.ContainsKey(k)) then ol else 
@@ -91,22 +119,21 @@ module rec OrdList =
       for (KeyValue(s, p)) in ol.Order do 
         if pred.IsSome && p = k then yield (s, pred.Value)
         if s <> k && p <> k then yield (s, p) }
-    { Members = ol.Members.Remove(k); Order = Map.ofSeq order }
+    makeOrdList (ol.Members.Remove(k)) (Map.ofSeq order)
 
   let withOrder keys ol = 
-    { ol with Order = keys |> List.rev |> List.pairwise |> Map.ofList }
+    makeOrdList ol.Members (keys |> List.rev |> List.pairwise |> Map.ofList)
 
-  let singleton k v = empty |> add (k, v) None
+  let singleton k v = empty () |> add (k, v) None
 
   let ofList l = 
-    { Order = l |> List.map fst |> List.rev |> List.pairwise |> Map.ofList 
-      Members = Map.ofList l }
+    makeOrdList (Map.ofList l) (l |> List.map fst |> List.rev |> List.pairwise |> Map.ofList)
 
   let renameKey fold fnew ol = 
     let ren k = if k = fold then fnew else k
     let order = seq { for (KeyValue(a, b)) in ol.Order -> ren a, ren b }
     let mems = seq { for (KeyValue(k, v)) in ol.Members -> ren k, v }
-    { Order = Map.ofSeq order; Members = Map.ofSeq mems  }
+    makeOrdList (Map.ofSeq mems) (Map.ofSeq order)
 
   let (|Find|_|) k ol = 
     ol.Members.TryFind(k)

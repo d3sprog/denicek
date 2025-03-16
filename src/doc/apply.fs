@@ -30,6 +30,9 @@ let transformations =
     { Key = "replace"; Label = "Replace substring using"; 
       Args = P.char ' ' <*>> P.hole "old" P.nonSlash <<*> P.char '/' <*> P.hole "new" P.nonSlash |> P.map (fun (o, n) -> Some(o + "/" + n))
       Function = function Some repl, String s -> (let parts = repl.Split('/') in String(s.Replace(parts.[0], parts.[1]))) | _, p -> p }
+    { Key = "take-by"; Label = "Take nth part by delimiter"; 
+      Args = P.char ' ' <*>> P.hole "delim" P.any <<*> P.char '/' <*> P.hole "index" P.num |> P.map (fun (d, i) -> Some(string d + "/" + string i))
+      Function = function Some repl, String s -> (let parts = repl.Split('/') in String(s.Split(parts.[0].[0]).[int parts.[1]])) | _, p -> p }
   ]
 
 let transformationsLookup = System.Collections.Generic.Dictionary<_, _>() 
@@ -56,42 +59,42 @@ let apply doc edit =
   // things. We could check this using some kind of type system.
 
   | PrimitiveEdit(sel, f, arg) ->
-      replace (fun p el -> 
+      replaceAt sel (fun p el -> 
         match el with 
         | Primitive(v) when matches p sel -> Some(Primitive(transformationsLookup.[f] (arg, v)))
         | _ -> None ) doc
 
-  | RecordAdd(sel, fld, pred, nd) ->
-      replace (fun p el -> 
+  | RecordAdd(sel, fld, pred, succ, nd) ->
+      replaceAt sel (fun p el -> 
         match el with 
         | Record(tag, nds) when matches p sel -> 
             let nds = nds |> OrdList.remove fld
-            Some(Record(tag, OrdList.add (fld, nd) pred nds))
+            Some(Record(tag, OrdList.insert (fld, nd) pred succ nds))
         | _ -> None ) doc
     
-  | ListAppend(sel, n, pred, nd) ->
-      replace (fun p el ->
+  | ListAppend(sel, n, pred, succ, nd) ->
+      replaceAt sel (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> 
             // Similar to 'RecordAdd' but we do not remove duplicates (but what this does is untested)
-            Some(List(tag, OrdList.add (n, nd) pred nds))
+            Some(List(tag, OrdList.insert (n, nd) pred succ nds))
         | _ -> None ) doc
       
   | UpdateTag(sel, tagNew) ->
-      replace (fun p el ->
+      replaceAt sel (fun p el ->
         match el with 
         | Record(_, nds) when matches p sel -> Some(Record(tagNew, nds))
         | List(_, nds) when matches p sel -> Some(List(tagNew, nds))
         | _ -> None ) doc
 
   | ListDelete(sel, idel) ->
-      replace (fun p -> function
+      replaceAt sel (fun p -> function
         | List(t, items) when matches p sel -> 
             Some(List(t, OrdList.remove idel items))
         | _ -> None) doc
 
   | ListReorder(sel, ord) ->
-      replace (fun p el ->
+      replaceAt sel (fun p el ->
         match el with 
         | List(tag, nds) when matches p sel -> 
             Some(List(tag, OrdList.withOrder ord nds))
@@ -105,7 +108,7 @@ let apply doc edit =
   | RecordDelete(rb, sel, fdel) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordDelete - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p -> function
+      let doc = replaceAt sel (fun p -> function
         | Record(t, nds) when matches p sel ->
             let nds = nds |> OrdList.remove fdel
             Some(Record(t, nds))
@@ -128,14 +131,14 @@ let apply doc edit =
           let nsels = getDocumentReferences doc |> List.map (Transforms.wrapRecordSelectors id sel)
           withNodeReferences doc nsels
         else doc
-      replace (fun p el -> 
+      replaceAt sel (fun p el -> 
         if matches p sel then Some(Record(tag, OrdList.singleton id el))
         else None ) doc
 
   | WrapList(rb, id, tag, sel) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.WrapList - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p el -> 
+      let doc = replaceAt sel (fun p el -> 
         if matches p sel then Some(List(tag, OrdList.singleton id el))
         else None ) doc
       if rb = UpdateReferences then
@@ -146,10 +149,9 @@ let apply doc edit =
   | RecordRenameField(rb, sel, fold, fnew) ->
       if rb = UpdateReferences && not (isStructuralSelector sel) then 
         failwith $"apply.RecordRenameField - Non-structural selector {Format.formatSelector sel} used with structural edit {Format.formatEdit edit}."
-      let doc = replace (fun p el -> 
+      let doc = replaceAt sel (fun p el -> 
         match el with 
-        | Record(t, nds) when matches p sel -> 
-            Some(Record(t, OrdList.renameKey fold fnew nds))
+        | Record(t, nds) when matches p sel -> Some(Record(t, OrdList.renameKey fold fnew nds))
         | _ -> None ) doc
       if rb = UpdateReferences then
         let nsels = getDocumentReferences doc |> List.map (Transforms.renameFieldSelectors fold fnew sel)
@@ -171,10 +173,10 @@ let apply doc edit =
         // (needed if we create merged edits that do not apply to anything)
         | tgtNodes when srcNodes.Length = 0 || tgtNodes.Length = 0 -> [], false 
         | tgtNodes -> failwith $"apply.Copy - Mismatching number of source and target notes. Edit: {Format.formatEdit edit}, src nodes: {srcNodes.Length}, target nodes: {tgtNodes.Length} "
-      
+     
       if proceed then 
         let next() = match exprs with e::es -> exprs <- es; e | [] -> failwith "apply.Copy - Unexpected"
-        let doc = replace (fun p el -> 
+        let doc = replaceAt sel (fun p el -> 
           if matches p sel then Some(next())
           else None ) doc
 

@@ -70,8 +70,8 @@ let unrepresent nd =
     | _ -> [res, None]
   match nd with
   // Value edits
-  | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd & TryFind "pred" pred)) ->
-      RecordAdd(unrepresentSel sel, f, unrepresentStringOpt pred, nd) |> ret
+  | Record("x-edit-add", Lookup (Find "target" sel & Finds "field" f & Find "node" nd & TryFind "pred" pred & TryFind "succ" succ)) ->
+      RecordAdd(unrepresentSel sel, f, unrepresentStringOpt pred, unrepresentStringOpt succ, nd) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op & Finds "arg" arg)) ->
       PrimitiveEdit(unrepresentSel tgt, op, Some arg) |> ret
   | Record("x-edit-primitive", Lookup (Find "target" tgt & Finds "op" op)) ->
@@ -80,8 +80,8 @@ let unrepresent nd =
       UpdateTag(unrepresentSel tgt, ntag) |> ret
 
   // Shared edits (with reference behaviour)
-  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i & TryFind "pred" pred)) ->
-      ListAppend(unrepresentSel sel, i, unrepresentStringOpt pred, nd) |> ret
+  | Record("x-edit-append", Lookup (Find "target" sel & Find "node" nd & Finds "index" i & TryFind "pred" pred & TryFind "succ" succ)) ->
+      ListAppend(unrepresentSel sel, i, unrepresentStringOpt pred, unrepresentStringOpt succ, nd) |> ret
   | Record("x-edit-wraprec", Lookup(Findrb rb & Finds "tag" tag & Finds "fld" id & Find "target" target)) ->
       WrapRecord(rb, tag, id, unrepresentSel target) |> ret
   | Record("x-edit-renamefld", Lookup (Findrb rb & Find "target" sel & Finds "old" fold & Finds "new" fnew)) ->
@@ -107,16 +107,16 @@ let rec represent (hash:int option) op =
     | None -> rcd k args
   match op.Kind with 
   // Value edits
-  | RecordAdd(target, f, pred, nd) ->
-      rcd "x-edit-add" <| [ "target", representSel target; "field", ps f; "node", nd ] @ (representStringOpt "pred" pred)
+  | RecordAdd(target, f, pred, succ, nd) ->
+      rcd "x-edit-add" <| [ "target", representSel target; "field", ps f; "node", nd ] @ (representStringOpt "pred" pred) @ (representStringOpt "succ" succ)
   | PrimitiveEdit(target, op, None) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op ]
   | PrimitiveEdit(target, op, Some arg) ->
       rcd "x-edit-primitive" [ "target", representSel target; "op", ps op; "arg", ps arg ]
   | UpdateTag(target, ntag) ->
       rcd "x-edit-updatetag" [ "target", representSel target; "new", ps ntag ]
-  | ListAppend(target, n, pred, nd) ->
-      rcd "x-edit-append" <| [ "target", representSel target; "node", nd; "index", ps n ] @ (representStringOpt "pred" pred)
+  | ListAppend(target, n, pred, succ, nd) ->
+      rcd "x-edit-append" <| [ "target", representSel target; "node", nd; "index", ps n ] @ (representStringOpt "pred" pred) @ (representStringOpt "succ" succ)
   | ListDelete(target, i) ->
       rcd "x-edit-listdelete" [ "target", representSel target; "index", ps i ]
   | ListReorder(target, perm) ->
