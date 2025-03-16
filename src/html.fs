@@ -142,6 +142,7 @@ type El(ns) =
   member x.Namespace = ns
   static member (?) (el:El, n:string) = fun a b ->
     Element(el.Namespace, n, Array.ofList a, Array.ofList b, None)
-  
+  member x.onload f = function Element(ns, n, a, b, _) -> Element(ns, n, a, b, Some f) | e -> e
+
 let h = El(null)
 let s = El("http://www.w3.org/2000/svg")

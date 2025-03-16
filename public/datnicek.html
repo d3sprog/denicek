@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Carlito:ital,wght@0,400;0,700;1,400;1,700&family=Quicksand:wght@300..700&family=Roboto+Mono:ital,wght@0,100..700;1,100..700&display=swap" rel="stylesheet">
   <style type="text/css">
     * { margin:0px; padding:0px; }
     body { background:#f0f0f0; font-family:Quicksand, sans-serif; }
@@ -78,8 +78,17 @@
     .cell-code thead { position:sticky; top:0px; z-index:2; }
     .cell-code table thead { background:#F9B56B; color:white; }
     .cell-code table tr:nth-child(even) td {background: #f9b46b30;}
-
     .cell-code .compost { padding-top:10px; }
+
+    /* pretty text formatting for text cells */
+    .cell-text .text-body { padding:10px; font-family:Carlito, sans-serif;  }
+    .cell-text .text-body p { margin:0px 0px 10px 0px; }
+    .cell-text .text-body li { margin:0px 0px 3px 0px; }
+    .cell-text .text-body li.selected { list-style-type: none; margin-left:-11px;}
+    .cell-text .text-body ul, .cell-text .text-body ol { margin:0px 0px 10px 25px; }
+    .cell-text .text-body h1 { margin:0px 0px 15px 0px; }
+    .cell-text .text-body * { outline:none; }
+    .cell-text .text-body .selected { color:#808080; }
     
     /* pretty table formatting in grid cells */ 
     .cell-grid .table-caption { width:0px; min-width:calc(100% - 10px); border:4px solid #BDB9D7; border-bottom-style:none; background:#BDB9D7; color:white; text-align:center; font:700 9pt Quicksand, sans-serif; }

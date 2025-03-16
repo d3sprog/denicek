@@ -66,6 +66,7 @@ module P =
     | _ -> p2 cs )
 
   let andThen (Parser p1) (Parser p2) = Parser(fun cs -> 
+    printfn $"P1={p1 cs}"
     match p1 cs with 
     | Parsed(r1, cs) ->
         match p2 (Some cs) with 
