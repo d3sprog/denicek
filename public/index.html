@@ -15,7 +15,7 @@
     html, body { padding:0px; margin:0px; }
     #main { display:flex; flex-direction:row; align-items: flex-start; }
     #doc { flex:20; padding:20px; font-family:'Merriweather'; line-height:1.5em; }
-    #edits { flex:0 0 40%; }    
+    #edits { flex:0 0 45%; }    
 
     /* header with demo links */
     header { font-family:Inter, sans-serif; background:#404040; color:white; padding:8px; font-size:12pt; }
@@ -24,8 +24,8 @@
     header label { float:right; margin-right:20px }
     
     /* document location at the top */    
-    #loc { font-family:Inter, sans-serif; background:#e0e0e0; color:#808080; padding:6px 8px; font-size:10pt; }
-    #loc i { margin:0px 10px;}
+    #loc { font-family:Inter, sans-serif; background:#e0e0e0; color:#808080; padding:6px 8px; font-size:10pt; height:20px; overflow:hidden; }
+    #loc i { margin:0px 10px; }
 
     /* context menu for entering commands */
     #ctx { position:absolute; width:350px; max-height:350px; padding:4px; 
@@ -72,8 +72,7 @@
     /* basic styling for things in the document */
     input { padding:3px; }
     button { padding:3px 10px 3px 10px; }
-
-
+    
     #edits { font:300 8pt Inter, sans-serif; height:100vh; left:70vw; background:#f0f0f0; overflow:scroll; padding:0px 0px 0px 10px }
     #edits ol { margin:0px; padding:0px 0px 0px 18px; }
     #edits ol li { margin:0px; padding:0px; padding-left:20px; }
@@ -81,10 +80,12 @@
     #edits ol a { text-decoration: none; }
     #edits ol li a.sel, #edits ol li a.sel a { color:#00AF40; }
 
-
+    
     td { border:1px solid black; padding:2px; }
     thead td { font-weight: bold; }
-
+    
+    ul.saved-interactions { padding-left:15px; }
+    .formula { outline:solid 2px #a4d8ff; padding:0px 2px; margin:0px 2px }  
     /*
     x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
     x-match {  display:inline-block; }
