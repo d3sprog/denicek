@@ -809,7 +809,7 @@ module Charts =
       Shape.Layered [
         for row in data do
         let bar = Shape.Padding((2., 0., 2., 1.), Derived.Bar(value row, key row))
-        yield Shape.Style((fun s -> { s with Fill = Solid(1.0, HTML "#aec7e8") }), bar)
+        yield Shape.Style((fun s -> { s with Fill = Solid(1.0, HTML "#9E9AC8") }), bar)
       ]
     let viz = Axes(false, false, true, true, viz)
     let width = (document.getElementsByClassName("cell").[0] :?> HTMLElement).offsetWidth
