@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "postinstall": "dotnet tool restore",
-    "start": "dotnet fable watch src -s --run webpack-dev-server",
+    "start": "dotnet fable watch src -s --sourceMapsRoot src --run webpack-dev-server",
     "build": "dotnet fable src && webpack",
     "test": "dotnet run --project tests/tests.fsproj",
     "clean": "dotnet fable clean"

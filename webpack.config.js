@@ -6,11 +6,12 @@ var path = require("path");
 
 module.exports = {
     mode: "development",
-    entry: "./src/app.fs.js",
+    entry: "./src/main.fs.js",
     output: {
         path: path.join(__dirname, "./public"),
         filename: "bundle.js",
     },
+    devtool: 'source-map',
     devServer: {
         static: {
             directory: path.resolve(__dirname, "./public"),

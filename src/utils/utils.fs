@@ -20,6 +20,27 @@ module Patterns =
 
 module List = 
 
+  let groupAdjacent f list =
+    let rec loop acc cg ck = function
+      | [] -> List.rev ((ck, List.rev cg)::acc)
+      | x::xs ->
+          let key = f x
+          if key = ck then loop acc (x::cg) ck xs
+          else loop ((ck,List.rev cg)::acc) [x] key xs
+    match list with
+    | [] -> []
+    | x::xs -> loop [] [x] (f x) xs
+
+  let withBeforeAfter list = 
+    let rec loop acc before xs = 
+      match xs with 
+      | x::xa::xs -> loop ((before, x, Some xa)::acc) (Some x) (xa::xs)
+      | [x] -> List.rev ((before, x, None)::acc)
+      | [] -> []
+    loop [] None list
+
+  //withBeforeAfter (List.ofSeq "abc")
+
   let partitionBy sizes list = 
     let mutable list = list
     [ for s in sizes ->

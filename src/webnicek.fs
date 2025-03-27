@@ -1,4 +1,4 @@
-﻿module Denicek.App.Main
+module Denicek.App.Webnicek
 
 open Denicek
 open Denicek.Html
@@ -236,7 +236,7 @@ module Helpers =
 
   let generalizeSaved t ops = 
     let newItems = ops |> List.choose (function
-      | { Kind = ListAppend(s, n, _, _) } -> 
+      | { Kind = ListAppend(s, n, _, _, _) } -> 
           Some(s @ [Index n], s @ [Index (makeUnique n)]) 
       | _ -> None)
     let ops = newItems |> List.fold (fun ops (osel, nsel) -> replacePrefixInEdits osel nsel ops) ops
@@ -379,11 +379,11 @@ module Document =
           let el = unbox<Browser.Types.HTMLInputElement> el
           let ed = 
             if el.``type`` = "checkbox" && el.``checked`` then
-              RecordAdd(path, "@checked", None, Primitive(String "checked"))
+              RecordAdd(path, "@checked", None, None, Primitive(String "checked"))
             elif el.``type`` = "checkbox" && not el.``checked`` then
               RecordDelete(KeepReferences, path, "@checked")
             else
-              RecordAdd(path, "@value", None, Primitive(String el.value))
+              RecordAdd(path, "@value", None, None, Primitive(String el.value))
           let edit = { Kind = ed; Dependencies = []; GroupLabel = "" }
           trigger(DocumentEvent(MergeEdits(state.DocumentState.DocumentEdits @ [ edit ])))
     ]
@@ -491,8 +491,8 @@ module Document =
 
     | Evaluate all -> 
         let extraEval = 
-          if all then Eval.evaluateAll appstate.DemoState.Data state.FinalDocument 
-          else Eval.evaluateOne appstate.DemoState.Data state.FinalDocument
+          if all then Eval.evaluateAll (Eval.webnicekEvaluateBuiltins appstate.DemoState.Data) state.FinalDocument 
+          else Eval.evaluateOne (Eval.webnicekEvaluateBuiltins appstate.DemoState.Data) state.FinalDocument
         { state with 
             EvaluatedEdits = state.EvaluatedEdits @ extraEval              
             DisplayEditIndex = System.Int32.MaxValue }
@@ -512,7 +512,7 @@ module Document =
               match hashMap.TryGetValue(oldhash) with
               | true, (nhash, _) ->
                   let nhash = Primitive(String(nhash.ToString("x")))
-                  yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", None, nhash)
+                  yield RecordAdd([Field "saved-interactions"; Field n], "historyhash", None, None, nhash)
               | _ -> ()
 
               // Update the operations to new ones - if they have changed,
@@ -524,10 +524,10 @@ module Document =
                     | _ -> yield hash, op ]
 
               if newOps <> ops then
-                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", None, List("x-interaction-list", OrdList.empty))
+                yield RecordAdd([Field "saved-interactions"; Field n], "interactions", None, None, List("x-interaction-list", OrdList.empty ()))
                 for i, (hash, op) in Seq.indexed newOps ->
                   ListAppend([Field "saved-interactions"; Field n; Field "interactions"], string i,
-                    (if i = 0 then None else Some(string(i-1))), Represent.represent (Some hash) op) ]
+                    (if i = 0 then None else Some(string(i-1))), None, Represent.represent (Some hash) op) ]
             |> List.map mked
           with e -> Browser.Dom.console.error(e); []
         let merged = merged @ fixhist
@@ -621,7 +621,7 @@ module History =
           yield h?span ["style" => "color:black"] [ text " (" ]
           yield Helpers.renderHistoryHash state trigger histhash
           yield h?span ["style" => "color:black"] [ text ") " ]
-          if false then //details || i = state.DocumentState.DisplayEditIndex then
+          if details || i = state.DocumentState.DisplayEditIndex then
             yield h?br [] []
             for i, (k, v) in Seq.indexed args do
               if i <> 0 then yield text ", "
@@ -637,13 +637,13 @@ module History =
         ]
       ]
     let renderv = render KeepReferences
-    let fmtprev = function Some s -> ["prev", text s] | _ -> []
+    let fmtprev k = function Some s -> [k, text s] | _ -> []
     match ed.Edit.Kind with 
     | PrimitiveEdit(sel, fn, None) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
     | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
-    | RecordAdd(sel, f, prev, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev prev
+    | RecordAdd(sel, f, prev, succ, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev "prev" prev @ fmtprev "succ" succ
     | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
-    | ListAppend(sel, i, prev, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev prev
+    | ListAppend(sel, i, prev, succ, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev "prev" prev @ fmtprev "succ" succ
     | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
     | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
     | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
@@ -941,14 +941,14 @@ module Commands =
         yield command NS RN "las la-save" "Save selected edits in the document"
           ( P.keyword "!s " <*>> (P.hole "field" P.ident) |> mapEdg (fun (fld) ->
             [ if select [Field "saved-interactions"] doc = [] then
-                yield RecordAdd([], "saved-interactions", None, Record("x-saved-interactions", OrdList.empty))
-              yield RecordAdd([Field "saved-interactions"], fld, None,
+                yield RecordAdd([], "saved-interactions", None, None, Record("x-saved-interactions", OrdList.empty ()))
+              yield RecordAdd([Field "saved-interactions"], fld, None, None,
                 Record("x-interaction", OrdList.ofList [ 
                   "historyhash", Primitive(String(histHash.ToString("x"))); 
-                  "interactions", List("x-interaction-list", OrdList.empty) ]))
+                  "interactions", List("x-interaction-list", OrdList.empty ()) ]))
               for i, (hash, op) in Seq.indexed recordedEds ->
                 ListAppend([Field "saved-interactions"; Field fld; Field "interactions"], 
-                  string i, (if i = 0 then None else Some(string(i-1))), 
+                  string i, (if i = 0 then None else Some(string(i-1))), None, 
                     Represent.represent (Some hash) op) ] ))
              
     // The following are value edits regardless of to what they are applied
@@ -970,23 +970,23 @@ module Commands =
         | Some src ->
             yield command sk rb "las la-paste" ("Add copied node to " + cr)
               ( fieldAssignment <<*> P.keyword "!v" |> mapEdg (fun (fld) ->
-                [ RecordAdd(sel, fld, pred, Primitive(String ""))
+                [ RecordAdd(sel, fld, pred, None, Primitive(String ""))
                   Copy(rb.Value, sel @ [Field fld], src) ] ))
         yield command sk rb "las la-id-card" ("Add record field to " + cr)
           ( fieldAssignment <*> recordTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, pred, Record(tag, OrdList.empty)) ))
+            RecordAdd(sel, fld, pred, None, Record(tag, OrdList.empty ())) ))
         yield command sk rb "las la-list" ("Add list field to " + cr)
           ( fieldAssignment <*> listTag |> mapEd (fun (fld, tag) ->
-            RecordAdd(sel, fld, pred, List(tag, OrdList.empty)) ))
+            RecordAdd(sel, fld, pred, None, List(tag, OrdList.empty ())) ))
         yield command sk rb "las la-link" ("Add reference field to " + cr)
           ( fieldAssignment <*> refHole |> mapEd (fun (fld, ref) ->
-            RecordAdd(sel, fld, pred, Reference(ref)) ))
+            RecordAdd(sel, fld, pred, None, Reference(ref)) ))
         yield command sk rb "las la-hashtag" ("Add numerical field to " + cr)
           ( fieldAssignment <*> numHole |> mapEd (fun (fld, num) ->
-            RecordAdd(sel, fld, pred, Primitive(Number (int num))) ))
+            RecordAdd(sel, fld, pred, None, Primitive(Number (int num))) ))
         yield command sk rb "las la-font" ("Add string field to " + cr)
           ( fieldAssignment <*> strHole |> mapEd (fun (fld, str) ->
-            RecordAdd(sel, fld, pred, Primitive(String str)) ))
+            RecordAdd(sel, fld, pred, None, Primitive(String str)) ))
       | _ -> ()
 
       // Add item of some kind to a list
@@ -998,20 +998,20 @@ module Commands =
         | Some src ->
             yield command sk rb "las la-paste" ("Add copied node to " + cl)
               ( fieldAssignment <<*> P.keyword "!v" |> mapEdg (fun idx ->
-                [ ListAppend(sel, idx, pred, Primitive(String ""))
+                [ ListAppend(sel, idx, pred, None, Primitive(String ""))
                   Copy(KeepReferences, sel @ [Index idx], src) ]))
         yield command sk rb "las la-id-card" ("Add record item to " + cl)
           ( fieldAssignment <*> recordTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, pred, Record(tag, OrdList.empty)) ))
+            ListAppend(sel, idx, pred, None, Record(tag, OrdList.empty ())) ))
         yield command sk rb "las la-list" ("Add list item to " + cl)
           ( fieldAssignment <*> listTag |> mapEd (fun (idx, tag) ->
-            ListAppend(sel, idx, pred, List(tag, OrdList.empty)) ))
+            ListAppend(sel, idx, pred, None, List(tag, OrdList.empty ())) ))
         yield command sk rb "las la-hashtag" ("Add numerical item to " + cl)
           ( fieldAssignment <*> numHole |> mapEd (fun (idx, num) ->
-            ListAppend(sel, idx, pred, Primitive(Number (int num))) ))
+            ListAppend(sel, idx, pred, None, Primitive(Number (int num))) ))
         yield command sk rb "las la-font" ("Add string item to " + cl)
           ( fieldAssignment <*> strHole |> mapEd (fun (idx, str) ->
-            ListAppend(sel, idx, pred, Primitive(String str)) ))
+            ListAppend(sel, idx, pred, None, Primitive(String str)) ))
       | _ -> ()
       
     // Built-in transformations of primitive values
@@ -1462,143 +1462,145 @@ let render trigger state =
 // Initial state and global handlers
 // --------------------------------------------------------------------------------------
 
-let fromOperationsList ops = 
-  let init = rcd "div"
-  { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
-      EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; ForkedFrom = None;
-      CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
-    ViewState = { CursorLocation = [], Before; CursorSelector = []; ProvenanceSelectors = [];
-      GeneralizedStructuralSelector = []; ViewSourceSelector = None }
-    CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
-      SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
-    HistoryState = { HighlightedSelector = None; 
-      SelectedEdits = Set.empty; Display = true }
-    DemoState = { Demos = None; Data = Map.empty }
-  }
+module Loader = 
 
-let initial = fromOperationsList []
-let trigger, _, getState = createVirtualDomApp "out" initial render update
+  let fromOperationsList ops = 
+    let init = rcd "div"
+    { DocumentState = { Initial = init; DocumentEdits = ops; DisplayEdits = []; 
+        EvaluatedEdits = []; DisplayEditIndex = (List.length ops) - 1; ForkedFrom = None;
+        CurrentDocument = init; FinalDocument = init; FinalHash = 0 } |> updateDocument
+      ViewState = { CursorLocation = [], Before; CursorSelector = []; ProvenanceSelectors = [];
+        GeneralizedStructuralSelector = []; ViewSourceSelector = None }
+      CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
+        SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
+      HistoryState = { HighlightedSelector = None; 
+        SelectedEdits = Set.empty; Display = true }
+      DemoState = { Demos = None; Data = Map.empty }
+    }
 
+  open Browser.XMLHttpRequest
 
-open Browser.XMLHttpRequest
+  let asyncRequest file = 
+    Async.FromContinuations(fun (cont, econt, ccont) -> 
+      let req = XMLHttpRequest.Create()
+      req.addEventListener("load", fun _ -> cont req.responseText)
+      req.``open``("GET", file)
+      req.send())
 
-let asyncRequest file = 
-  Async.FromContinuations(fun (cont, econt, ccont) -> 
-    let req = XMLHttpRequest.Create()
-    req.addEventListener("load", fun _ -> cont req.responseText)
-    req.``open``("GET", file)
-    req.send())
-
-let readJsonOps json = 
-  List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json) 
+  let readJsonOps json = 
+    List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json) 
   
-let readJson json = 
-  readJsonOps json |> fromOperationsList
+  let readJson json = 
+    readJsonOps json |> fromOperationsList
 
-let startWithHandler op = Async.StartImmediate <| async {
-  try do! op
-  with e -> Browser.Dom.console.error(e.ToString()) }
+  let startWithHandler op = Async.StartImmediate <| async {
+    try do! op
+    with e -> Browser.Dom.console.error(e.ToString()) }
 
-let pbdCore = opsCore @ pbdAddInput
+  let pbdCore = opsCore @ pbdAddInput
 
-let readPrimitive (s:string) = 
-  match System.Double.TryParse(s) with 
-  | true, n -> Number(n)
-  | _ -> String(s)
+  let readPrimitive (s:string) = 
+    match System.Double.TryParse(s) with 
+    | true, n -> Number(n)
+    | _ -> String(s)
 
-let readCsv (s:string) = 
-  let lines = s.Replace("\r", "").Split('\n')
-  let cols = lines.[0].Split(',')
-  let rows = lines.[1..] |> Seq.map (fun l ->
-    let data = l.Split(',') |> Array.map (fun s -> 
-      Record("td", OrdList.ofList [ "value", Primitive(readPrimitive s) ]))
-    let fields = Seq.zip cols data |> List.ofSeq |> OrdList.ofList
-    Record("tr", fields) ) |> List.ofSeq
-  List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
+  let readCsv (s:string) = 
+    let lines = s.Replace("\r", "").Split('\n')
+    let cols = lines.[0].Split(',')
+    let rows = lines.[1..] |> Seq.map (fun l ->
+      let data = l.Split(',') |> Array.map (fun s -> 
+        Record("td", OrdList.ofList [ "value", Primitive(readPrimitive s) ]))
+      let fields = Seq.zip cols data |> List.ofSeq |> OrdList.ofList
+      Record("tr", fields) ) |> List.ofSeq
+    List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
 
-async { 
-  let data = [ "avia.csv"; "rail.csv" ]
-  let! csvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
-  let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readCsv csvs))
+  let loadData trigger = async { 
+    let data = [ "avia.csv"; "rail.csv" ]
+    let! csvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
+    let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readCsv csvs))
 
-  let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-hide"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; "traffic-base"; "traffic-copy"; "traffic-correct" ]
-  let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
-  match jsons with 
-  | [| helloBase; helloSaved; todoBase; todoCond; todoHide; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; trafficBase; trafficCopy; trafficCorrect |] ->
-    let demos = 
-      [ 
-        "empty", readJson "[]", []
-        "traffic", readJson trafficBase, [
-          "copy", readJsonOps trafficCopy
-          "fix", readJsonOps trafficCorrect
+    let demos = [ "hello-base"; "hello-saved"; "todo-base"; "todo-cond"; "todo-hide"; "todo-remove"; "counter-base"; "conf-base"; "conf-add";"conf-table";"conf-rename"; "conf-budget"; "traffic-base"; "traffic-copy"; "traffic-correct" ]
+    let! jsons = [ for d in demos -> asyncRequest $"/demos/{d}.json" ] |> Async.Parallel
+    match jsons with 
+    | [| helloBase; helloSaved; todoBase; todoCond; todoHide; todoRemove; counterBase; confBase; confAdd; confTable; confRename; confBudget; trafficBase; trafficCopy; trafficCorrect |] ->
+      let demos = 
+        [ 
+          "empty", readJson "[]", []
+          "traffic", readJson trafficBase, [
+            "copy", readJsonOps trafficCopy
+            "fix", readJsonOps trafficCorrect
+          ]
+          //"?t1", fromOperationsList (opsCore @ addSpeakerOps), []
+          "hello", readJson helloBase, [
+            "saved", readJsonOps helloSaved 
+          ]
+          "todo", readJson todoBase, [  
+            "cond", readJsonOps todoCond
+            "hide", readJsonOps todoHide
+            "remove", readJsonOps todoRemove 
+          ]
+          "counter", readJson counterBase, []
+          "conf", readJson confBase, [
+            "add", readJsonOps confAdd 
+            "rename", readJsonOps confRename
+            "table", readJsonOps confTable 
+            "budget", readJsonOps confBudget
+          ]
+          "conf2", readJson """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]}]""", [
+            "table", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","body"],["fld","table"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["field","head"],["node",{"kind":"record","tag":"thead","nodes":[]}],["pred","body"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"]]}],["field","r"],["node",{"kind":"record","tag":"tr","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","name"],["node",{"kind":"record","tag":"td","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","name"]]}],["field","v"],["node","Name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","email"]]}],["field","v"],["node","Email"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"]]}],["new","tbody"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","name"],["fld","tr"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["old","speaker"],["new","value"],["refs","update"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["new","td"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"]]}],["field","value"],["node",""]]},{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["op","before-comma"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["op","after-comma"]]}]"""
+            "budget", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","goldberg"],["pred","hamilton"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#goldberg"]]}],["field","speaker"],["node","Adele Goldberg, goldberg@xerox.com"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t3"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t3"]]}],["field","v"],["node","Budget"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","budget"],["node",{"kind":"record","tag":"ul","nodes":[]}],["pred","t3"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","travel"],["node",{"kind":"record","tag":"li","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","lbl"],["node","Travel per speaker: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","value"],["node",1500],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","count"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","travel"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","lbl"],["node","Number of speakers: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","count"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","arg"],["node",{"kind":"reference","refkind":"absolute","selectors":["speakers"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","total"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","count"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","lbl"],["node","Total costs: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","mul"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","left"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","count","value"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","right"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","travel","value"]}],["pred","left"]]}]"""
+          ]
         ]
-        //"?t1", fromOperationsList (opsCore @ addSpeakerOps), []
-        "hello", readJson helloBase, [
-          "saved", readJsonOps helloSaved 
-        ]
-        "todo", readJson todoBase, [  
-          "cond", readJsonOps todoCond
-          "hide", readJsonOps todoHide
-          "remove", readJsonOps todoRemove 
-        ]
-        "counter", readJson counterBase, []
-        "conf", readJson confBase, [
-          "add", readJsonOps confAdd 
-          "rename", readJsonOps confRename
-          "table", readJsonOps confTable 
-          "budget", readJsonOps confBudget
-        ]
-        "conf2", readJson """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]}]""", [
-          "table", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","body"],["fld","table"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["field","head"],["node",{"kind":"record","tag":"thead","nodes":[]}],["pred","body"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"]]}],["field","r"],["node",{"kind":"record","tag":"tr","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","name"],["node",{"kind":"record","tag":"td","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","name"]]}],["field","v"],["node","Name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","email"]]}],["field","v"],["node","Email"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"]]}],["new","tbody"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","name"],["fld","tr"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["old","speaker"],["new","value"],["refs","update"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["new","td"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"]]}],["field","value"],["node",""]]},{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["op","before-comma"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["op","after-comma"]]}]"""
-          "budget", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","goldberg"],["pred","hamilton"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#goldberg"]]}],["field","speaker"],["node","Adele Goldberg, goldberg@xerox.com"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t3"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t3"]]}],["field","v"],["node","Budget"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","budget"],["node",{"kind":"record","tag":"ul","nodes":[]}],["pred","t3"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","travel"],["node",{"kind":"record","tag":"li","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","lbl"],["node","Travel per speaker: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","value"],["node",1500],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","count"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","travel"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","lbl"],["node","Number of speakers: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","count"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","arg"],["node",{"kind":"reference","refkind":"absolute","selectors":["speakers"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","total"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","count"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","lbl"],["node","Total costs: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","mul"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","left"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","count","value"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","right"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","travel","value"]}],["pred","left"]]}]"""
-        ]
-      ]
-    trigger (DemoEvent(LoadDemos(demos, dataFiles)))
-  | _ -> failwith "wrong number of demos" }
-|> startWithHandler
+      trigger (DemoEvent(LoadDemos(demos, dataFiles)))
+    | _ -> failwith "wrong number of demos" }
+  
+  let start () =
+    let initial = fromOperationsList []
+    let trigger, _, getState = createVirtualDomApp "out" initial render update
+    loadData trigger |> startWithHandler
 
-Browser.Dom.window.onkeypress <- fun e -> 
-  let targetNotText = 
-    (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
-    (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
-  if targetNotText then
-    e.preventDefault();
-    trigger(CommandEvent(TypeCommand e.key))
+    Browser.Dom.window.onkeypress <- fun e -> 
+      let targetNotText = 
+        (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
+        (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
+      if targetNotText then
+        e.preventDefault();
+        trigger(CommandEvent(TypeCommand e.key))
 
-Browser.Dom.window.onkeyup <- fun e -> 
-  let state = getState()
-  if e.key = "Alt" && state.CommandState.AltMenuDisplay then
-    e.preventDefault(); trigger(CommandEvent(ToggleAltMenu false))
+    Browser.Dom.window.onkeyup <- fun e -> 
+      let state = getState()
+      if e.key = "Alt" && state.CommandState.AltMenuDisplay then
+        e.preventDefault(); trigger(CommandEvent(ToggleAltMenu false))
 
-Browser.Dom.window.onkeydown <- fun e -> 
-  let state = getState()
-  let targetNotText = 
-    (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
-    (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
+    Browser.Dom.window.onkeydown <- fun e -> 
+      let state = getState()
+      let targetNotText = 
+        (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
+        (unbox<Browser.Types.HTMLInputElement> e.target).``type`` <> "text"
 
-  if e.ctrlKey then
-    if e.key = "ArrowUp" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection +1))
-    if e.key = "ArrowDown" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection -1))
-    if e.key = "ArrowUp" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex +1))
-    if e.key = "ArrowDown" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex -1))
-  else
-    if e.key = "Escape" then e.preventDefault(); trigger(CommandEvent(CancelCommand))
-    if e.key = "Backspace" && targetNotText then e.preventDefault(); trigger(CommandEvent(BackspaceCommand))
-    if e.key = "Enter" && targetNotText  then e.preventDefault(); trigger(EnterCommand)
-    if e.key = "ArrowRight" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Forward))
-    if e.key = "ArrowLeft" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Backward))
-    if e.key = "ArrowUp" then 
-      if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Previous))
-      else e.preventDefault(); trigger(CommandEvent(PreviousRecommendation))
-    if e.key = "ArrowDown" then 
-      if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
-      else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
+      if e.ctrlKey then
+        if e.key = "ArrowUp" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection +1))
+        if e.key = "ArrowDown" && e.shiftKey then e.preventDefault(); trigger(HistoryEvent(ExtendSelection -1))
+        if e.key = "ArrowUp" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex +1))
+        if e.key = "ArrowDown" then e.preventDefault(); trigger(DocumentEvent(MoveEditIndex -1))
+      else
+        if e.key = "Escape" then e.preventDefault(); trigger(CommandEvent(CancelCommand))
+        if e.key = "Backspace" && targetNotText then e.preventDefault(); trigger(CommandEvent(BackspaceCommand))
+        if e.key = "Enter" && targetNotText  then e.preventDefault(); trigger(EnterCommand)
+        if e.key = "ArrowRight" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Forward))
+        if e.key = "ArrowLeft" && targetNotText then e.preventDefault(); trigger(ViewEvent(MoveCursor Backward))
+        if e.key = "ArrowUp" then 
+          if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Previous))
+          else e.preventDefault(); trigger(CommandEvent(PreviousRecommendation))
+        if e.key = "ArrowDown" then 
+          if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
+          else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
 
-    let altHints () = (Browser.Dom.document.getElementsByClassName("alt-hints").[0] :?> Browser.Types.HTMLInputElement).``checked``
-    if e.key = "Alt" && altHints () && not state.CommandState.AltMenuDisplay then
-      e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
+        let altHints () = (Browser.Dom.document.getElementsByClassName("alt-hints").[0] :?> Browser.Types.HTMLInputElement).``checked``
+        if e.key = "Alt" && altHints () && not state.CommandState.AltMenuDisplay then
+          e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
 
-    for sc in Shortcuts.shortcuts do
-      if e.altKey && e.key = sc.Key then 
-        e.preventDefault()
-        for evt in sc.Events do trigger(evt)
+        for sc in Shortcuts.shortcuts do
+          if e.altKey && e.key = sc.Key then 
+            e.preventDefault()
+            for evt in sc.Events do trigger(evt)

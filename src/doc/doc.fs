@@ -95,6 +95,22 @@ let prefixOfReference p1 (p2base, p2ref) =
 // Document transformations
 // --------------------------------------------------------------------------------------
 
+let replaceAt target f nd = 
+  let rec loop path target nd = 
+    match nd, target with
+    | nd, [] ->
+        match f path nd with 
+        | Some res -> res
+        | _ -> nd
+    | List(tag, nds), All::target ->
+        List(tag, nds |> OrdList.mapValues (fun n nd -> loop (path @ [Index n]) target nd))
+    | List(tag, nds), (Index i)::target ->
+        List(tag, nds |> OrdList.replace i (loop (path @ [Index i]) target nds.Members.[i]))
+    | Record(tag, nds), (Field f)::target when nds.Members.ContainsKey f -> 
+        Record(tag, nds |> OrdList.replace f (loop (path @ [Field f]) target nds.Members.[f]))
+    | _ -> nd       
+  loop [] target nd
+
 let replace f nd = 
   let rec loop path nd =
     match f path nd with 
@@ -120,9 +136,20 @@ let fold f st value =
         st
   loop [] st value
 
-let select sel doc = 
-  doc |> fold (fun p value st -> 
-    if matches sel p then value::st else st) [] |> List.rev
+let select target nd = 
+  let res = ResizeArray<_>()
+  let rec loop path target nd = 
+    match nd, target with
+    | nd, [] -> res.Add(nd)
+    | List(tag, nds), All::target ->
+        for k, nd in nds do loop (path @ [Index k]) target nd
+    | List(tag, nds), (Index k)::target ->
+        nds.Members.TryFind(k) |> Option.iter (fun nd -> loop (path @ [Index k]) target nd)
+    | Record(tag, nds), (Field k)::target ->
+        nds.Members.TryFind(k) |> Option.iter (fun nd -> loop (path @ [Field k]) target nd)
+    | _ -> ()
+  loop [] target nd
+  List.ofSeq res
 
 let selectSingle sel doc = 
   match select sel doc with
@@ -220,12 +247,10 @@ type EditKind =
   // Edits that cannot affect references in document
   | ListReorder of Selectors * permutation:list<string>
   | ListDelete of Selectors * index:string
-  | ListAppend of Selectors * index:string * pred:string option * node:Node 
-  // TODO: Delete this (but it will require recreating demo JSONs...)
-  | ListAppendFrom_DELETE_ME of Selectors * index:string * pred:string option * source:Selectors 
+  | ListAppend of Selectors * index:string * pred:string option * succ:string option * node:Node 
   | UpdateTag of Selectors * ntag:string
   | PrimitiveEdit of Selectors * op:string * args:string option
-  | RecordAdd of Selectors * field:string * pred:string option * node:Node
+  | RecordAdd of Selectors * field:string * pred:string option * succ:string option * node:Node
 
 type Edit = 
   { Kind : EditKind 
@@ -272,12 +297,12 @@ module Format =
         fmtv "primitive" [formatSelector sel; formatString op]
     | PrimitiveEdit(sel, op, Some arg) -> 
         fmtv "primitive" [formatSelector sel; formatString op; formatString arg]
-    | RecordAdd(sel, n, pred, nd) -> 
-        fmtv "recordAdd" [formatSelector sel; formatString n; formatStringOpt pred; formatNode nd]
+    | RecordAdd(sel, n, pred, succ, nd) -> 
+        fmtv "recordAdd" [formatSelector sel; formatString n; formatStringOpt pred; formatStringOpt succ; formatNode nd]
     | UpdateTag(sel, tagNew) -> 
         fmtv "updateTag" [formatSelector sel; formatString tagNew]
-    | ListAppend(sel, n, pred, nd) ->       
-        fmtv "listAppend" [formatSelector sel; formatString n; formatStringOpt pred; formatNode nd ]
+    | ListAppend(sel, n, pred, succ, nd) ->       
+        fmtv "listAppend" [formatSelector sel; formatString n; formatStringOpt pred; formatStringOpt succ; formatNode nd ]
     | ListReorder(sel, ord) -> 
         fmtv "listReorder" [formatSelector sel; $"""[{ String.concat "," (List.map string ord) }])"""]
     | ListDelete(sel, i) -> 

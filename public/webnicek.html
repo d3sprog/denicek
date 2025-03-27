@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+  <title>Fable</title>
+  <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href= "https://maxst.icons8.com/vue-static/landings/line-awesome/line-awesome/1.3.0/css/line-awesome.min.css" >
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&family=Roboto+Mono:wght@100..700&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
+
+
+  <style type="text/css">
+    html, body { padding:0px; margin:0px; }
+    #main { display:flex; flex-direction:row; align-items: flex-start; }
+    #doc { flex:20; padding:20px; font-family:'Merriweather'; line-height:1.5em; }
+    #edits { flex:0 0 45%; }    
+
+    /* header with demo links */
+    header { font-family:Inter, sans-serif; background:#404040; color:white; padding:8px; font-size:12pt; }
+    header a { color:white; margin-left:10px;}
+    header .alts a { margin-left:0px; }
+    header label { float:right; margin-right:20px }
+    
+    /* document location at the top */    
+    #loc { font-family:Inter, sans-serif; background:#e0e0e0; color:#808080; padding:6px 8px; font-size:10pt; height:20px; overflow:hidden; }
+    #loc i { margin:0px 10px; }
+
+    /* context menu for entering commands */
+    #ctx { position:absolute; width:350px; max-height:350px; padding:4px; 
+      font-family:Inter, sans-serif; background:white; box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3); border-radius:10px; }
+    #ctx ul { overflow-y:scroll; scrollbar-color:#e0e0e0 white; max-height:315px; }
+    #ctx ul, #ctx li { margin:0px; padding:0px; list-style:none; }
+    #ctx li { padding:8px 2px; cursor:pointer; }
+    #ctx li.selected, #ctx li:hover { background:#f0f0f0; border-radius:4px; }
+    #ctx .icon { float:left; border:1px solid #e0e0e0; border-radius:4px; padding:5px; margin:3px 0px 0px 5px; }
+    #ctx .icon i { font-size:20px; color:#808080;}
+    #ctx .icon { background:rgba(218, 218, 218, 0.4); }
+    #ctx .igensel .icon { background:rgba(255, 227, 164, 0.4); }
+    #ctx .icursel .icon { background:rgba(190, 207, 255, 0.4); }
+    #ctx .details { margin-left:45px;}
+    #ctx h4 { font:200 14px Inter, sans-serif; margin:0px; }
+    #ctx kbd { font:300 12px Inter, sans-serif; margin:0px; color:#606060; }
+    #ctx kbd em { font-weight:200; font-style: normal; }
+    #ctx kbd strong { font-weight:500; }
+    #ctx kbd .entered { color:rgb(190, 36, 172); }
+    #ctx #cmd { border:1px solid #e0e0e0; border-radius:4px; margin:5px; padding:4px; font:300 12px Inter, sans-serif; }
+    
+    /* highlighted selector */
+    .selsel { outline:3px solid #ecc7ee; }
+    .treenode.selsel { background:#ecc7ee; }
+    .selector.selsel { background:#ecc7ee; }
+
+    /* cursor and generalized structural cursor */
+    .gensel { box-shadow:inset 0px 0px 0px 3px rgb(255, 227, 164); }
+    .cursor-after { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), 3px 0px 0px 3px #8ca7ff; }
+    .cursor-before { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff; }
+    .cursor-after.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), 3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
+    .cursor-before.gensel { box-shadow:0px 0px 0px 3px rgb(190, 207, 255), -3px 0px 0px 3px #8ca7ff, inset 0px 0px 0px 3px rgb(255, 227, 164); }
+    .hiprov { background:#FFDBF1; }
+
+    /* source code view */
+    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
+
+    /* basic styling for things in the document */
+    input { padding:3px; }
+    button { padding:3px 10px 3px 10px; }
+    
+    #edits { font:300 8pt Inter, sans-serif; height:100vh; left:70vw; background:#f0f0f0; overflow:scroll; padding:0px 0px 0px 10px }
+    #edits ol { margin:0px; padding:0px 0px 0px 18px; }
+    #edits ol li { margin:0px; padding:0px; padding-left:20px; }
+    #edits ol input { margin-left:-20px; margin-right:5px;}
+    #edits ol a { text-decoration: none; }
+    #edits ol li a.sel, #edits ol li a.sel a { color:#00AF40; }
+
+    
+    td { border:1px solid black; padding:2px; }
+    thead td { font-weight: bold; }
+    
+    ul.saved-interactions { padding-left:15px; }
+    .formula { outline:solid 2px #a4d8ff; padding:0px 2px; margin:0px 2px }  
+    /*
+    x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
+    x-match {  display:inline-block; }
+    x-match::before { content:"(matched content)" }
+    */
+    x-saved-interactions { display:none; }
+    /*
+    x-interaction { display:block; padding-left:20px; text-align:left; }
+    x-interaction-list > * { display:list-item; }
+    */
+    x-evaluated > *:nth-child(1) {
+      display:none;
+    }
+    
+</style>
+</head>
+<body>
+    <div id="out"></div>
+    <script src="bundle.js"></script>
+</body>
+</html>
