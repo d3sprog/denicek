@@ -346,6 +346,7 @@ module Document =
             // (without this, they will be treated as being the same and merged as no-op)
             let ops = ops |> Helpers.withUniqueGroupLabel id
             trigger(DocumentEvent(MergeEdits(baseeds @ ops)))
+          trigger(DocumentEvent(Evaluate(true)))
 
       match nd with 
       | Record(_, nds) -> 
@@ -420,18 +421,38 @@ module Document =
         yield! rcdattrs ]
       
       h?(tag) attrs [
+        let binaryOps = dict ["plus","+"; "mul","*"; "minus","-"; "div","/"]
+        let isBinaryOp = function 
+          | Some(Reference(_, [Field "$builtins"; Field op ])) -> binaryOps.ContainsKey op 
+          | _ -> false
         match nd with 
+        | Record("x-formula", { Members = TryFind "left" l & TryFind "right" r & TryFind "op" op } ) 
+              when l.IsSome || r.IsSome || isBinaryOp op ->
+            yield text "="
+            yield h?span ["class" => "formula"] [
+              yield loop (path @ [Field "left"]) (pid ++ "left") (Option.defaultValue (ps "?") l)
+              match op with 
+              | None -> yield text " ∘ "
+              | Some(Reference(_, [Field "$builtins"; Field op])) -> yield text $" {binaryOps.[op]} "
+              | _ -> yield loop (path @ [Field "op"]) (pid ++ "op") (Option.defaultValue (ps " ? ") op)
+              yield loop (path @ [Field "right"]) (pid ++ "right") (Option.defaultValue (ps "?") r)
+            ]
         | Record("x-formula", nds) -> 
-            let op = nds |> Seq.tryFind (fun (f,_) -> f = "op") |> Option.map snd
-            let args = nds |> Seq.filter (fun (f,_)-> f <> "op")
-            if op.IsSome then yield loop (path @ [Field "op"]) (pid ++ "op") op.Value
-            else yield text "@"
-            yield text "("
-            for i, (f, a) in Seq.indexed args do
-              if i <> 0 then yield text ", "
-              yield text $"{f}="
-              yield loop (path @ [Field f]) (pid ++ f) a
-            yield text ")"
+            yield text "="
+            yield h?span ["class" => "formula"] [
+              let op = nds |> Seq.tryFind (fun (f,_) -> f = "op") |> Option.map snd
+              let args = nds |> Seq.filter (fun (f,_)-> f <> "op")
+              match op with 
+              | None -> yield text "@"
+              | Some(Reference(_, [Field "$builtins"; Field op])) -> yield text op
+              | Some(op) -> yield loop (path @ [Field "op"]) (pid ++ "op") op
+              if Seq.length args > 0 then yield text "("
+              for i, (f, a) in Seq.indexed args do
+                if i <> 0 then yield text ", "
+                yield text $"{f}="
+                yield loop (path @ [Field f]) (pid ++ f) a
+              if Seq.length args > 0 then yield text ")"
+            ]
         | List(_, nds) -> 
             for i, a in nds do
               yield loop (path @ [Index i]) (pid ++ string i) a
@@ -600,7 +621,7 @@ module History =
           yield h?span ["style" => "color:black"] [ text " (" ]
           yield Helpers.renderHistoryHash state trigger histhash
           yield h?span ["style" => "color:black"] [ text ") " ]
-          if details || i = state.DocumentState.DisplayEditIndex then
+          if false then //details || i = state.DocumentState.DisplayEditIndex then
             yield h?br [] []
             for i, (k, v) in Seq.indexed args do
               if i <> 0 then yield text ", "
@@ -637,7 +658,7 @@ module History =
         let saved = Helpers.getSavedInteractions state.DocumentState.CurrentDocument
         if not (List.isEmpty saved) then 
           yield h?h3 [] [text "Saved interactions"]
-          yield h?ul [] [
+          yield h?ul ["class" => "saved-interactions"] [
             for k, histhash, ops in saved ->
               h?li [] [ 
                 yield h?p [] [ 
@@ -655,7 +676,7 @@ module History =
           ]
         
         yield h?h3 [] [text "Edit history" ]
-        yield h?p [] [ 
+        (*yield h?p [] [ 
           text "Use "
           h?kbd [] [ text "ctrl+shift+up"]
           text " / "
@@ -668,13 +689,14 @@ module History =
           text " | "
           h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectAll) ] [ text "all" ]
         ]
+        *)
         yield h?ol [] [    
           let withHashAndIdx = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
           let groups = withHashAndIdx |> List.chunkBy (fun (_, (_, ed)) -> ed.Edit.GroupLabel)
           for ieds in groups do
             for ied in ieds do
               yield renderEdit state trigger false ied
-            yield h?li [] [ h?hr [] [] ]
+            //yield h?li [] [ h?hr [] [] ]
         ]
       ] 
     ]
@@ -1523,6 +1545,10 @@ module Loader =
             "rename", readJsonOps confRename
             "table", readJsonOps confTable 
             "budget", readJsonOps confBudget
+          ]
+          "conf2", readJson """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]}]""", [
+            "table", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","body"],["fld","table"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["field","head"],["node",{"kind":"record","tag":"thead","nodes":[]}],["pred","body"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"]]}],["field","r"],["node",{"kind":"record","tag":"tr","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","name"],["node",{"kind":"record","tag":"td","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","name"]]}],["field","v"],["node","Name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","head"],["2","r"],["3","email"]]}],["field","v"],["node","Email"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"]]}],["new","tbody"]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","name"],["fld","tr"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["old","speaker"],["new","value"],["refs","update"]]},{"kind":"record","tag":"x-edit-updatetag","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"]]}],["new","td"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"]]}],["field","email"],["node",{"kind":"record","tag":"td","nodes":[]}],["pred","name"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"]]}],["field","value"],["node",""]]},{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["refs","update"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","name"],["4","value"]]}],["op","before-comma"]]},{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","body"],["2","*"],["3","email"],["4","value"]]}],["op","after-comma"]]}]"""
+            "budget", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","goldberg"],["pred","hamilton"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#goldberg"]]}],["field","speaker"],["node","Adele Goldberg, goldberg@xerox.com"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t3"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t3"]]}],["field","v"],["node","Budget"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","budget"],["node",{"kind":"record","tag":"ul","nodes":[]}],["pred","t3"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","travel"],["node",{"kind":"record","tag":"li","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","lbl"],["node","Travel per speaker: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","value"],["node",1500],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","count"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","travel"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","lbl"],["node","Number of speakers: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","count"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","arg"],["node",{"kind":"reference","refkind":"absolute","selectors":["speakers"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","total"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","count"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","lbl"],["node","Total costs: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","mul"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","left"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","count","value"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","right"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","travel","value"]}],["pred","left"]]}]"""
           ]
         ]
       trigger (DemoEvent(LoadDemos(demos, dataFiles)))
