@@ -621,7 +621,7 @@ module History =
           yield h?span ["style" => "color:black"] [ text " (" ]
           yield Helpers.renderHistoryHash state trigger histhash
           yield h?span ["style" => "color:black"] [ text ") " ]
-          if false then //details || i = state.DocumentState.DisplayEditIndex then
+          if details || i = state.DocumentState.DisplayEditIndex then
             yield h?br [] []
             for i, (k, v) in Seq.indexed args do
               if i <> 0 then yield text ", "
