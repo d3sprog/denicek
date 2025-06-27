@@ -191,7 +191,7 @@ let evalTests =
 
     test "incrementing counter invalidates evalauted result" {
       let doc1 = Apply.applyHistory (rcd "div") (opsBaseCounter @ opsCounterInc)
-      let evalOps = Eval.evaluateAll doc1
+      let evalOps = Eval.evaluateAll Map.empty doc1
       let doc2 = Apply.applyHistory (rcd "div") (opsBaseCounter @ opsCounterInc @ evalOps)
 
       let mergedOps, _ = 
@@ -209,7 +209,7 @@ let evalTests =
 
     test "adding speaker invalidates evaluated results" {
       let doc1 = Apply.applyHistory (rcd "div") (opsCore @ opsBudget)
-      let evalOps = Eval.evaluateAll doc1
+      let evalOps = Eval.evaluateAll Map.empty doc1
       let doc2 = Apply.applyHistory (rcd "div") (opsCore @ opsBudget @ evalOps)
 
       let mergedOps, _ = 
@@ -233,13 +233,13 @@ let evalTests =
       
       let ops2 = ops1 @ opsCounterInc
       let doc2 = Apply.applyHistory (rcd "div") ops2
-      let ops3 = ops2 @ Eval.evaluateOne doc2
+      let ops3 = ops2 @ Eval.evaluateOne Map.empty doc2
       let doc3 = Apply.applyHistory (rcd "div") ops3
       select [Field "counter"; Field "value"; Field "result"] doc3 |> equals [ Primitive(Number 1.0) ]
 
       let ops4 = ops3 @ opsCounterInc
       let doc4 = Apply.applyHistory (rcd "div") ops4
-      let ops5 = ops4 @ Eval.evaluateOne doc4
+      let ops5 = ops4 @ Eval.evaluateOne Map.empty doc4
       let doc5 = Apply.applyHistory (rcd "div") ops5
       select [Field "counter"; Field "value"; Field "result"] doc5 |> equals [ Primitive(Number 2.0) ]
     }
@@ -257,7 +257,7 @@ let evalTests =
           currentOps (opsBaseCounter @ opsCounterInc @ opsCounterInc)
 
       let docUnevaluated = Apply.applyHistory (rcd "div") currentOps
-      let opsEvaluated = currentOps @ Eval.evaluateAll docUnevaluated
+      let opsEvaluated = currentOps @ Eval.evaluateAll Map.empty docUnevaluated
       let docEvaluated = Apply.applyHistory (rcd "div") opsEvaluated
       select [Field "counter"; Field "value"; Field "result"] docEvaluated |> equals [ Primitive(Number 3.0) ]
     }
@@ -271,7 +271,7 @@ let evalTests =
           currentOps1 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
       let currentDoc1 = Apply.applyHistory (rcd "div") currentOps2
       
-      let evalOps1 = Eval.evaluateAll currentDoc1
+      let evalOps1 = Eval.evaluateAll Map.empty currentDoc1
       let currentDoc2 = Apply.applyHistory (rcd "div") (currentOps2 @ evalOps1)
       select (!/"/counter/value/result") currentDoc2 |> equals [Primitive(Number 2.0)]
 
@@ -283,7 +283,7 @@ let evalTests =
       selectTag (!/"/counter/value") currentDoc3 |> equals (Some "x-formula")
       select (!/"/counter/value/result") currentDoc3 |> equals []
 
-      let evalOps3 = evalOps2 @ Eval.evaluateAll currentDoc3
+      let evalOps3 = evalOps2 @ Eval.evaluateAll Map.empty currentDoc3
       let currentDoc4 = Apply.applyHistory (rcd "div") (currentOps3 @ evalOps3)
       select (!/"/counter/value/result") currentDoc4 |> equals [Primitive(Number 3.0)]
     }

@@ -95,6 +95,12 @@ let evaluateBuiltin (data:Map<string, Node>) op (args:Map<string, Node>)=
           // (and so left/right is <empty> list added by Reference evaluation)
           Primitive(String("false")), [Field "left"; Field "right"]
 
+  | "upper" ->
+      match args.TryFind "arg" with
+      | Some(EvaluatedResult(Primitive(String s))) -> 
+          Primitive(String(s.ToUpper())), [Field "arg"]
+      | _ -> failwith $"evaluate: Invalid arguments of built-in op '{op}'."
+
   | "round" ->
       match args.TryFind "arg", args.TryFind "digits" with
       | Some(EvaluatedResult(Primitive(Number f))), Some(EvaluatedResult(Primitive(Number d))) -> 
