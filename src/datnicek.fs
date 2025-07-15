@@ -1605,7 +1605,7 @@ module Loader =
     List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
 
   let loadData trigger = async {
-    let data = [ "eurostat/sf_aviaca.tsv"; "eurostat/sf_railvi.tsv"; "eurostat/sf_railvi_totalkil.tsv"; "eurostat/sf_aviaca_eukil.tsv"; "eurostat/sf_aviaca_euinj.tsv"  ]
+    let data = [ "eurostat/avia.tsv"; "eurostat/sf_aviaca.tsv"; "eurostat/sf_railvi.tsv"; "eurostat/sf_railvi_totalkil.tsv"; "eurostat/sf_aviaca_eukil.tsv"; "eurostat/sf_aviaca_euinj.tsv"  ]
     let! tsvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
     let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readTsv tsvs))
     trigger(LoadData dataFiles)
