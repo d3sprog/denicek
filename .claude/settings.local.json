@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd *)",
+      "Bash(npm test *)",
+      "Bash(grep -aA 30 \"moveBefore scopes record transformation\")",
+      "Bash(grep -aA 120 \"indexing merges with reordering\")",
+      "Bash(grep -av \"^\\\\s*$\")",
+      "Bash(npm run *)",
+      "Bash(git stash *)",
+      "Bash(dotnet fable *)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(echo \"exit: $?\")",
+      "Read(//tmp/**)",
+      "Bash(dotnet build *)"
+    ]
+  }
+}

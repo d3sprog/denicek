@@ -45,7 +45,7 @@ let moveBeforeTests =
           (RecordAdd(!/"/items/*", "condition", None, None, Record("x-formula", OrdList.empty ())))
           (ListAppend(!/"/items", "0", None, None, Record("li", OrdList.empty ())))
       Format.formatEdit actual.[1]
-      |> equals """recordAdd(items/#0,"condition",na,x-formula{})"""
+      |> equals """recordAdd(items/#0,"condition",na,na,x-formula{})"""
     }
 
     test "moveBefore scopes source of a copy edit" {
@@ -94,7 +94,7 @@ let moveBeforeTests =
           (WrapRecord(UpdateReferences, "value", "td", !/"/speakers/*/speaker"))
           (RecordAdd(!/"/speakers/#n", "speaker", None, None, Primitive(String "")))
       List.map Format.formatEdit actual1 |> equals [ 
-        """recordAdd(speakers/#n,"speaker",na,"")"""
+        """recordAdd(speakers/#n,"speaker",na,na,"")"""
         """v.wrapRec(speakers/#n/speaker,"value","td")"""]
       let actual2 = 
         moveOneBefore 
@@ -120,7 +120,7 @@ let moveBeforeTests =
           (WrapRecord(UpdateReferences, "contents", "td", !/"/speakers/*/name"))
           (RecordAdd(!/"/speakers/#hamilton", "name", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[0]
-      |> equals """recordAdd(speakers/#hamilton,"name",na,"Margaret Hamilton")"""
+      |> equals """recordAdd(speakers/#hamilton,"name",na,na,"Margaret Hamilton")"""
       Format.formatEdit actual.[1]
       |> equals """v.wrapRec(speakers/#hamilton/name,"contents","td")"""
     }
@@ -131,7 +131,7 @@ let moveBeforeTests =
           (RecordRenameField(UpdateReferences, !/"/speakers/*", "value", "name"))
           (RecordAdd(!/"/speakers/#hamilton", "value", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[0]
-      |> equals """recordAdd(speakers/#hamilton,"value",na,"Margaret Hamilton")"""
+      |> equals """recordAdd(speakers/#hamilton,"value",na,na,"Margaret Hamilton")"""
       Format.formatEdit actual.[1]
       |> equals """v.renameField(speakers/#hamilton,"value","name")"""
     }
@@ -161,7 +161,7 @@ let moveBeforeTests =
           (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
           (ListAppend([Field "speakers"],"hamilton", None, None, Record("li", OrdList.empty ())))
       Format.formatEdit actual.[0]
-      |> equals """listAppend(speakers/body,"hamilton",na,li{})"""
+      |> equals """listAppend(speakers/body,"hamilton",na,na,li{})"""
     }
 
     test "moveBefore wraps added reference" {
@@ -170,7 +170,7 @@ let moveBeforeTests =
           (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
           (RecordAdd(!/"/budget", "count", None, None, Reference(Absolute, [Field "speakers"])))
       List.map Format.formatEdit actual
-      |> equals ["""recordAdd(budget,"count",na,/speakers/body)"""]
+      |> equals ["""recordAdd(budget,"count",na,na,/speakers/body)"""]
     }
 
     test "moveBefore updates references added in extra edits" {
@@ -180,7 +180,7 @@ let moveBeforeTests =
           ( ListAppend(!/"/items", "0", None, None, Record("li", OrdList.empty ())),
             [RecordAdd(!/"/items/0/condition", "left", None, None, Reference(Relative, !/"./../../done/@checked"))] )
       Format.formatEdit actual.[1]
-      |> equals """recordAdd(items/0/condition,"left",na,./../../../done/@checked)"""
+      |> equals """recordAdd(items/0/condition,"left",na,na,./../../../done/@checked)"""
     }
 ]
 

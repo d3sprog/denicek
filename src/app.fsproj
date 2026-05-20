@@ -18,6 +18,7 @@
 		<Compile Include="compost.fs" />
     <Compile Include="webnicek.fs" />
     <Compile Include="datnicek.fs" />
+    <Compile Include="essay.fs" />
     <Compile Include="main.fs" />
   </ItemGroup>
   <ItemGroup>

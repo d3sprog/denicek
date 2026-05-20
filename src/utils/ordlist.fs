@@ -8,13 +8,21 @@ namespace Denicek
 
 module rec OrdList = 
 
-  type OrdList<'K, 'V when 'K : comparison> = 
-    { Members : Map<'K, 'V> 
-      Order : Map<'K, 'K> 
+  [<CustomEquality; NoComparison>]
+  type OrdList<'K, 'V when 'K : comparison> =
+    { Members : Map<'K, 'V>
+      Order : Map<'K, 'K>
+      // Derived cache of 'Members'/'Order' - excluded from equality
       OrdTree : Lazy<OrdTree<'K>> }
     interface System.Collections.Generic.IEnumerable<'K * 'V> with
       member x.GetEnumerator() = (OrdList.toSeq x : seq<_>).GetEnumerator()
       member x.GetEnumerator () = (OrdList.toSeq x : System.Collections.IEnumerable).GetEnumerator()
+    override x.Equals(o) =
+      match o with
+      | :? OrdList<'K, 'V> as y -> Unchecked.equals x.Members y.Members && Unchecked.equals x.Order y.Order
+      | _ -> false
+    override x.GetHashCode() =
+      Unchecked.hash (x.Members, x.Order)
 
   let makeOrdList mems order = 
     let rec res = { Members = mems; Order = order; OrdTree = lazy buildOrderTree res }

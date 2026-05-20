@@ -12,3 +12,6 @@ if document.URL.Contains("webnicek.html") then
 
 if document.URL.Contains("datnicek.html") then
   Datnicek.Loader.start ()
+
+if document.URL.Contains("datnicek.html") then
+  Essay.start ()
