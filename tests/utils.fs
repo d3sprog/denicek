@@ -17,18 +17,19 @@ open Denicek.OrdList
 
 [<Tests>]
 let ordListTests = 
-  let l = 
-    { Members = Map.ofList [ 1,"one"; 2,"two"; 3,"three" ]; 
-      Order = Map.ofList [ 1,2; 2,3; ]  }
-  let l2 = 
-    OrdList.empty |> OrdList.add (3, "three") None 
+  let l =
+    OrdList.makeOrdList
+      (Map.ofList [ 1,"one"; 2,"two"; 3,"three" ])
+      (Map.ofList [ 1,2; 2,3; ])
+  let l2 =
+    OrdList.empty () |> OrdList.add (3, "three") None
       |> OrdList.add (1, "one") (Some 2)  |> OrdList.add (2, "two") (Some 3)
   let l3 = 
     [ (0, "A"), None; (1, "A.A"), Some 0; (2, "A.A.A"), Some 1; (3, "A.A.A.A"), Some 2
       (10, "A.B"), Some 0; (20, "A.B.A"), Some 10; (30, "A.B.A.A"), Some 20
       (100, "A.C"), Some 0; (200, "A.C.A"), Some 100; (300, "A.C.A.A"), Some 200 ]
     |> Seq.map (fun ((k1,v), k2) -> ((hash $"key {k1}", v), Option.map (fun k2 -> hash $"key {k2}") k2))
-    |> Seq.fold (fun ol (el, pred) -> OrdList.add el pred ol) OrdList.empty
+    |> Seq.fold (fun ol (el, pred) -> OrdList.add el pred ol) (OrdList.empty ())
 
   testList "OrdList tests" [
     test "OrdLists sorting keeps things together" {

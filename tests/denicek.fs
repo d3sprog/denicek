@@ -16,7 +16,10 @@ open Denicek.Demos
 // Helpers for nicer syntax
 // --------------------------------------------------------------------------------------
 
-let merge h1 h2 = 
+let evalBuiltins = Eval.webnicekEvaluateBuiltins Map.empty
+let evaluateAll doc = Eval.evaluateAll evalBuiltins doc
+let evaluateOne doc = Eval.evaluateOne evalBuiltins doc
+let merge h1 h2 =
   Merge.mergeHistories Merge.IgnoreConflicts h1 h2 |> fst
 let printEdits = 
   List.iter (Format.formatEdit >> printfn " - %s")
@@ -39,8 +42,8 @@ let moveBeforeTests =
     test "moveBefore scopes record transformation" {
       let actual = 
         moveOneBefore 
-          (RecordAdd(!/"/items/*", "condition", None, Record("x-formula", OrdList.empty)))
-          (ListAppend(!/"/items", "0", None, Record("li", OrdList.empty)))
+          (RecordAdd(!/"/items/*", "condition", None, None, Record("x-formula", OrdList.empty ())))
+          (ListAppend(!/"/items", "0", None, None, Record("li", OrdList.empty ())))
       Format.formatEdit actual.[1]
       |> equals """recordAdd(items/#0,"condition",na,x-formula{})"""
     }
@@ -49,7 +52,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore 
           (Copy(UpdateReferences, !/"/speakers/body/*/name", !/"/speakers/body/*/email"))
-          (ListAppend(!/"/speakers/body", "hamilton", None, Primitive(String "Margaret Hamilton")))
+          (ListAppend(!/"/speakers/body", "hamilton", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[1]
       |> equals "v.copy(speakers/body/#hamilton/name,speakers/body/#hamilton/email)"
     }
@@ -57,8 +60,8 @@ let moveBeforeTests =
     test "moveBefore does not overwrite record with conflicting add" {
       let actual = 
         moveOneBefore 
-          (RecordAdd(!/"/", "demo", None, Primitive(String "original")))
-          (RecordAdd(!/"/", "demo", None, Primitive(String "new")))
+          (RecordAdd(!/"/", "demo", None, None, Primitive(String "original")))
+          (RecordAdd(!/"/", "demo", None, None, Primitive(String "new")))
       select (!/"/demo") (Apply.applyHistory (rcd "root") actual)
       |> equals [Primitive(String "new")]
     }
@@ -67,7 +70,7 @@ let moveBeforeTests =
       let actual = 
         moveMultiBefore 
           (Copy(UpdateReferences, !/"/speakers/body/*/email", !/"/speakers/body/*/name"))
-          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")),
+          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, None, Primitive(String "Margaret Hamilton")),
             [RecordRenameField(KeepReferences, !/"/speakers/body/#hamilton", "speaker", "name")] )
       Format.formatEdit actual.[2]
       |> equals "v.copy(speakers/body/#hamilton/email,speakers/body/#hamilton/name)"
@@ -77,7 +80,7 @@ let moveBeforeTests =
       let actual = 
         moveMultiBefore 
           (RecordRenameField(UpdateReferences, !/"/speakers/body/*", "speaker", "name"))
-          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")),
+          ( RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, None, Primitive(String "Margaret Hamilton")),
             [WrapRecord(KeepReferences, "value", "td", !/"/speakers/body/#hamilton/speaker")] )
       Format.formatEdit actual.[1]
       |> equals """v.wrapRec(speakers/body/#hamilton/speaker,"value","td")"""
@@ -89,7 +92,7 @@ let moveBeforeTests =
       let actual1 = 
         moveOneBefore 
           (WrapRecord(UpdateReferences, "value", "td", !/"/speakers/*/speaker"))
-          (RecordAdd(!/"/speakers/#n", "speaker", None, Primitive(String "")))
+          (RecordAdd(!/"/speakers/#n", "speaker", None, None, Primitive(String "")))
       List.map Format.formatEdit actual1 |> equals [ 
         """recordAdd(speakers/#n,"speaker",na,"")"""
         """v.wrapRec(speakers/#n/speaker,"value","td")"""]
@@ -115,7 +118,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore 
           (WrapRecord(UpdateReferences, "contents", "td", !/"/speakers/*/name"))
-          (RecordAdd(!/"/speakers/#hamilton", "name", None, Primitive(String "Margaret Hamilton")))
+          (RecordAdd(!/"/speakers/#hamilton", "name", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[0]
       |> equals """recordAdd(speakers/#hamilton,"name",na,"Margaret Hamilton")"""
       Format.formatEdit actual.[1]
@@ -126,7 +129,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore 
           (RecordRenameField(UpdateReferences, !/"/speakers/*", "value", "name"))
-          (RecordAdd(!/"/speakers/#hamilton", "value", None, Primitive(String "Margaret Hamilton")))
+          (RecordAdd(!/"/speakers/#hamilton", "value", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[0]
       |> equals """recordAdd(speakers/#hamilton,"value",na,"Margaret Hamilton")"""
       Format.formatEdit actual.[1]
@@ -137,7 +140,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore 
           (WrapRecord(UpdateReferences, "td", "value", !/"/speakers/body/*/speaker"))
-          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, Primitive(String "Margaret Hamilton")))
+          (RecordAdd(!/"/speakers/body/#hamilton", "speaker", None, None, Primitive(String "Margaret Hamilton")))
       Format.formatEdit actual.[1]
       |> equals """v.wrapRec(speakers/body/#hamilton/speaker,"td","value")"""
     }
@@ -146,7 +149,7 @@ let moveBeforeTests =
       let actual = 
         moveMultiBefore 
           ( WrapRecord(UpdateReferences, "td", "contents", !/"/speakers/*/name") )
-          ( RecordAdd(!/"/speakers/#hamilton", "value", None, Primitive(String "Margaret Hamilton")), 
+          ( RecordAdd(!/"/speakers/#hamilton", "value", None, None, Primitive(String "Margaret Hamilton")),
             [RecordRenameField(KeepReferences, !/"/speakers/#hamilton", "value", "name")] )
       Format.formatEdit actual.[2]
       |> equals """v.wrapRec(speakers/#hamilton/name,"td","contents")"""
@@ -156,7 +159,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore
           (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
-          (ListAppend([Field "speakers"],"hamilton", None, Record("li", OrdList.empty)))
+          (ListAppend([Field "speakers"],"hamilton", None, None, Record("li", OrdList.empty ())))
       Format.formatEdit actual.[0]
       |> equals """listAppend(speakers/body,"hamilton",na,li{})"""
     }
@@ -165,7 +168,7 @@ let moveBeforeTests =
       let actual = 
         moveOneBefore
           (WrapRecord(UpdateReferences, "body", "table", [Field "speakers"]))
-          (RecordAdd(!/"/budget", "count", None, Reference(Absolute, [Field "speakers"])))
+          (RecordAdd(!/"/budget", "count", None, None, Reference(Absolute, [Field "speakers"])))
       List.map Format.formatEdit actual
       |> equals ["""recordAdd(budget,"count",na,/speakers/body)"""]
     }
@@ -174,8 +177,8 @@ let moveBeforeTests =
       let actual = 
         moveMultiBefore 
           (WrapRecord(KeepReferences, "comp", "span", !/"/items/0/condition"))
-          ( ListAppend(!/"/items", "0", None, Record("li", OrdList.empty)),
-            [RecordAdd(!/"/items/0/condition", "left", None, Reference(Relative, !/"./../../done/@checked"))] )
+          ( ListAppend(!/"/items", "0", None, None, Record("li", OrdList.empty ())),
+            [RecordAdd(!/"/items/0/condition", "left", None, None, Reference(Relative, !/"./../../done/@checked"))] )
       Format.formatEdit actual.[1]
       |> equals """recordAdd(items/0/condition,"left",na,./../../../done/@checked)"""
     }
@@ -191,7 +194,7 @@ let evalTests =
 
     test "incrementing counter invalidates evalauted result" {
       let doc1 = Apply.applyHistory (rcd "div") (opsBaseCounter @ opsCounterInc)
-      let evalOps = Eval.evaluateAll doc1
+      let evalOps = evaluateAll doc1
       let doc2 = Apply.applyHistory (rcd "div") (opsBaseCounter @ opsCounterInc @ evalOps)
 
       let mergedOps, _ = 
@@ -209,7 +212,7 @@ let evalTests =
 
     test "adding speaker invalidates evaluated results" {
       let doc1 = Apply.applyHistory (rcd "div") (opsCore @ opsBudget)
-      let evalOps = Eval.evaluateAll doc1
+      let evalOps = evaluateAll doc1
       let doc2 = Apply.applyHistory (rcd "div") (opsCore @ opsBudget @ evalOps)
 
       let mergedOps, _ = 
@@ -233,13 +236,13 @@ let evalTests =
       
       let ops2 = ops1 @ opsCounterInc
       let doc2 = Apply.applyHistory (rcd "div") ops2
-      let ops3 = ops2 @ Eval.evaluateOne doc2
+      let ops3 = ops2 @ evaluateOne doc2
       let doc3 = Apply.applyHistory (rcd "div") ops3
       select [Field "counter"; Field "value"; Field "result"] doc3 |> equals [ Primitive(Number 1.0) ]
 
       let ops4 = ops3 @ opsCounterInc
       let doc4 = Apply.applyHistory (rcd "div") ops4
-      let ops5 = ops4 @ Eval.evaluateOne doc4
+      let ops5 = ops4 @ evaluateOne doc4
       let doc5 = Apply.applyHistory (rcd "div") ops5
       select [Field "counter"; Field "value"; Field "result"] doc5 |> equals [ Primitive(Number 2.0) ]
     }
@@ -257,7 +260,7 @@ let evalTests =
           currentOps (opsBaseCounter @ opsCounterInc @ opsCounterInc)
 
       let docUnevaluated = Apply.applyHistory (rcd "div") currentOps
-      let opsEvaluated = currentOps @ Eval.evaluateAll docUnevaluated
+      let opsEvaluated = currentOps @ evaluateAll docUnevaluated
       let docEvaluated = Apply.applyHistory (rcd "div") opsEvaluated
       select [Field "counter"; Field "value"; Field "result"] docEvaluated |> equals [ Primitive(Number 3.0) ]
     }
@@ -271,7 +274,7 @@ let evalTests =
           currentOps1 (opsBaseCounter @ opsCounterInc @ opsCounterInc)
       let currentDoc1 = Apply.applyHistory (rcd "div") currentOps2
       
-      let evalOps1 = Eval.evaluateAll currentDoc1
+      let evalOps1 = evaluateAll currentDoc1
       let currentDoc2 = Apply.applyHistory (rcd "div") (currentOps2 @ evalOps1)
       select (!/"/counter/value/result") currentDoc2 |> equals [Primitive(Number 2.0)]
 
@@ -283,7 +286,7 @@ let evalTests =
       selectTag (!/"/counter/value") currentDoc3 |> equals (Some "x-formula")
       select (!/"/counter/value/result") currentDoc3 |> equals []
 
-      let evalOps3 = evalOps2 @ Eval.evaluateAll currentDoc3
+      let evalOps3 = evalOps2 @ evaluateAll currentDoc3
       let currentDoc4 = Apply.applyHistory (rcd "div") (currentOps3 @ evalOps3)
       select (!/"/counter/value/result") currentDoc4 |> equals [Primitive(Number 3.0)]
     }
