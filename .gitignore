@@ -8,5 +8,5 @@ src/obj/
 node_modules/
 *.fs.js
 *.fs.js.map
-bundle.js
+dist/
 .vs/

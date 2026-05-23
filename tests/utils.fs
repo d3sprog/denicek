@@ -77,6 +77,11 @@ let ordListTests =
 
 [<Tests>]
 let utilsTests = testList "Utils tests" [
+  test "groupByMarker works on a small example" {
+    [14;20;24;25] |> List.groupByMarker 1 (fun a -> if a%10=0 then Some (a/10) else None)
+    |> equals [(1, [14]); (2, [24;25]) ]
+  }
+  
   test "partitionBy works on small example" {
     List.partitionBy [0;1;2;3] (List.ofSeq "abcdef")
     |> equals [[]; ['a']; ['b'; 'c']; ['d'; 'e'; 'f']]

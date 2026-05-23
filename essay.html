@@ -1,0 +1,289 @@
+<!doctype html>
+<html>
+<head>
+  <title>Fable</title>
+  <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/line-awesome/1.3.0/line-awesome/css/line-awesome.min.css" integrity="sha512-vebUliqxrVkBy3gucMhClmyQP9On/HAWQdKDXRaAlb/FKuTbxkjPKUyqVOxAcGwFDka79eTF+YXwfke1h3/wfg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" integrity="sha512-2SwdPD6INVrV/lHTZbO2nodKhrnDdJK9/kg2XD1r9uGqPo1cUbujc+IYdlYdEErWNu69gVcYgdxlmVmzTWnetw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&family=Roboto+Mono:wght@100..700&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&family=Zalando+Sans:ital,wght@0,200..900;1,200..900&display=swap" rel="stylesheet">
+
+
+
+  <style type="text/css">
+
+    /* BASIC PAGE AND DOCUMENT FORMATTING */
+    html, body { padding:0px; margin:0px; }
+    body { background:#D7EDE5; padding:20px; }
+    article { max-width: 1000px; margin:20px auto; background:white; border-radius:20px; padding:30px; font-family:'Zalando Sans', sans-serif; }
+    a { color:#4D71C6; text-decoration:none; }
+    a:hover, a:active { text-decoration:underline; }
+    p, li { font:14pt 'Zalando Sans', sans-serif; line-height:1.5em; color:#071C4F; }
+    li strong, p strong { font-weight:500; }
+    p.info { font-size:15pt; line-height:1.5em; margin:30px 0px; }
+    p.info i { font-size: 13pt; margin:0px 5px 0px 0px; }
+    p.info .sep { margin:0px 5px; }
+    h1 { font:26pt 'Merriweather', serif; color:#071C4F; font-weight:400; max-width:800px; }
+    h2 { font:20pt 'Merriweather', serif; color:#071C4F; font-weight:400; }
+    h1 strong { font-weight:900; }
+    ul.icons { list-style-type:none; padding:0px; }
+    ul.icons i { font-size:16pt; margin-right:5px; position:relative; top:2px; font-weight:800; }
+    ul.refs li { font-size: 13pt; }
+    div.imgbox { background:#F2F0E8; border-radius:20px;float:right;max-width:250px;padding:20px 10px;margin:30px 0px 40px 20px; text-align: center; }
+    div.imgbox p { font-size:12pt; margin:0px; }
+
+    nav { max-width: 1000px; margin:30px auto;  text-align: center; }
+    nav button { font:12pt 'Merriweather', serif; font-weight:300; padding:7px 15px;  background:#071C4F; color:white; border-style:none; border-radius:15px; margin:5px; cursor: pointer; }
+    nav button:hover { background-color:#4D71C6; }
+    nav .current {  background-color:#4D71C6; }
+    nav button strong { font-weight:900; }
+
+    /* STEPPER FOR REPLAYING DEMOS */    
+    .stepper { display:flex; align-items:flex-start; }
+    .stepper .step { display:flex; flex-direction:column; align-items:center; }
+    .stepper button, .circle { box-sizing: border-box; width:26px; height:26px; margin:0px 10px; border-radius:50%; border-style:none; background:#E5E2D7; color:white; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; flex-shrink:0; }
+    .stepper button { margin-right:0px; background:#071C4F; cursor:pointer; font-weight:900; }
+    .stepper button:hover { background:#4D71C6; }
+    .stepper .lastbutton { margin-right:20px; }
+    .stepper .step.active .circle { background:#4D71C6; }
+    .stepper .line { flex:1; height:2px; background:#E5E2D7; margin-top:12px; }
+    .stepper .label {
+      font-size: 12px;
+      color: #E5E2D7;
+      white-space: nowrap;
+      margin-top:2px;
+      text-align: center;
+      transition: color 0.2s;
+    }
+
+    .step.active .label {
+      color: #4D71C6;
+      font-weight: 500;
+    }
+
+    /* DENICEK */
+    .main { background:white; display:flex; flex-direction:row; align-items: flex-start; border:5px solid #f0f0f0; width:500px; height:500px; margin:50px; }
+    .doc { flex:20; padding:20px; font-family:'Merriweather'; line-height:1.5em; }
+    .edits { font:300 10px Inter, sans-serif; height:500px; left:70vw; background:#FAF9F5; overflow-y:scroll; padding:0px 0px 0px 10px }
+
+    /* context menu for entering commands */
+    .ctx { position:absolute; width:350px; max-height:350px; padding:4px; font-family:Inter, sans-serif; background:white; box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3); border-radius:10px; }
+    .ctx ul { overflow-y:scroll; scrollbar-color:#e0e0e0 white; max-height:315px; }
+    .ctx ul, .ctx li { margin:0px; padding:0px; list-style:none; }
+    .ctx li { padding:8px 2px; cursor:pointer; }
+    .ctx li.selected, .ctx li:hover { background:#f0f0f0; border-radius:4px; }
+    .ctx .icon { float:left; border:1px solid #e0e0e0; border-radius:4px; padding:5px; margin:3px 0px 0px 5px; }
+    .ctx .icon i { font-size:20px; color:#808080;}
+    .ctx .icon { background:rgba(218, 218, 218, 0.4); }
+    .ctx .igensel .icon { background:rgba(255, 227, 164, 0.4); }
+    .ctx .icursel .icon { background:rgba(190, 207, 255, 0.4); }
+    .ctx .details { margin-left:45px;}
+    .ctx h4 { font:200 14px Inter, sans-serif; margin:0px; }
+    .ctx kbd { font:300 12px Inter, sans-serif; margin:0px; color:#606060; }
+    .ctx kbd em { font-weight:200; font-style: normal; }
+    .ctx kbd strong { font-weight:500; }
+    .ctx kbd .entered { color:rgb(190, 36, 172); }
+    .ctx .cmd { border:1px solid #e0e0e0; border-radius:4px; margin:5px; padding:4px; font:300 12px Inter, sans-serif; }
+    
+    /* cursor and generalized structural cursor */
+    .gensel { outline:2px solid rgba(74, 127, 224, 0.3); outline-offset:0px; border-radius:4px; }
+    .cursor-before { box-shadow:inset  4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
+    .cursor-after  { box-shadow:inset -4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
+    .hiprov { background:#FFDBF1; }
+
+    /* highlighted selector */
+    .selsel { outline:3px solid #C49C94; border-radius:4px; }
+    .treenode.selsel { background:#C49C94; }
+    .selector.selsel { background:#C49C94; }
+
+    /* source code view */
+    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
+
+    /* edit history view */
+    .edits table { border-collapse:collapse; background:white; margin:10px 0px;} 
+    .edits table th { font-weight:600; color:#909090; padding:5px; text-align: left; text-transform:uppercase; }
+    .edits table .more th { text-align:center; } 
+    .edits table .more th a { font-weight:400; text-align:center; text-transform:none; }
+    .edits table th a { font-weight:300; color:#909090; text-decoration:none; text-transform:none; }
+    .edits table td { padding:0px; margin:0px; border-style:none; padding:3px; font-size:10px; } 
+    .edits table tr { padding:0px; margin:0px; border:1px solid #e0e0e0; }
+    .edits table tr.selected { background:#f0f0f0; }
+    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; } 
+    .edits .edidx a { color:#b0b0b0; text-decoration:none; }
+    .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; }
+    
+    .edits .edref a { color:#a0a0a0; font-weight:500; text-decoration:none; width:100px; display:inline-block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;}
+    .edits .edref a.selsel { outline-width:0px; color:#8C564B; font-weight:600; background:inherit; }
+    .edits .edhash a { color:#a0a0a0; font-weight:300; text-decoration:none; }
+    .edits tr td:first-child { padding-left:5px; }
+    .edits tr.checked td:first-child { box-shadow:inset 3px 0 0 #b0b0b0; }
+
+    .edits a.edit { border:2px solid #FBDBE9; background:#FBDBE9; color:#E377C2; }
+    .edits a.reorder { border:2px solid #FBDBE9; background:#FBDBE9; color:#E377C2; }
+    .edits a.retag { border:2px solid #E2D8EA; background:#E2D8EA; color:#9467BD; }
+    .edits a.updid { border:2px solid #E2D8EA; background:#E2D8EA; color:#9467BD; }
+    .edits a.addfield { border:2px solid #CCEFC6; background:#CCEFC6; color:#2CA02C; }
+    .edits a.append { border:2px solid #CCEFC6; background:#CCEFC6; color:#2CA02C; }
+    .edits a.copy { border:2px solid #EDEDC7; background:#EDEDC7; color:#BCBD22; }
+    .edits a.wraprec { border:2px solid #D7E3F3; background:#D7E3F3; color:#1F77B4; }
+    .edits a.wraplist { border:2px solid #D7E3F3; background:#D7E3F3; color:#1F77B4; }
+    .edits a.delitm { border:2px solid #FFCCCB; background:#FFCCCB; color:#D62728; }
+    .edits a.delfld { border:2px solid #FFCCCB; background:#FFCCCB; color:#D62728; }
+
+    .edits a.struct.edit { border:2px solid #E377C2; }
+    .edits a.struct.reorder { border:2px solid #E377C2; }
+    .edits a.struct.retag { border:2px solid #9467BD; }
+    .edits a.struct.updid { border:2px solid #9467BD; }
+    .edits a.struct.addfield { border:2px solid #2CA02C; }
+    .edits a.struct.append { border:2px solid #2CA02C; }
+    .edits a.struct.copy { border:2px solid #BCBD22; }
+    .edits a.struct.wraprec { border:2px solid #1F77B4; }
+    .edits a.struct.wraplist { border:2px solid #1F77B4; }
+    .edits a.struct.delitm { border:2px solid #D62728; }
+    .edits a.struct.delfld { border:2px solid #D62728; }
+
+    /* basic styling for things in the document */
+    input { padding:3px; }
+    button { padding:3px 10px 3px 10px; }
+    td { border:1px solid black; padding:2px; }
+    thead td { font-weight: bold; }
+    
+    .formula { outline:solid 2px #a4d8ff; padding:0px 2px; margin:0px 2px }  
+    /*
+    x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
+    x-match {  display:inline-block; }
+    x-match::before { content:"(matched content)" }
+    */
+    x-saved-interactions { display:none; }
+    /*
+    x-interaction { display:block; padding-left:20px; text-align:left; }
+    x-interaction-list > * { display:list-item; }
+    */
+    x-evaluated > *:nth-child(1) {
+      display:none;
+    }
+
+    
+</style>
+
+</head>
+<body>
+  <article>
+    <h1><strong>Denicek</strong>: Computational substrate for document-oriented end-user programming</h1>
+
+    <p class="info">
+      <strong>Tomas Petricek</strong> and <strong>Jonathan Edwards</strong><br>
+      <i class="fa fa-envelope"></i><a href="mailto:tomas@tomasp.net">tomas@tomasp.net</a> <span class="sep">|</span> <i class="fa-brands fa-bluesky"></i><a href="https://bsky.app/profile/tomasp.net">@tomasp.net</a>
+    </p>
+    
+    <div class="imgbox">
+    <img src="essay/docs.png" style="max-width:80%;" />
+    <p><strong>Figure 1.</strong> Program is a sequence of edits that can be replied to construct a document.</p>
+    </div>
+
+    <p>Researchers have envisioned many <strong>programming experiences</strong> that make programming easier.      
+      In programming by demonstration, we create programs by showing what we want to achieve 
+      using specific values, while concrete programming is built around the idea of copying 
+      and modifying parts of programs. We also need support for collaborative editing, 
+      on-demand recomputation when parts of a program change, and automatic updating of code when
+      a relevant schema changes. 
+    </p>
+    <p>Building a programming system that supports multiple such features is hard. Denicek is
+      a <strong>computational substrate</strong> that represents programs as sequences of 
+      interactions that edit a document. It provides primitive operations
+      for applying edits, merging edits, and detecting conflicts. As it turns out, many of the
+      above programming experiences can be easily built on top of this simple structure.
+    </p>
+    <p>This interactiv essay demonstrates a basic web-based programming system based on Denicek.
+      It walks you through the solutions to a couple of standard challenge problems, like
+      building a counter app, TODO list, and managing a conference. The demos replay actions
+      using the real Denicek implementation, so you can also explore on your own!
+    </p>
+    <ul class="icons">
+      <li><i class="las la-file-alt"></i> For more information, <a href="https://tomasp.net/academic/papers/denicek/uist-2025.pdf">read the Denicek paper</a> (UIST 2025).</li>
+      <li><i class="las la-film"></i> Watch our <a href="https://www.youtube.com/watch?v=xNl7XSgGZpY">5 minute overview</a> or
+      <a href="https://www.youtube.com/watch?v=P2WcNWkt6ts">30 seconds teaser</a>.</li>
+      <li><i class="las la-code"></i> Explore the poorly documented <a href="https://github.com/d3sprog/denicek">Denicek source code</a>. </li>
+    </ul>
+  </article>
+    <nav>
+      <button class="current"><strong>Chapter 1</strong>: Hello world</button>
+      <button><strong>Chapter 2</strong>: Todo list</button>
+      <button><strong>Chapter 3</strong>: Conference list</button>
+      <button><strong>Chapter 4</strong>: Conference budget</button>
+      <button><strong>Chapter 5</strong>: Counter</button>
+      <button><strong>Chapter 6</strong>: Traffic accidents</button>
+      <button><strong>Chapter 7</strong>: Under the cover</button>
+    </nav>
+  
+  <article> 
+
+    <div id="hello-start" data-speed="1.5">
+      <h2>start info</h2>
+    </div>
+    <div id="hello-normalize">
+      <h2>normalize step</h2>
+    </div>
+    <div id="hello-save">
+      <h2>save step</h2>
+    </div>
+    <div id="hello-replay">
+      <h2>replay step</h2>
+    </div>
+    <div id="hello-done">
+      <h2>done step</h2>
+    </div>
+    <div id="hello" class="demo" data-file="essay/hello.json"></div>
+
+    <script type="module" src="/src/main.fs.js"></script>
+
+  </article>
+
+  <article>
+      <h2>Programming experiences</h2>
+      <p>There are many programming experiences that go beyond just writing code. In <strong>programming by demonstration</strong> (<a href="#refs">Smith, 1975</a>) programs are created by demonstrating the proces using concrete values,
+        suport for <strong>collaborative editing</strong> (<a href="#refs">Kleppmann et al., 2019</a>) is vital for working togther, 
+        <strong>incremental recomputation</strong> (<a href="#refs">Teitelbaum et al., 1981</a>) gives fast feedback by only reevaluating parts of programs,
+        <strong>schema change control</strong> (<a href="#refs">Edwards et al., 2025</a>) can automatically update program when the structure of data changes,
+        <strong>end-user debugging</strong> (<a href="#refs">Ko et al., 2009</a>) lets us understand where values came from, and
+        <strong>concrete programming</strong> (<a href="#refs">Edwards, 2005</a>) makes it possibly to create abstractions using managed copy and paste.</p>
+
+    <h2>The Denicek substrate</h2>
+    <p>The problem is that supporting these programming experiences in a programming system based on 
+      underlying textual substrate is hard. Denicek is a <strong>computational substrate</strong> that
+      makes it possible to build programming systems that support the above.</p>
+    <p>
+      The key idea in Denicek is to represent programs as a <strong>series of edits</strong> that transform a document.
+      Data and code are nodes in the document. Programming or editing data results in document edits. 
+      Entering data into textboxes in the document also yields document edits.
+      </p>
+    <p>
+      The Denicek substrate provides three basic operations on edit histories. It can replay the history
+      to construct the current version of a document. It can merge two edit histories that have diverged
+      and it can detect conflicts between branches. It turns out that many of the above programming experiences
+      can be expressed in terms of these three primitive operations.
+    </p>
+  </article>
+
+  <article>
+    <h2 id="refs">References</a></h2>
+    <ul class="refs">
+      <li><strong>Smith, David Canfield</strong> (1975). <a href="https://apps.dtic.mil/sti/html/tr/ADA016811/index.html">Pygmalion: a creative programming environment.</a> Stanford University.</li>
+      <li><strong>Kleppmann, Martin, et al.</strong> (2019). <a href="https://dl.acm.org/doi/10.1145/3359591.3359737">Local-first software: you own your data, in spite of the cloud.</a> Proceedings of the 2019 ACM SIGPLAN International Symposium on New Ideas, New Paradigms, and Reflections on Programming and Software.</li>
+      <li><strong>Teitelbaum, Tim, and Thomas Reps.</strong> (1981). <a href="https://dl.acm.org/doi/abs/10.1145/358746.358755">The Cornell program synthesizer: a syntax-directed programming environment.</a> Communications of the ACM</li>
+      <li><strong>Edwards, Jonathan, et al.</strong> (2025). <a href="https://programming-journal.org/2025/9/2/">Schema Evolution in Interactive Programming Systems.</a> Art, Science, and Engineering of Programming.</li>
+      <li><strong>Ko, Amy J., and Brad A. Myers.</strong> (2009). <a href="https://dl.acm.org/doi/abs/10.1145/1518701.1518942">Finding causes of program output with the Java Whyline.</a> Proceedings of the SIGCHI Conference on Human Factors in Computing Systems.</li>
+      <li><strong>Edwards, Jonathan.</strong> (2005). <a href="https://dl.acm.org/doi/abs/10.1145/1094811.1094851">Subtext: uncovering the simplicity of programming.</a> Proceedings of the 20th Annual ACM SIGPLAN Conference on Object-Oriented Programming, Systems, Languages, and Applications.</li>
+    </ul>
+  </article>
+</body>
+</html>

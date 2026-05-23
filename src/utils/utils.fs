@@ -20,6 +20,16 @@ module Patterns =
 
 module List = 
 
+  let groupByMarker k f list = 
+    let rec loop acc (k, g) items = 
+      match items with
+      | [] -> List.rev ((k, List.rev g)::acc)
+      | x::xs ->
+          match f x with
+          | Some nk -> loop ((k, List.rev g)::acc) (nk, []) xs
+          | None -> loop acc (k, x::g) xs
+    loop [] (k, []) list
+
   let groupAdjacent f list =
     let rec loop acc cg ck = function
       | [] -> List.rev ((ck, List.rev cg)::acc)

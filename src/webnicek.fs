@@ -32,6 +32,7 @@ type DocumentState =
 type HistoryState = 
   { HighlightedSelector : Selectors option
     SelectedEdits : Set<int>
+    FullList : bool
     Display : bool }
 
 // (3) View and navigation - state
@@ -54,6 +55,7 @@ type CommandRecommendationResult =
   | EditRecommendation of Edit list list
   | NestedRecommendation of CommandRecommendation list
   | CompleteCommand of string
+  | DefineMarkerCommand of string
   
 and CommandRecommendation = 
   { Icon : string
@@ -109,6 +111,7 @@ type HistoryEvent =
   | SelectAll 
   | SelectNone
   | ToggleEditHistory
+  | ToggleFullList
 
 // (3) View and navigation - events
 
@@ -137,6 +140,7 @@ type CommandEvent =
 
 type DemoEvent = 
   | LoadDemos of list<string * ApplicationState * list<string * Edit list>> * Map<string, Node>
+  | DefineMarker of string
 
 // All the events grouped together
 // (EnterCommand is here because entering a command affects global application 
@@ -180,16 +184,15 @@ module Helpers =
           | _ -> failwith "getSavedInteractions: Expected x-interaction" )
     | _ -> []
 
+
+  let historyHashClickHandler state trigger hist = fun _ _ -> 
+    match Merge.takeUntilHash hist (fun e -> e.Edit) state.DocumentState.DisplayEdits with 
+    | Some eds -> trigger(DocumentEvent(SetEditIndex(eds.Length - 1)))
+    | _ -> ()
+
   let renderHistoryHash state trigger hist =
-    h?a [
-      "href" => "javascript:;"
-      "click" =!> fun _ _ -> 
-          match Merge.takeUntilHash hist (fun e -> e.Edit) state.DocumentState.DisplayEdits with 
-          | Some eds -> trigger(DocumentEvent(SetEditIndex(eds.Length - 1)))
-          | _ -> ()
-    ] [
-      text (hist.ToString("x"))
-    ]
+    h?a [ "href" => "javascript:;"; "click" =!> historyHashClickHandler state trigger hist ]
+      [ text (hist.ToString("x")) ]
 
   let renderReference state trigger (baseSel, ref) = 
     let absSel = resolveReference baseSel ref
@@ -556,6 +559,8 @@ module History =
           |> set
         { state with SelectedEdits = nsel + other  }
 
+    | ToggleFullList -> 
+        { state with FullList = not state.FullList }
     | ToggleEditHistory -> 
         { state with Display = not state.Display }
     | ToggleEdit(i, true) ->
@@ -595,108 +600,71 @@ module History =
           ]
     loop 0 path nd
 
-  let renderEdit state trigger details (i, (histhash, ed)) = 
-    let render rb n fa sel args = 
-      h?li [] [ 
-        h?input [ 
-          yield "type" => "checkbox"
-          if state.HistoryState.SelectedEdits.Contains(i) then yield "checked" => "checked"
-          if ed.Evaluated then yield "disabled" => "disabled"
-          yield "click" =!> fun el _ ->
-            let chk = (unbox<Browser.Types.HTMLInputElement> el).``checked``
-            trigger(HistoryEvent(ToggleEdit(i, chk)))
-        ] []
-        h?a [ 
-          "class" => "" +? (i = state.DocumentState.DisplayEditIndex, "sel")
-          "href" => "javascript:;"; "click" =!> fun _ _ -> 
-            let withHashAndIndex = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed
-            let clicked, _ = withHashAndIndex |> List.find (fun (i, (hash, _)) -> hash = histhash)
-            trigger(DocumentEvent(SetEditIndex clicked))
+  let renderEdit state trigger saved (i, (histhash:int, ed)) = 
+    let render rb n sel args = 
+      h?tr [ 
+          "class" => 
+            "" +? (not saved && state.HistoryState.SelectedEdits.Contains(i), "checked") 
+               +? (not saved && i = state.DocumentState.DisplayEditIndex, "selected")
         ] [ 
-          yield h?i [ "class" => "fa " + fa ] [] 
-          yield text " "
-          yield h?strong [] [ text (if rb = KeepReferences then "v." + n else "s." + n) ]
-          yield text " "
-          yield Helpers.renderAbsoluteReference state trigger sel
-          yield h?span ["style" => "color:black"] [ text " (" ]
-          yield Helpers.renderHistoryHash state trigger histhash
-          yield h?span ["style" => "color:black"] [ text ") " ]
-          if details || i = state.DocumentState.DisplayEditIndex then
-            yield h?br [] []
-            for i, (k, v) in Seq.indexed args do
-              if i <> 0 then yield text ", "
-              yield text $"{k} = "
-              yield v
-            if ed.Edit.Dependencies <> [] then 
-              yield h?br [] [] 
-              yield text "deps=("
-              for i, dep in Seq.indexed ed.Edit.Dependencies do
-                if i <> 0 then yield text ", "
-                yield Helpers.renderAbsoluteReference state trigger dep
-              yield text ")"
+        h?td ["class" => "edidx"] [
+          if saved || ed.Evaluated then text (string i) else
+            h?a [ "href" => "javascript:;"; "click" =!> fun el _ ->
+              let chk = state.HistoryState.SelectedEdits.Contains(i) |> not
+              trigger(HistoryEvent(ToggleEdit(i, chk))) ] [ text (string i) ]
         ]
+        h?td ["class" => "edname"] [ 
+          h?a [ "class" => (if rb = KeepReferences then "value " + n else "struct " + n) 
+                "href" => "javascript:;"; "click" =!> Helpers.historyHashClickHandler state trigger histhash ] 
+            [ text n ]
+        ]
+        h?td ["class" => "edref"; "title" => Format.formatReference (Absolute, sel) ] [ Helpers.renderAbsoluteReference state trigger sel ]
+        h?td ["class" => "edhash"; "title" => (histhash.ToString("x")) ] [ Helpers.renderHistoryHash state trigger histhash ]
       ]
     let renderv = render KeepReferences
     let fmtprev k = function Some s -> [k, text s] | _ -> []
     match ed.Edit.Kind with 
-    | PrimitiveEdit(sel, fn, None) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
-    | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
-    | RecordAdd(sel, f, prev, succ, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev "prev" prev @ fmtprev "succ" succ
-    | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
-    | ListAppend(sel, i, prev, succ, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev "prev" prev @ fmtprev "succ" succ
-    | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
-    | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
-    | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
-    | WrapList(rk, tg, i, sel) -> render rk "wraplist" "fa-solid fa-list-ul" sel ["i", text i; "tag", text tg]
-    | RecordRenameField(rk, sel, fold, fnew) -> render rk "updid" "fa-font" sel ["old", text fold; "new", text fnew]
-    | ListDelete(sel, i) -> renderv "delitm" "fa-xmark" sel ["index", text (string i)]
-    | RecordDelete(rk, sel, fld) -> render rk "delfld" "fa-rectangle-xmark" sel ["fld", text fld]
+    | PrimitiveEdit(sel, fn, None) -> renderv "edit" sel ["fn", text fn]
+    | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" sel ["fn", text fn; "arg", text arg]
+    | RecordAdd(sel, f, prev, succ, nd) -> renderv "addfield" sel <| ["node", formatNode state trigger sel nd; "fld", text f] @ fmtprev "prev" prev @ fmtprev "succ" succ
+    | UpdateTag(sel, t) -> renderv "retag" sel ["t", text t]
+    | ListAppend(sel, i, prev, succ, nd) -> renderv "append" sel <| ["i", text i; "node", formatNode state trigger sel nd ] @ fmtprev "prev" prev @ fmtprev "succ" succ
+    | ListReorder(sel, perm) -> renderv "reorder" sel ["perm", text (string perm)]
+    | Copy(rk, tgt, src) -> render rk "copy" tgt ["from", Helpers.renderAbsoluteReference state trigger src]
+    | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" sel ["id", text id; "tag", text tg]
+    | WrapList(rk, tg, i, sel) -> render rk "wraplist" sel ["i", text i; "tag", text tg]
+    | RecordRenameField(rk, sel, fold, fnew) -> render rk "updid" sel ["old", text fold; "new", text fnew]
+    | ListDelete(sel, i) -> renderv "delitm" sel ["index", text (string i)]
+    | RecordDelete(rk, sel, fld) -> render rk "delfld" sel ["fld", text fld]
 
   let renderHistory trigger state = 
     if not state.HistoryState.Display then [] else [
-      h?div [ "id" => "edits" ] [
+      h?div [ "class" => "edits" ] [
         let saved = Helpers.getSavedInteractions state.DocumentState.CurrentDocument
         if not (List.isEmpty saved) then 
-          yield h?h3 [] [text "Saved interactions"]
-          yield h?ul ["class" => "saved-interactions"] [
-            for k, histhash, ops in saved ->
-              h?li [] [ 
-                yield h?p [] [ 
-                  yield Helpers.renderAbsoluteReference state trigger [Field "saved-interactions"; Field k] 
-                  yield text " (" 
-                  yield Helpers.renderHistoryHash state trigger (int histhash)
-                  yield text ")"
-                ]
-                yield h?ol [] [
-                  let ops = [ for hash, op in ops -> hash, { Edit = op; Evaluated = true }]
-                  for ied in Seq.rev (Seq.indexed ops) -> 
-                    renderEdit state trigger true ied
-                ]
-              ]
-          ]
-        
-        yield h?h3 [] [text "Edit history" ]
-        (*yield h?p [] [ 
-          text "Use "
-          h?kbd [] [ text "ctrl+shift+up"]
-          text " / "
-          h?kbd [] [ text "ctrl+shift+down"]
-          text " to select a range of edits"
-        ]
-        yield h?p [] [
-          text "Select edits "
-          h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectNone) ] [ text "none" ]
-          text " | "
-          h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent SelectAll) ] [ text "all" ]
-        ]
-        *)
-        yield h?ol [] [    
-          let withHashAndIdx = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
-          let groups = withHashAndIdx |> List.chunkBy (fun (_, (_, ed)) -> ed.Edit.GroupLabel)
-          for ieds in groups do
-            for ied in ieds do
-              yield renderEdit state trigger false ied
-            //yield h?li [] [ h?hr [] [] ]
+          for k, histhash, ops in saved do
+            yield h?table [] [
+              yield h?tr [] [
+                h?th ["colspan" => "4"] [ text $"Saved • {k} ("; Helpers.renderHistoryHash state trigger (int histhash); text ")" ] 
+              ]    
+              let ops = [ for hash, op in ops -> hash, { Edit = op; Evaluated = true }]
+              for ied in Seq.rev (Seq.indexed ops) -> 
+                renderEdit state trigger true ied
+            ]
+          
+        yield h?table [] [
+          yield h?tr [] [
+            h?th ["colspan" => "4"] [ text $"History • {state.DocumentState.DisplayEdits.Length} edits" ] 
+          ]    
+          let withHashAndIdxFull = Merge.withHistoryHash 0 (fun x -> x.Edit) state.DocumentState.DisplayEdits |> List.indexed |> List.rev  
+          let withHashAndIdx = if state.HistoryState.FullList then withHashAndIdxFull else List.truncate 15 withHashAndIdxFull
+          let skipped = withHashAndIdxFull.Length - withHashAndIdx.Length
+          for ied in withHashAndIdx -> renderEdit state trigger false ied
+          yield h?tr [ "class" => "more" ] [ h?th ["colspan" => "4"] [ 
+            h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(HistoryEvent(ToggleFullList)) ] [ 
+              if skipped > 0 then text $"+ {skipped} more operations" else text "no more operations"
+            ] 
+          ] ]
         ]
       ] 
     ]
@@ -1056,6 +1024,13 @@ module Commands =
                   ( P.keyword $"@{t}? {string i} " <*>> refHole |> mapEds (fun cond ->
                     Helpers.applySavedInteraction t doc genSel prefix (Some cond) ops )) ]
         ))
+    
+    // Define marker commnad - used for inserting annotations into replayable essays
+    yield   
+      { Icon = "las la-comment-dots"; Label = fun _ -> text "Add replay marker"; 
+        SelectorKind = None; ReferenceBehaviour = None;
+        Parser = P.keyword "//" <*>> strHole |> P.map DefineMarkerCommand }
+
   ]
 
   let parseCommand state = 
@@ -1095,12 +1070,12 @@ module Commands =
             formatTemplate t ]
           ]
       ] 
-    if selected then scrollIntoView el else el
+    el //if selected then scrollIntoView el else el
 
   let renderCommandHelp trigger state = 
     let cmd = state.CommandState.Command
     h?div [ ] [
-      h?div [ "id" => "cmd" ] [ text cmd ]
+      h?div [ "class" => "cmd" ] [ text cmd ]
       h?ul [] [ 
         for i, (c, t) in Seq.indexed (state.CommandState.Recommendations) ->
           if cmd.StartsWith("?") then renderCommand trigger state i "" c t
@@ -1129,10 +1104,10 @@ module Commands =
     let cur = Browser.Dom.document.getElementsByClassName("cursor")
     if cur.length = 0 then [] else
     let cursorRect = cur.[0].getBoundingClientRect()
-    let left, top = cursorRect.left, cursorRect.bottom+20.0  
+    let left, top = cursorRect.left, cursorRect.bottom+20.0+Browser.Dom.window.scrollY  
     let altMenu = state.CommandState.AltMenuDisplay
-    [ h?div [ "id" => "ctx"; "class" => "" +? (altMenu, "altmenu"); "style" => $"left:{left}px;top:{top}px" ] [ 
-        h?div [ "id" => "ctx-body" ] [ 
+    [ h?div [ "class" => "ctx" +? (altMenu, "altmenu"); "style" => $"left:{left}px;top:{top}px" ] [ 
+        h?div [ ] [ 
           if altMenu then renderAltHelp trigger
           else renderCommandHelp trigger state 
         ] 
@@ -1335,6 +1310,7 @@ module View =
 module Demos = 
   let update appstate state = function
     | LoadDemos(ds, data) -> { Demos = Some ds; Data = data }
+    | DefineMarker _ -> state
 
   let renderDemos trigger state = h?div [] [
     h?header ["style" => "padding-bottom:0px"] [ 
@@ -1413,6 +1389,11 @@ let rec tryEnterCommand trigger state =
         |> tryEnterCommand trigger
       else state
 
+  | DefineMarkerCommand marker ->
+      // Calling trigger directly here works, because we only need to record that the event happens (it has no other effect)
+      trigger (DemoEvent (DefineMarker marker))
+      let cmdState = { state.CommandState with Command = ""; SelectedRecommendation = -1 }
+      { state with CommandState = cmdState } 
 
 let rec update state trigger e = 
   match e with 
@@ -1438,9 +1419,9 @@ let rec update state trigger e =
 let render trigger state = 
   h?div [] [
     Demos.renderDemos trigger state 
-    h?div [ "id" => "loc" ] (View.renderLocationInfo state)    
-    h?div [ "id" => "main" ] [
-      yield h?div [ "id" => "doc" ] [
+    h?div [ "class" => "loc" ] (View.renderLocationInfo state)    
+    h?div [ "class" => "main" ] [
+      yield h?div [ "class" => "doc" ] [
         let doc = state.DocumentState.CurrentDocument // TODO: Restore... Matcher.applyMatchers state.CurrentDocument 
         yield Document.renderDocument state trigger doc
       ]
@@ -1457,6 +1438,145 @@ let render trigger state =
     ]
   ]
 
+// --------------------------------------------------------------------------------------
+// Logging of events for essay replays
+// --------------------------------------------------------------------------------------
+
+module EventLogger = 
+  open Denicek.Serializer
+
+  // Serializing application events (for the purpose of essay replays)
+
+  let jsObj (fields:(string * obj) list) : obj = Fable.Core.JsInterop.createObj fields
+  let jnull : obj = null
+
+  let selsToJson (sels:Selectors) =
+    box [| for s in sels -> Serializer.selToJson s |]
+
+  let selsOptToJson = function
+    | Some sels -> selsToJson sels
+    | None -> jnull
+
+  let editsToJson (eds:Edit list) =
+    box [| for ed in eds -> Serializer.nodeToJson (Represent.represent None ed) |]
+
+  let serializeViewEvent = function
+    | MoveCursor m ->
+        let dir = match m with Backward -> "backward" | Forward -> "forward" | Previous -> "previous" | Next -> "next"
+        jsObj [ "kind", box "moveCursor"; "direction", box dir ]
+    | ToggleViewSource -> jsObj [ "kind", box "toggleViewSource" ]
+    | ToggleProvenanceHighlight -> jsObj [ "kind", box "toggleProvenanceHighlight" ]
+
+  let serializeHistoryEvent = function
+    | HighlightSelector sel -> jsObj [ "kind", box "highlightSelector"; "selector", selsOptToJson sel ]
+    | ToggleEdit(i, b) -> jsObj [ "kind", box "toggleEdit"; "index", box i; "value", box b ]
+    | ExtendSelection d -> jsObj [ "kind", box "extendSelection"; "delta", box d ]
+    | SelectAll -> jsObj [ "kind", box "selectAll" ]
+    | SelectNone -> jsObj [ "kind", box "selectNone" ]
+    | ToggleEditHistory -> jsObj [ "kind", box "toggleEditHistory" ]
+    | ToggleFullList -> jsObj [ "kind", box "toggleFullList" ]
+
+  let serializeCommandEvent =
+    let copySource = function CurrentNode -> "current" | MarkedNode -> "marked"
+    function
+    | CancelCommand -> jsObj [ "kind", box "cancelCommand" ]
+    | BackspaceCommand -> jsObj [ "kind", box "backspaceCommand" ]
+    | TypeCommand s -> jsObj [ "kind", box "typeCommand"; "text", box s ]
+    | PreviousRecommendation -> jsObj [ "kind", box "previousRecommendation" ]
+    | NextRecommendation -> jsObj [ "kind", box "nextRecommendation" ]
+    | SetRecommendation i -> jsObj [ "kind", box "setRecommendation"; "index", box i ]
+    | CopyNode src -> jsObj [ "kind", box "copyNode"; "source", box (copySource src) ]
+    | ToggleAltMenu b -> jsObj [ "kind", box "toggleAltMenu"; "value", box b ]
+
+  let serializeDocumentEvent = function
+    | UndoLastEdit -> jsObj [ "kind", box "undoLastEdit" ]
+    | Evaluate all -> jsObj [ "kind", box "evaluate"; "all", box all ]
+    | MergeEdits eds -> jsObj [ "kind", box "mergeEdits"; "edits", editsToJson eds ]
+    | SetEditIndex i -> jsObj [ "kind", box "setEditIndex"; "index", box i ]
+    | MoveEditIndex i -> jsObj [ "kind", box "moveEditIndex"; "offset", box i ]
+    | ForkHistory -> jsObj [ "kind", box "forkHistory" ]
+    | MergeHistory -> jsObj [ "kind", box "mergeHistory" ]
+
+  let serializeCursor ((path, modif):Cursor) =
+    let m = match modif with Before -> "before" | After -> "after"
+    jsObj [ "path", box [| for i in path -> box i |]; "modifier", box m ]
+
+  let serializeAppEvent (e:ApplicationEvent) : obj option =
+    match e with
+    | ViewEvent ev -> jsObj [ "kind", box "view"; "event", serializeViewEvent ev ] |> Some
+    | HistoryEvent ev -> jsObj [ "kind", box "history"; "event", serializeHistoryEvent ev ] |> Some
+    | CommandEvent ev -> jsObj [ "kind", box "command"; "event", serializeCommandEvent ev ] |> Some
+    | DocumentEvent ev -> jsObj [ "kind", box "document"; "event", serializeDocumentEvent ev ] |> Some
+    | EnterCommand -> jsObj [ "kind", box "enterCommand" ] |> Some
+    | DemoEvent (DefineMarker m) -> jsObj [ "kind", box "defineMarker"; "marker", m ] |> Some    
+    | ResetState _ | DemoEvent _ -> None
+
+  // Deserializing application events (inverse of 'serializeAppEvent')
+
+  let selsFromJson o = [ for s in unbox<obj[]> o -> selFromJson s ]
+  let selsOptFromJson o = if isNull o then None else Some(selsFromJson o)
+  let editsFromJson o = nodesFromJson o |> List.collect (Represent.unrepresent >> List.map fst)
+
+  let deserializeViewEvent o : ViewEvent =
+    match o?kind with
+    | "moveCursor" ->
+        MoveCursor(match o?direction with
+                   | "backward" -> Backward | "forward" -> Forward
+                   | "previous" -> Previous | "next" -> Next
+                   | d -> failwith $"deserializeViewEvent: unknown direction '{d}'")
+    | "toggleViewSource" -> ToggleViewSource
+    | "toggleProvenanceHighlight" -> ToggleProvenanceHighlight
+    | k -> failwith $"deserializeViewEvent: unexpected kind '{k}'"
+
+  let deserializeHistoryEvent o : HistoryEvent =
+    match o?kind with
+    | "highlightSelector" -> HighlightSelector(selsOptFromJson o?selector)
+    | "toggleEdit" -> ToggleEdit(o?index, o?value)
+    | "extendSelection" -> ExtendSelection(o?delta)
+    | "selectAll" -> SelectAll
+    | "selectNone" -> SelectNone
+    | "toggleEditHistory" -> ToggleEditHistory
+    | "toggleFullList" -> ToggleFullList
+    | k -> failwith $"deserializeHistoryEvent: unexpected kind '{k}'"
+
+  let deserializeCommandEvent o : CommandEvent =
+    match o?kind with
+    | "cancelCommand" -> CancelCommand
+    | "backspaceCommand" -> BackspaceCommand
+    | "typeCommand" -> TypeCommand(o?text)
+    | "previousRecommendation" -> PreviousRecommendation
+    | "nextRecommendation" -> NextRecommendation
+    | "setRecommendation" -> SetRecommendation(o?index)
+    | "copyNode" ->
+        CopyNode(match o?source with
+                 | "current" -> CurrentNode | "marked" -> MarkedNode
+                 | s -> failwith $"deserializeCommandEvent: unknown source '{s}'")
+    | "toggleAltMenu" -> ToggleAltMenu(o?value)
+    | k -> failwith $"deserializeCommandEvent: unexpected kind '{k}'"
+
+  let deserializeDocumentEvent o : DocumentEvent =
+    match o?kind with
+    | "undoLastEdit" -> UndoLastEdit
+    | "evaluate" -> Evaluate(o?all)
+    | "mergeEdits" -> MergeEdits(editsFromJson o?edits)
+    | "setEditIndex" -> SetEditIndex(o?index)
+    | "moveEditIndex" -> MoveEditIndex(o?offset)
+    | "forkHistory" -> ForkHistory
+    | "mergeHistory" -> MergeHistory
+    | k -> failwith $"deserializeDocumentEvent: unexpected kind '{k}'"
+
+  let deserializeAppEvent (o:obj) : ApplicationEvent =
+    match o?kind with
+    | "view" -> ViewEvent(deserializeViewEvent o?event)
+    | "history" -> HistoryEvent(deserializeHistoryEvent o?event)
+    | "command" -> CommandEvent(deserializeCommandEvent o?event)
+    | "document" -> DocumentEvent(deserializeDocumentEvent o?event)
+    | "defineMarker" -> DemoEvent(DefineMarker(o?marker))
+    | "enterCommand" -> EnterCommand
+    | k -> failwith $"deserializeAppEvent: unexpected kind '{k}'"
+
+  let deserializeAppEvents (o:obj) : ApplicationEvent [] =
+    unbox<obj[]> o |> Array.map deserializeAppEvent
 
 // --------------------------------------------------------------------------------------
 // Initial state and global handlers
@@ -1473,7 +1593,7 @@ module Loader =
         GeneralizedStructuralSelector = []; ViewSourceSelector = None }
       CommandState = { AltMenuDisplay = false; Command = ""; CopySource = None;   
         SelectedRecommendation = -1; KnownRecommendations = []; Recommendations = [] }
-      HistoryState = { HighlightedSelector = None; 
+      HistoryState = { HighlightedSelector = None; FullList = false;
         SelectedEdits = Set.empty; Display = true }
       DemoState = { Demos = None; Data = Map.empty }
     }
@@ -1551,14 +1671,13 @@ module Loader =
             "budget", readJsonOps """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t1"],["node",{"kind":"record","tag":"h1","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t1"]]}],["field","v"],["node","Programming 2025"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t2"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","t1"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t2"]]}],["field","v"],["node","Speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","speakers"],["node",{"kind":"list","tag":"ul","nodes":[]}],["pred","t2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#jennings"]]}],["field","speaker"],["node","Betty Jean Jennings, jennings@rand.com"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","hamilton"],["pred","jennings"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#hamilton"]]}],["field","speaker"],["node","Margaret Hamilton, hamilton@mit.edu"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"]]}],["node",{"kind":"record","tag":"li","nodes":[]}],["index","goldberg"],["pred","hamilton"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","speakers"],["1","#goldberg"]]}],["field","speaker"],["node","Adele Goldberg, goldberg@xerox.com"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","t3"],["node",{"kind":"record","tag":"h2","nodes":[]}],["pred","speakers"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","t3"]]}],["field","v"],["node","Budget"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","budget"],["node",{"kind":"record","tag":"ul","nodes":[]}],["pred","t3"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","travel"],["node",{"kind":"record","tag":"li","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","lbl"],["node","Travel per speaker: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","travel"]]}],["field","value"],["node",1500],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","count"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","travel"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","lbl"],["node","Number of speakers: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","count"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","count"],["2","value"]]}],["field","arg"],["node",{"kind":"reference","refkind":"absolute","selectors":["speakers"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"]]}],["field","total"],["node",{"kind":"record","tag":"li","nodes":[]}],["pred","count"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","lbl"],["node","Total costs: "]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"]]}],["field","value"],["node",{"kind":"record","tag":"x-formula","nodes":[]}],["pred","lbl"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$builtins","mul"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","left"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","count","value"]}],["pred","op"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","budget"],["1","total"],["2","value"]]}],["field","right"],["node",{"kind":"reference","refkind":"absolute","selectors":["budget","travel","value"]}],["pred","left"]]}]"""
           ]
         ]
+      //let _, cntr, _ = demos.[4]
+      //trigger (ResetState(cntr))
+      // TESTING: 
       trigger (DemoEvent(LoadDemos(demos, dataFiles)))
     | _ -> failwith "wrong number of demos" }
   
-  let start () =
-    let initial = fromOperationsList []
-    let trigger, _, getState = createVirtualDomApp "out" initial render update
-    loadData trigger |> startWithHandler
-
+  let setupHandlers trigger getState = 
     Browser.Dom.window.onkeypress <- fun e -> 
       let targetNotText = 
         (unbox<Browser.Types.HTMLElement> e.target).tagName <> "INPUT" ||
@@ -1596,7 +1715,9 @@ module Loader =
           if state.CommandState.Command = "" then e.preventDefault(); trigger(ViewEvent(MoveCursor Next))
           else e.preventDefault(); trigger(CommandEvent(NextRecommendation))
 
-        let altHints () = (Browser.Dom.document.getElementsByClassName("alt-hints").[0] :?> Browser.Types.HTMLInputElement).``checked``
+        let altHints () = 
+          Browser.Dom.document.getElementsByClassName("alt-hints").length = 0 ||
+          (Browser.Dom.document.getElementsByClassName("alt-hints").[0] :?> Browser.Types.HTMLInputElement).``checked``
         if e.key = "Alt" && altHints () && not state.CommandState.AltMenuDisplay then
           e.preventDefault(); trigger(CommandEvent(ToggleAltMenu true))
 
@@ -1604,3 +1725,22 @@ module Loader =
           if e.altKey && e.key = sc.Key then 
             e.preventDefault()
             for evt in sc.Events do trigger(evt)
+
+  let start () =
+    let events = ResizeArray<obj>() 
+    let logEvent e = 
+      let ejs = EventLogger.serializeAppEvent e
+      events.Add(ejs)
+      Browser.Dom.document.getElementById("serialized-commands").innerText <- Fable.Core.JS.JSON.stringify(events)
+      Log.log "cmd" (sprintf "%A" ejs) 
+      e
+
+    let initial = fromOperationsList []
+    let trigger, _, getState = 
+      createVirtualDomApp "out" initial 
+        (fun trigger -> render (logEvent >> trigger)) 
+        (fun state trigger -> update state (logEvent >> trigger))
+    loadData trigger |> startWithHandler
+    setupHandlers (logEvent >> trigger) getState
+
+

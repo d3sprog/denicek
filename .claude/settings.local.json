@@ -12,7 +12,19 @@
       "Bash(dotnet --list-sdks)",
       "Bash(echo \"exit: $?\")",
       "Read(//tmp/**)",
-      "Bash(dotnet build *)"
+      "Bash(dotnet build *)",
+      "Bash(dotnet tool *)",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/fable.core/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/fable.browser.dom/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/fable.browser.xmlhttprequest/index.json\")",
+      "Bash(curl -s \"https://api.nuget.org/v3-flatcontainer/fable/index.json\")",
+      "Bash(dotnet restore *)",
+      "Bash(npm view *)",
+      "Bash(npx webpack *)",
+      "Bash(npm install *)",
+      "Bash(npm --version)",
+      "Bash(echo \"npm: $\\(npm --version\\)\")",
+      "Bash(git mv *)"
     ]
   }
 }

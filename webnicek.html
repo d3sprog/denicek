@@ -1,0 +1,142 @@
+<!doctype html>
+<html>
+<head>
+  <title>Fable</title>
+  <meta http-equiv='Content-Type' content='text/html; charset=utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href= "https://maxst.icons8.com/vue-static/landings/line-awesome/line-awesome/1.3.0/css/line-awesome.min.css" >
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&family=Roboto+Mono:wght@100..700&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
+
+
+  <style type="text/css">
+    html, body { padding:0px; margin:0px; }
+    .main { display:flex; flex-direction:row; align-items: flex-start; }
+    .doc { flex:20; padding:20px; font-family:'Merriweather'; line-height:1.5em; }
+    .edits { flex:0 0 45%; }    
+
+    /* header with demo links */
+    header { font-family:Inter, sans-serif; background:#404040; color:white; padding:8px; font-size:12pt; }
+    header a { color:white; margin-left:10px;}
+    header .alts a { margin-left:0px; }
+    header label { float:right; margin-right:20px }
+    
+    /* document location at the top */    
+    .loc { font-family:Inter, sans-serif; background:#e0e0e0; color:#808080; padding:6px 8px; font-size:10pt; height:20px; overflow:hidden; }
+    .loc i { margin:0px 10px; }
+
+    /* context menu for entering commands */
+    .ctx { position:absolute; width:350px; max-height:350px; padding:4px; font-family:Inter, sans-serif; background:white; box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3); border-radius:10px; }
+    .ctx ul { overflow-y:scroll; scrollbar-color:#e0e0e0 white; max-height:315px; }
+    .ctx ul, .ctx li { margin:0px; padding:0px; list-style:none; }
+    .ctx li { padding:8px 2px; cursor:pointer; }
+    .ctx li.selected, .ctx li:hover { background:#f0f0f0; border-radius:4px; }
+    .ctx .icon { float:left; border:1px solid #e0e0e0; border-radius:4px; padding:5px; margin:3px 0px 0px 5px; }
+    .ctx .icon i { font-size:20px; color:#808080;}
+    .ctx .icon { background:rgba(218, 218, 218, 0.4); }
+    .ctx .igensel .icon { background:rgba(255, 227, 164, 0.4); }
+    .ctx .icursel .icon { background:rgba(190, 207, 255, 0.4); }
+    .ctx .details { margin-left:45px;}
+    .ctx h4 { font:200 14px Inter, sans-serif; margin:0px; }
+    .ctx kbd { font:300 12px Inter, sans-serif; margin:0px; color:#606060; }
+    .ctx kbd em { font-weight:200; font-style: normal; }
+    .ctx kbd strong { font-weight:500; }
+    .ctx kbd .entered { color:rgb(190, 36, 172); }
+    .ctx .cmd { border:1px solid #e0e0e0; border-radius:4px; margin:5px; padding:4px; font:300 12px Inter, sans-serif; }
+    
+    /* cursor and generalized structural cursor */
+    .gensel { outline:2px solid rgba(74, 127, 224, 0.3); outline-offset:0px; border-radius:4px; }
+    .cursor-before { box-shadow:inset  4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
+    .cursor-after  { box-shadow:inset -4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
+    .hiprov { background:#FFDBF1; }
+
+    /* highlighted selector */
+    .selsel { outline:3px solid #C49C94; border-radius:4px; }
+    .treenode.selsel { background:#C49C94; }
+    .selector.selsel { background:#C49C94; }
+
+    /* source code view */
+    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc .treenode { width:fit-content; }
+    .treedoc .treetag span { color:#0074E8; }
+    .treedoc .treebody { padding-left:10px; }
+    .treedoc span.attrname { color:#DD22CA; }
+    .treedoc span.attrvalue { color:#003EAA; }
+    .treedoc .inline > div { display: inline; padding-left: 0px; }
+
+    /* basic styling for things in the document */
+    input { padding:3px; }
+    button { padding:3px 10px 3px 10px; }
+    
+    .edits { font:300 10px Inter, sans-serif; height:100vh; left:70vw; background:#FAF9F5; overflow:scroll; padding:0px 0px 0px 10px }
+    .edits table { border-collapse:collapse; background:white; margin:10px 0px;} 
+    .edits table th { font-weight:600; color:#909090; padding:5px; text-align: left; text-transform:uppercase; }
+    .edits table .more th { text-align:center; } 
+    .edits table .more th a { font-weight:400; text-align:center; text-transform:none; }
+    .edits table th a { font-weight:300; color:#909090; text-decoration:none; text-transform:none; }
+    .edits table td { padding:0px; margin:0px; border-style:none; padding:3px; font-size:10px; } 
+    .edits table tr { padding:0px; margin:0px; border:1px solid #e0e0e0; }
+    .edits table tr.selected { background:#f0f0f0; }
+    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; } 
+    .edits .edidx a { color:#b0b0b0; text-decoration:none; }
+    .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; }
+    
+    .edits .edref a { color:#a0a0a0; font-weight:500; text-decoration:none; width:100px; display:inline-block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;}
+    .edits .edref a.selsel { outline-width:0px; color:#8C564B; font-weight:600; background:inherit; }
+    .edits .edhash a { color:#a0a0a0; font-weight:300; text-decoration:none; }
+    .edits tr td:first-child { padding-left:5px; }
+    .edits tr.checked td:first-child { box-shadow:inset 3px 0 0 #b0b0b0; }
+
+    .edits a.edit { border:2px solid #FBDBE9; background:#FBDBE9; color:#E377C2; }
+    .edits a.reorder { border:2px solid #FBDBE9; background:#FBDBE9; color:#E377C2; }
+    .edits a.retag { border:2px solid #E2D8EA; background:#E2D8EA; color:#9467BD; }
+    .edits a.updid { border:2px solid #E2D8EA; background:#E2D8EA; color:#9467BD; }
+    .edits a.addfield { border:2px solid #CCEFC6; background:#CCEFC6; color:#2CA02C; }
+    .edits a.append { border:2px solid #CCEFC6; background:#CCEFC6; color:#2CA02C; }
+    .edits a.copy { border:2px solid #EDEDC7; background:#EDEDC7; color:#BCBD22; }
+    .edits a.wraprec { border:2px solid #D7E3F3; background:#D7E3F3; color:#1F77B4; }
+    .edits a.wraplist { border:2px solid #D7E3F3; background:#D7E3F3; color:#1F77B4; }
+    .edits a.delitm { border:2px solid #FFCCCB; background:#FFCCCB; color:#D62728; }
+    .edits a.delfld { border:2px solid #FFCCCB; background:#FFCCCB; color:#D62728; }
+
+    .edits a.struct.edit { border:2px solid #E377C2; }
+    .edits a.struct.reorder { border:2px solid #E377C2; }
+    .edits a.struct.retag { border:2px solid #9467BD; }
+    .edits a.struct.updid { border:2px solid #9467BD; }
+    .edits a.struct.addfield { border:2px solid #2CA02C; }
+    .edits a.struct.append { border:2px solid #2CA02C; }
+    .edits a.struct.copy { border:2px solid #BCBD22; }
+    .edits a.struct.wraprec { border:2px solid #1F77B4; }
+    .edits a.struct.wraplist { border:2px solid #1F77B4; }
+    .edits a.struct.delitm { border:2px solid #D62728; }
+    .edits a.struct.delfld { border:2px solid #D62728; }
+
+
+    td { border:1px solid black; padding:2px; }
+    thead td { font-weight: bold; }
+    
+    .formula { outline:solid 2px #a4d8ff; padding:0px 2px; margin:0px 2px }  
+    /*
+    x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
+    x-match {  display:inline-block; }
+    x-match::before { content:"(matched content)" }
+    */
+    x-saved-interactions { display:none; }
+    /*
+    x-interaction { display:block; padding-left:20px; text-align:left; }
+    x-interaction-list > * { display:list-item; }
+    */
+    x-evaluated > *:nth-child(1) {
+      display:none;
+    }
+    
+</style>
+</head>
+<body>
+    <div id="out"></div>
+    <script type="application/json" id="serialized-commands"></script>
+    <script type="module" src="/src/main.fs.js"></script>
+</body>
+</html>
