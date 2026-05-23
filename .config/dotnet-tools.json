@@ -6,13 +6,15 @@
       "version": "5.0.0",
       "commands": [
         "fable"
-      ]
+      ],
+      "rollForward": false
     },
     "femto": {
       "version": "0.21.0",
       "commands": [
         "femto"
-      ]
+      ],
+      "rollForward": false
     }
   }
 }
