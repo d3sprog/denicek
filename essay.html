@@ -9,45 +9,51 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,100..900&family=Roboto+Mono:wght@100..700&family=Merriweather:wght@300;400;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,100..900;1,9..144,100..900&family=Zalando+Sans:ital,wght@0,200..900;1,200..900&display=swap" rel="stylesheet">
-
-
 
   <style type="text/css">
 
     /* BASIC PAGE AND DOCUMENT FORMATTING */
     html, body { padding:0px; margin:0px; }
     body { background:#D7EDE5; padding:20px; }
-    article { max-width: 1000px; margin:20px auto; background:white; border-radius:20px; padding:30px; font-family:'Zalando Sans', sans-serif; }
+    section { max-width: 1000px; margin:20px auto; background:white; border-radius:20px; padding:30px; font-family:'Inter', sans-serif; }
+    .sidebyside { display:grid; grid-template-columns:4fr 2fr; max-width:1600px; margin:auto; gap:20px; }
+    .sidebyside section { margin:0px 0px; }
+
     a { color:#4D71C6; text-decoration:none; }
     a:hover, a:active { text-decoration:underline; }
-    p, li { font:14pt 'Zalando Sans', sans-serif; line-height:1.5em; color:#071C4F; }
+    p, li { font:13pt 'Inter', sans-serif; line-height:1.5em; color:#071C4F; }
     li strong, p strong { font-weight:500; }
     p.info { font-size:15pt; line-height:1.5em; margin:30px 0px; }
     p.info i { font-size: 13pt; margin:0px 5px 0px 0px; }
     p.info .sep { margin:0px 5px; }
     h1 { font:26pt 'Merriweather', serif; color:#071C4F; font-weight:400; max-width:800px; }
     h2 { font:20pt 'Merriweather', serif; color:#071C4F; font-weight:400; }
+    h3 { font:16pt 'Merriweather', serif; color:#071C4F; font-weight:400; }
     h1 strong { font-weight:900; }
     ul.icons { list-style-type:none; padding:0px; }
     ul.icons i { font-size:16pt; margin-right:5px; position:relative; top:2px; font-weight:800; }
     ul.refs li { font-size: 13pt; }
-    div.imgbox { background:#F2F0E8; border-radius:20px;float:right;max-width:250px;padding:20px 10px;margin:30px 0px 40px 20px; text-align: center; }
+    section.comment kbd { font-family: 'roboto mono', monospace; font-size: 15px; line-height:1; padding:2px 6px; background:#f4f4f5; border:1px solid #e4e4e7; border-radius:4px; color:#3f3f46; white-space:nowrap; }
+    section.comment .circle { width:22px; height:22px; margin:0px 2px; border-radius:25%; border-style:none; background:#071C4F; color:white; font-size:13px; font-weight:500; display:inline-block; }
+    section.comment .circle i { position:relative; top:-1px; left:4px; }
+    section.comment ul { margin:0px; padding:0px 15px; }
+    section.comment ul.wide li { margin-bottom:8px; }
+    div.imgbox { background:#F2F0E8; border-radius:20px;float:right;max-width:250px;padding:20px 10px;margin:30px 0px 50px 20px; text-align: center; }
     div.imgbox p { font-size:12pt; margin:0px; }
 
     nav { max-width: 1000px; margin:30px auto;  text-align: center; }
-    nav button { font:12pt 'Merriweather', serif; font-weight:300; padding:7px 15px;  background:#071C4F; color:white; border-style:none; border-radius:15px; margin:5px; cursor: pointer; }
-    nav button:hover { background-color:#4D71C6; }
+    nav a { font:12pt 'Merriweather', serif; font-weight:300; padding:7px 15px;  background:#071C4F; color:white; border-style:none; border-radius:15px; margin:5px; cursor: pointer; display:inline-block; }
+    nav a:hover { background-color:#4D71C6; text-decoration: none; }
     nav .current {  background-color:#4D71C6; }
-    nav button strong { font-weight:900; }
+    nav a strong { font-weight:900; }
 
     /* STEPPER FOR REPLAYING DEMOS */    
-    .stepper { display:flex; align-items:flex-start; }
+    .stepper { display:flex; align-items:flex-start; margin:30px 60px 30px 0px; }
     .stepper .step { display:flex; flex-direction:column; align-items:center; }
-    .stepper button, .circle { box-sizing: border-box; width:26px; height:26px; margin:0px 10px; border-radius:50%; border-style:none; background:#E5E2D7; color:white; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; flex-shrink:0; }
-    .stepper button { margin-right:0px; background:#071C4F; cursor:pointer; font-weight:900; }
+    .stepper button, .stepper .circle { box-sizing: border-box; width:26px; height:26px; margin:0px 10px; border-radius:50%; border-style:none; background:#E5E2D7; color:white; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:500; flex-shrink:0; }
+    .stepper button { margin-right:0px; background:#071C4F; cursor:pointer; font-weight:900; border-radius:25%; }
     .stepper button:hover { background:#4D71C6; }
-    .stepper .lastbutton { margin-right:20px; }
+    .stepper .lastbutton { margin-right:40px; }
     .stepper .step.active .circle { background:#4D71C6; }
     .stepper .line { flex:1; height:2px; background:#E5E2D7; margin-top:12px; }
     .stepper .label {
@@ -65,9 +71,14 @@
     }
 
     /* DENICEK */
-    .main { background:white; display:flex; flex-direction:row; align-items: flex-start; border:5px solid #f0f0f0; width:500px; height:500px; margin:50px; }
-    .doc { flex:20; padding:20px; font-family:'Merriweather'; line-height:1.5em; }
-    .edits { font:300 10px Inter, sans-serif; height:500px; left:70vw; background:#FAF9F5; overflow-y:scroll; padding:0px 0px 0px 10px }
+    .demo { } 
+    .main { background:white; display:flex; flex-direction:row; align-items:flex-start; width:100%; max-height:450px; margin:0px 0px 20px 0px; }
+    .doc { flex:20; padding:2px 20px 200px 2px; font-family:'Merriweather'; line-height:1.5em; max-height:250px; overflow-y:auto; }
+    .edits { font:300 10px Inter, sans-serif; left:70vw; overflow-y:auto; padding:0px 0px 0px 10px; max-height:500px; }
+    .loc { font:300 12px Inter, sans-serif; color:#909090; padding:6px 8px; height:20px; overflow:hidden; margin:10px 0px; }
+    .loc i { margin:0px 6px; }
+    .loc label { font-weight:600; text-transform:uppercase; };
+    .loc strong { font-weight:400; }
 
     /* context menu for entering commands */
     .ctx { position:absolute; width:350px; max-height:350px; padding:4px; font-family:Inter, sans-serif; background:white; box-shadow:0 0 15px 0px rgba(0, 0, 0, 0.3); border-radius:10px; }
@@ -89,7 +100,7 @@
     .ctx .cmd { border:1px solid #e0e0e0; border-radius:4px; margin:5px; padding:4px; font:300 12px Inter, sans-serif; }
     
     /* cursor and generalized structural cursor */
-    .gensel { outline:2px solid rgba(74, 127, 224, 0.3); outline-offset:0px; border-radius:4px; }
+    .gensel { outline:2px solid rgba(221, 175, 75, 0.3); outline-offset:0px; border-radius:4px; }
     .cursor-before { box-shadow:inset  4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
     .cursor-after  { box-shadow:inset -4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
     .hiprov { background:#FFDBF1; }
@@ -100,7 +111,7 @@
     .selector.selsel { background:#C49C94; }
 
     /* source code view */
-    .treedoc * { font:400 8pt 'roboto mono'; color:#383838; }
+    .treedoc * { font:400 9pt 'roboto mono'; color:#383838; }
     .treedoc .treenode { width:fit-content; }
     .treedoc .treetag span { color:#0074E8; }
     .treedoc .treebody { padding-left:10px; }
@@ -177,7 +188,7 @@
 
 </head>
 <body>
-  <article>
+  <section>
     <h1><strong>Denicek</strong>: Computational substrate for document-oriented end-user programming</h1>
 
     <p class="info">
@@ -208,47 +219,175 @@
       building a counter app, TODO list, and managing a conference. The demos replay actions
       using the real Denicek implementation, so you can also explore on your own!
     </p>
-    <ul class="icons">
-      <li><i class="las la-file-alt"></i> For more information, <a href="https://tomasp.net/academic/papers/denicek/uist-2025.pdf">read the Denicek paper</a> (UIST 2025).</li>
-      <li><i class="las la-film"></i> Watch our <a href="https://www.youtube.com/watch?v=xNl7XSgGZpY">5 minute overview</a> or
-      <a href="https://www.youtube.com/watch?v=P2WcNWkt6ts">30 seconds teaser</a>.</li>
-      <li><i class="las la-code"></i> Explore the poorly documented <a href="https://github.com/d3sprog/denicek">Denicek source code</a>. </li>
-    </ul>
-  </article>
-    <nav>
-      <button class="current"><strong>Chapter 1</strong>: Hello world</button>
-      <button><strong>Chapter 2</strong>: Todo list</button>
-      <button><strong>Chapter 3</strong>: Conference list</button>
-      <button><strong>Chapter 4</strong>: Conference budget</button>
-      <button><strong>Chapter 5</strong>: Counter</button>
-      <button><strong>Chapter 6</strong>: Traffic accidents</button>
-      <button><strong>Chapter 7</strong>: Under the cover</button>
-    </nav>
+  </section>
+
+  <nav>
+    <a id="chapter1-link" href="#chapter1" class="current"><strong>Chapter 1</strong>: Hello world</a>
+    <a id="chapter2-link" href="#chapter2"><strong>Chapter 2</strong>: Todo list</a>
+    <a id="chapter3-link" href="#chapter3"><strong>Chapter 3</strong>: Conference list</a>
+    <a id="chapter4-link" href="#chapter4"><strong>Chapter 4</strong>: Conference budget</a>
+    <a id="chapter5-link" href="#chapter5"><strong>Chapter 5</strong>: Counter</a>
+    <a id="chapter6-link" href="#chapter6"><strong>Chapter 6</strong>: Traffic accidents</a>
+    <a id="chapter7-link" href="#chapter7"><strong>Chapter 7</strong>: Under the cover</a>
+  </nav>
+
+  <!-- ========================================================================================= -->
+  <!---                                       CHAPTER 1                                          -->
+  <!-- ========================================================================================= -->
   
-  <article> 
-
-    <div id="hello-start" data-speed="1.5">
-      <h2>start info</h2>
-    </div>
-    <div id="hello-normalize">
-      <h2>normalize step</h2>
-    </div>
-    <div id="hello-save">
-      <h2>save step</h2>
-    </div>
-    <div id="hello-replay">
-      <h2>replay step</h2>
-    </div>
-    <div id="hello-done">
-      <h2>done step</h2>
-    </div>
-    <div id="hello" class="demo" data-file="essay/hello.json"></div>
-
+  <div class="chapter" id="chapter1">
+  <div class="sidebyside">
+  <section>
+    <h2><strong>Chapter 1:</strong> Normalizing hello world messages</h2>
+    <div id="chapter1-demo" class="demo" data-file="essay/hello.json"></div>
     <script type="module" src="/src/main.fs.js"></script>
+  </section>
+  <section class="comment"> 
+    <div id="chapter1-start" data-speed="1.5">
+      <h3><strong>Step 1:</strong> Creating list of messages</h3>
+      <p>In the first demo, we create a list of messages with MixEd caPiTAliZaTIoN
+        and normalize them by recording and replaying a simple transformation.
+        To get started, click the 
+        <span class="circle"><i class="las la-play"></i></span> 
+        button to replay the first part of the demo. You can also use
+        <span class="circle"><i class="las la-step-backward"></i></span>
+        and <span class="circle"><i class="las la-step-forward"></i></span>
+        to skip to the previous or next step.</p>
+      
+      <p>In the first step, we enter <kbd>:hellos=&lt;ul&gt;</kbd> to add a new record with the 
+        <code>&lt;ul&gt;</code> tag as a field <code>hellos</code> of the document.
+        We then add multiple <code>&lt;li&gt;</code> records as children and set their
+        field <code>greeting</code> to a greeting in various languages.</p>
 
-  </article>
+      <p>The demo controls the actual Denicek, so you can also explore on your own!
+        Use arrows to move around the document, type <kbd>?</kbd> to open the command palette.
+        You can use <kbd>Alt</kbd>+<kbd>H</kbd> to toggle history view and <kbd>Alt</kbd>+<kbd>U</kbd> to view
+        document source. If you play around, make sure to use <span class="circle"><i class="las la-undo-alt"></i></span>
+        to reset the demo!
+      </p>
+        
+    </div>
+    <div id="chapter1-normalize">
+      <h3><strong>Step 2:</strong> Fix capitalization of one item</h3>
+      <p>To fix the capitalization, we will copy the greeting and transform the two copies.        
+        We move to the first item in the record (<code>en</code> field) and copy the 
+        value of its <code>greeting</code> field (the text) using <kbd>Alt</kbd>+<kbd>C</kbd>.
+        We then add the copy as another field named <code>rest</code> using 
+        <kbd>:rest=!v</kbd>. Note that Denicek treats this as a special copy edit with 
+        source (<code>greeting</code>) and target (<code>rest</code>).</p>
+      
+      <p>To fix the capitalization, we apply a number of built-in primitive transformations to the 
+        two text fields. <code>@take-first</code> and <code>@upper</code> turn the first field
+        into capitalized first letter; <code>@skip-first</code> and <code>@lower</code> turn the
+        second field into lower-case rest of the greeting.</p>
 
-  <article>
+    </div>
+    <div id="chapter1-save" data-speed="0.5">
+      <h3><strong>Step 3:</strong> Save interactions for replay</h3>
+      <p>Denicek represents documents as sequences of edits. You can see the edits in the
+        History table on the right. Use <kbd>Alt</kbd>+<kbd>H</kbd> to display or hide it.
+        In the table, you can:</p>
+      <ul>
+        <li>hover over the edit name to see more details,</li>
+        <li>hover over a selector to highlight the affected node,</li>
+        <li>click a hash to go back to a previous document state,</li>
+        <li>click edit number to select or unselect it.</li>
+      </ul>
+      <p>Now, we select the last 6 edits (watch the history table!) 
+        that create the <code>rest</code> field,
+        copy the <code>greeting</code> and transform the fields and save them as
+        saved interactions using <kbd>!s normalize</kbd>.
+      </p>
+      <p>Note that edits are saved in the document! You'll see a number of
+        <code>append</code> edits that add nodes to <code>/saved-interactions/normalize</code>
+        and you can see those if you view the source of the document. After the demo
+        finishes playing, hit the up arrow until you reach the root and then use 
+        <kbd>Alt</kbd>+<kbd>U</kbd>.
+      </p>
+    </div>
+    <div id="chapter1-replay">
+      <h3><strong>Step 4:</strong> Replaying normalization edits</h3>
+      <p>To clean up the capitalization of the remaining fields, we now go over the 
+        individual record fields and apply our saved <code>normalize</code> operation
+        to each of the fields.</p>
+      <p>We need to use <code>@normalize!</code> that lets us specify that the
+        currently selected document node should be used in place of 
+        <code>/hellos/en</code> in the saved interactions.
+        The <code>@normalize</code> operation just replays the edits on the original targets.</p>
+      <p>
+        As we will see in <a href="#chapter3">Chapter 3</a>, there is a better way of doing this.
+        Denicek supports lists, which let us apply operations on all elements of the list at 
+        the same time. The <code>&lt;ul&gt;</code> element in this demo was Denicek's record.
+        We could have created it as Denicek's list, but that would not illustrate replaying of
+        edits!
+      </p>
+      <p>
+        After replaying the demo, you can undo the edits using <kbd>Alt+Z</kbd> and 
+        try on your own! Move around using keybaord arrows, and type <kbd>@</kbd>
+        to see the saved operation and apply it!
+      </p>
+    </div>
+    <div id="chapter1-done">
+      <h3><strong>Step 5:</strong> Next steps</h3>
+      <p>
+        This demo was the "Hello world" of Denicek. You saw the basic idea: representing
+        documents as sequences of edit operations. You saw that Denicek can save and replay
+        past interactions to support programming by demonstration. The remaining chapters
+        show that Denicek can do much more than that:
+      </p>
+      <ul class="wide">
+        <li><a href="#chapter2"><strong>Chapter 2</strong>: Todo list</a> 
+          is a bigger example that creates a user interface using programming by demonstration.</li>
+        <li><a href="#chapter3"><strong>Chapter 3</strong>: Conference list</a>
+          shows collaborative editing and handling of schema change.</li>
+        <li><a href="#chapter4"><strong>Chapter 4</strong>: Conference budget</a>
+          adds formulas with incremental recomputation and debugging.</li>
+        <li><a href="#chapter5"><strong>Chapter 5</strong>: Counter</a>
+          combines formulas with programming by demonstration.</li>
+        <li><a href="#chapter6"><strong>Chapter 6</strong>: Traffic accidents</a>
+          shows how concrete programming enables tracking of code copies.</li>
+        <li><a href="#chapter7"><strong>Chapter 7</strong>: Under the cover</a>
+          provides some more background on how Denicek works.</li>
+      </ul>
+
+    </div>
+  </section>
+  </div>
+  </div>
+
+  <!-- ========================================================================================= -->
+  <!---                                       CHAPTER 3                                          -->
+  <!-- ========================================================================================= -->
+
+  <div class="chapter" id="chapter3">
+  <div class="sidebyside">
+  <section>
+    <h2><strong>Chapter 3:</strong> Managing conference speakers list</h2>
+    <div id="chapter3-demo" class="demo" data-file="essay/conference.json"></div>
+    <script type="module" src="/src/main.fs.js"></script>
+  </section>
+  <section class="comment"> 
+    <div id="chapter3-start" data-speed="1.5">
+      <h3><strong>Step 1:</strong> Foof</h3>
+      <p>Yaf</p>
+        
+    </div>
+    <div id="chapter3-refactor" data-speed="1.5">
+      <h3><strong>Step 2:</strong> Foof</h3>
+      <p>Yaf</p>
+        
+    </div>
+    <div id="chapter3-done" data-speed="1.5">
+      <h3><strong>Step 3:</strong> Foof</h3>
+      <p>Yaf</p>
+        
+    </div>
+  </section>
+  </div>
+  </div>
+
+  <!--
+  <section>
       <h2>Programming experiences</h2>
       <p>There are many programming experiences that go beyond just writing code. In <strong>programming by demonstration</strong> (<a href="#refs">Smith, 1975</a>) programs are created by demonstrating the proces using concrete values,
         suport for <strong>collaborative editing</strong> (<a href="#refs">Kleppmann et al., 2019</a>) is vital for working togther, 
@@ -272,9 +411,9 @@
       and it can detect conflicts between branches. It turns out that many of the above programming experiences
       can be expressed in terms of these three primitive operations.
     </p>
-  </article>
+  </section>
 
-  <article>
+  <section>
     <h2 id="refs">References</a></h2>
     <ul class="refs">
       <li><strong>Smith, David Canfield</strong> (1975). <a href="https://apps.dtic.mil/sti/html/tr/ADA016811/index.html">Pygmalion: a creative programming environment.</a> Stanford University.</li>
@@ -284,6 +423,17 @@
       <li><strong>Ko, Amy J., and Brad A. Myers.</strong> (2009). <a href="https://dl.acm.org/doi/abs/10.1145/1518701.1518942">Finding causes of program output with the Java Whyline.</a> Proceedings of the SIGCHI Conference on Human Factors in Computing Systems.</li>
       <li><strong>Edwards, Jonathan.</strong> (2005). <a href="https://dl.acm.org/doi/abs/10.1145/1094811.1094851">Subtext: uncovering the simplicity of programming.</a> Proceedings of the 20th Annual ACM SIGPLAN Conference on Object-Oriented Programming, Systems, Languages, and Applications.</li>
     </ul>
-  </article>
+  </section>
+-->
+  <section>
+    <h2>Conclusions</a></h2>
+    <p>Somehitng short here</p>
+    <ul class="icons">
+      <li><i class="las la-file-alt"></i> For more information, <a href="https://tomasp.net/academic/papers/denicek/uist-2025.pdf">read the Denicek paper</a> (UIST 2025).</li>
+      <li><i class="las la-film"></i> Watch our <a href="https://www.youtube.com/watch?v=xNl7XSgGZpY">5 minute overview</a> or
+      <a href="https://www.youtube.com/watch?v=P2WcNWkt6ts">30 seconds teaser</a>.</li>
+      <li><i class="las la-code"></i> Explore the poorly documented <a href="https://github.com/d3sprog/denicek">Denicek source code</a>. </li>
+    </ul>
+  </section>
 </body>
 </html>
