@@ -461,8 +461,10 @@ let pushEditsThrough crmode hashBefore hashAfter e1s e2s =
           // if its effects (TODO: dependencies?) conflict with effects of e1
           let conflict = conflict || (crmode = RemoveConflicting &&
               conflictsWith (getEditEffect e1) (getAllDependencies e2s))
+          let res = moveAllBefore e1 e2s
           //printfn $"PUSHING {List.map (fst >> Format.formatEdit) e2s}\n  THROUGH {Format.formatEdit e1}  CONFLICT={conflict}"
-          moveAllBefore e1 e2s, conflict)  ([e2, []], conflict)
+          //printfn $"GOT {List.map (fst >> Format.formatEdit) res}"
+          res, conflict)  ([e2, []], conflict)
 
       // If 'e2' was conflicting, replace with [] and add its effects to dropped list
       // Otherwise, flatten edits and keep original dropped list
