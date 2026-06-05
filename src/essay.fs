@@ -43,7 +43,9 @@ module WebDemo =
   let renderStep state step i g =
     let cls = if step > i then "done" elif step = i then "active" else ""
     let displ = if cls = "active" then "display:block" else "display:none"
-    Browser.Dom.document.getElementById(state.DemoId + "-" + g).setAttribute("style", displ)
+    let el = Browser.Dom.document.getElementById(state.DemoId + "-" + g)
+    if el = null then failwith $"Element {state.DemoId}-{g} not found!"
+    el.setAttribute("style", displ)
     h?div [ "class" => "step " + cls ] [
       h?div [ "class" => "circle" ] [
         h?span [ "class" => "num" ] [ text (string (i+1)) ]

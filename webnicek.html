@@ -76,7 +76,7 @@
     .edits table td { padding:0px; margin:0px; border-style:none; padding:3px; font-size:10px; } 
     .edits table tr { padding:0px; margin:0px; border:1px solid #e0e0e0; }
     .edits table tr.selected { background:#f0f0f0; }
-    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; } 
+    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; width:14px; text-align:center; } 
     .edits .edidx a { color:#b0b0b0; text-decoration:none; }
     .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; }
     
@@ -110,6 +110,18 @@
     .edits a.struct.delitm { border:2px solid #D62728; }
     .edits a.struct.delfld { border:2px solid #D62728; }
 
+    .edits a.evaluated.edit { border:2px dashed #E377C2; }
+    .edits a.evaluated.reorder { border:2px dashed #E377C2; }
+    .edits a.evaluated.retag { border:2px dashed #9467BD; }
+    .edits a.evaluated.updid { border:2px dashed #9467BD; }
+    .edits a.evaluated.addfield { border:2px dashed #2CA02C; }
+    .edits a.evaluated.append { border:2px dashed #2CA02C; }
+    .edits a.evaluated.copy { border:2px dashed #BCBD22; }
+    .edits a.evaluated.wraprec { border:2px dashed #1F77B4; }
+    .edits a.evaluated.wraplist { border:2px dashed #1F77B4; }
+    .edits a.evaluated.delitm { border:2px dashed #D62728; }
+    .edits a.evaluated.delfld { border:2px dashed #D62728; }
+
     /* basic styling for things in the document */
     input { padding:3px; }
     button { padding:3px 10px 3px 10px; }
@@ -131,7 +143,7 @@
       display:none;
     }
 
-    /* prettier todo list */
+    /* prettier todo list 
     body, .doc { background:#f0f0f0; }
     .doc h1 { font-size:30pt; font-family:'Roboto'; font-weight:300; color:#b83f45; text-align:center;  }
     .doc form { width:400px; margin:10px auto; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; }

@@ -390,15 +390,15 @@ module Document =
     ]
 
     /// Render source code or preview, depending on what's selected
-    let rec loop path pid nd = 
+    let rec loop informula path pid nd = 
       match state.ViewState.ViewSourceSelector with 
       | Some sel when matches path sel -> 
           h?div ["class" => "treedoc"] [ renderSourceTree state trigger path [] nd ]
       | _ -> 
-          renderPreview path pid nd
+          renderPreview informula path pid nd
 
     /// Render node in a what you see is what you get style
-    and renderPreview path pid nd = 
+    and renderPreview informula path pid nd = 
       let tag = getTag nd
 
       let rcdattrs = 
@@ -429,7 +429,8 @@ module Document =
         match nd with 
         | Record("x-formula", { Members = TryFind "left" l & TryFind "right" r & TryFind "op" op } ) 
               when l.IsSome || r.IsSome || isBinaryOp op ->
-            yield text "="
+            let loop = loop true
+            if not informula then yield text "="
             yield h?span ["class" => "formula"] [
               yield loop (path @ [Field "left"]) (pid ++ "left") (Option.defaultValue (ps "?") l)
               match op with 
@@ -439,7 +440,8 @@ module Document =
               yield loop (path @ [Field "right"]) (pid ++ "right") (Option.defaultValue (ps "?") r)
             ]
         | Record("x-formula", nds) -> 
-            yield text "="
+            let loop = loop true
+            if not informula then yield text "="
             yield h?span ["class" => "formula"] [
               let op = nds |> Seq.tryFind (fun (f,_) -> f = "op") |> Option.map snd
               let args = nds |> Seq.filter (fun (f,_)-> f <> "op")
@@ -456,17 +458,17 @@ module Document =
             ]
         | List(_, nds) -> 
             for i, a in nds do
-              yield loop (path @ [Index i]) (pid ++ string i) a
+              yield loop false (path @ [Index i]) (pid ++ string i) a
         | Record(_, nds) -> 
             for f, a in nds do
               if not (f.StartsWith("@")) then
-                yield loop (path @ [Field f]) (pid ++ f) a
+                yield loop false (path @ [Field f]) (pid ++ f) a
         | Reference(kind, sel) -> yield Helpers.renderReference state trigger (path, (kind, sel))
         | Primitive(String s) -> yield text s
         | Primitive(Number n) -> yield text (string n)        
       ]
 
-    loop [] ""
+    loop false [] ""
     
 
   let rec update appstate state = function
@@ -612,8 +614,8 @@ module History =
               trigger(HistoryEvent(ToggleEdit(i, chk))) ] [ text (string i) ]
         ]
         h?td ["class" => "edname"] [ 
-          h?a [ "class" => (if rb = KeepReferences then "value " + n else "struct " + n); "title" => title
-                "href" => "javascript:;"; "click" =!> Helpers.historyHashClickHandler state trigger histhash ] 
+          h?a [ "class" => (if rb = KeepReferences then "value " + n else "struct " + n) +? (ed.Evaluated, "evaluated"); 
+                "title" => title; "href" => "javascript:;"; "click" =!> Helpers.historyHashClickHandler state trigger histhash ] 
             [ text n ]
         ]
         h?td ["class" => "edref"; "title" => Format.formatReference (Absolute, sel) ] [ Helpers.renderAbsoluteReference state trigger sel ]
@@ -645,7 +647,7 @@ module History =
             yield h?tr [] [
               h?th ["colspan" => "4"] [ text $"Saved • {k} ("; Helpers.renderHistoryHash state trigger (int histhash); text ")" ] 
             ]    
-            let ops = [ for hash, op in ops -> hash, { Edit = op; Evaluated = true }]
+            let ops = [ for hash, op in ops -> hash, { Edit = op; Evaluated = false }]
             for ied in Seq.rev (Seq.indexed ops) -> 
               renderEdit state trigger true ied
           ]

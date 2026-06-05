@@ -17,7 +17,7 @@
     body { background:#D7EDE5; padding:20px; }
     section { max-width: 1000px; margin:20px auto; background:white; border-radius:20px; padding:30px; font-family:'Inter', sans-serif; }
     .sidebyside { display:grid; grid-template-columns:4fr 2fr; max-width:1600px; margin:auto; gap:20px; }
-    .sidebyside section { margin:0px 0px; }
+    .sidebyside section { margin:0px 0px; min-width:0; }
 
     a { color:#4D71C6; text-decoration:none; }
     a:hover, a:active { text-decoration:underline; }
@@ -33,6 +33,7 @@
     ul.icons { list-style-type:none; padding:0px; }
     ul.icons i { font-size:16pt; margin-right:5px; position:relative; top:2px; font-weight:800; }
     ul.refs li { font-size: 13pt; }
+    pre { font-family: 'roboto mono', monospace; font-size: 13px; line-height:1.6em; color:#071C4F; overflow:auto;min-width:0px; }
     section.comment kbd { font-family: 'roboto mono', monospace; font-size: 15px; line-height:1; padding:2px 6px; background:#f4f4f5; border:1px solid #e4e4e7; border-radius:4px; color:#3f3f46; white-space:nowrap; }
     section.comment .circle { height:22px; margin:0px 2px; border-radius:7px; padding:0px 10px 0px 0px; border-style:none; background:#071C4F; color:white; font-size:13px; font-weight:500; display:inline-block; }
     section.comment .circle i { position:relative; top:-1px; left:4px; }
@@ -77,7 +78,7 @@
     }
 
     /* DENICEK */
-    .main { background:white; display:flex; flex-direction:row; align-items:flex-start; width:100%; max-height:500px; margin:0px 0px 20px 0px; }
+    .main { background:white; display:flex; flex-direction:row; align-items:flex-start; width:100%; max-height:520px; margin:0px 0px 20px 0px; }
     .doc { flex:20; padding:2px 20px 200px 2px; font-family:'Merriweather'; line-height:1.5em; max-height:300px; overflow-y:auto; }
     .edits { font:300 10px Inter, sans-serif; left:70vw; overflow-y:auto; padding:0px 0px 0px 10px; max-height:500px; }
     .loc { font:300 12px Inter, sans-serif; color:#909090; padding:6px 8px; height:20px; overflow:hidden; margin:10px 0px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
@@ -108,12 +109,14 @@
     .gensel { outline:2px solid rgba(221, 175, 75, 0.3); outline-offset:0px; border-radius:4px; }
     .cursor-before { box-shadow:inset  4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
     .cursor-after  { box-shadow:inset -4px 0 0 rgba(74, 127, 224, 0.6); outline:2px solid rgba(74, 127, 224, 0.6); }
-    .hiprov { background:#FFDBF1; }
+    .hiprov { background: rgba(234, 182, 90, 0.20); border-radius: 6px; box-shadow: 0 1px 6px rgba(186, 140, 40, 0.18); }
 
     /* highlighted selector */
-    .selsel { outline:3px solid #C49C94; border-radius:4px; }
-    .treenode.selsel { background:#C49C94; }
-    .selector.selsel { background:#C49C94; }
+    a.selector { color: #9478C1; }
+    a.selector:hover { text-decoration:none; }
+    .selsel { outline:3px solid #C19D7D; border-radius:4px; }
+    .treenode.selsel { background:#E5BE9C; box-shadow:none; outline:none; }
+    .selector.selsel { background:#E5BE9C; box-shadow:none; outline:none; }
 
     /* source code view */
     .treedoc * { font:400 9pt 'roboto mono'; color:#383838; }
@@ -133,7 +136,7 @@
     .edits table td { padding:0px; margin:0px; border-style:none; padding:3px; font-size:10px; } 
     .edits table tr { padding:0px; margin:0px; border:1px solid #e0e0e0; }
     .edits table tr.selected { background:#f0f0f0; }
-    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; } 
+    .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; width:14px; text-align:center; } 
     .edits .edidx a { color:#b0b0b0; text-decoration:none; }
     .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; }
     
@@ -167,6 +170,18 @@
     .edits a.struct.delitm { border:2px solid #D62728; }
     .edits a.struct.delfld { border:2px solid #D62728; }
 
+    .edits a.evaluated.edit { border:2px dashed #E377C2; }
+    .edits a.evaluated.reorder { border:2px dashed #E377C2; }
+    .edits a.evaluated.retag { border:2px dashed #9467BD; }
+    .edits a.evaluated.updid { border:2px dashed #9467BD; }
+    .edits a.evaluated.addfield { border:2px dashed #2CA02C; }
+    .edits a.evaluated.append { border:2px dashed #2CA02C; }
+    .edits a.evaluated.copy { border:2px dashed #BCBD22; }
+    .edits a.evaluated.wraprec { border:2px dashed #1F77B4; }
+    .edits a.evaluated.wraplist { border:2px dashed #1F77B4; }
+    .edits a.evaluated.delitm { border:2px dashed #D62728; }
+    .edits a.evaluated.delfld { border:2px dashed #D62728; }
+
     /* basic styling for things in the document */
     input { padding:3px; }
     button { padding:3px 10px 3px 10px; }
@@ -174,6 +189,7 @@
     thead td { font-weight: bold; }
     
     .formula { outline:solid 2px #a4d8ff; padding:0px 2px; margin:0px 2px }  
+    .formula .formula { outline:none; padding:0px; margin:0px; }  
     /*
     x-hole { border:4px solid #82f7ad; margin:2px; padding:2px; display:inline-block;}
     x-match {  display:inline-block; }
@@ -192,25 +208,29 @@
     .chapter-doc .doc { background: #faf8f2; border: 1px solid #e2d9c5; border-radius:10px; padding-left:20px; padding-top:20px; padding-right:20px; margin-top:10px; }
     .chapter-doc .doc h1 { font-family:'Newsreader', serif; font-size:22pt; color:#2c2416; margin:0 0 8px 16px; letter-spacing:0.01em; font-weight:500; padding-top:8px; }
     .chapter-doc .doc h2 { font-family:'Newsreader', serif; font-size:18pt; color:#7a6a50; margin:0 0 18px 16px; padding-bottom:10px; }
-    .chapter-doc .doc table { border-collapse:collapse; min-width:400px; margin-left:16px; }
+    .chapter-doc .doc table { border-collapse:collapse; min-width:400px; margin-left:16px; margin-bottom:40px; }
     .chapter-doc .doc thead td { border:none; font-family:Inter, sans-serif; font-weight:600; color:#9a8a70; border-bottom:2px solid #e2d9c5; padding:4px 16px 4px 0px; text-transform:uppercase; font-size:13px; letter-spacing:0.05em; }    
-    .chapter-doc .doc tbody td { border:none; font-family:'Newsreader', serif; padding:8px 16px 8px 0px; border-bottom: 1px solid #ede8de; color: #2c2416; }        
+    .chapter-doc .doc tbody td { border:none; font-family:'Newsreader', serif; padding:6px 16px 6px 0px; border-bottom: 1px solid #ede8de; color: #2c2416; }        
     .chapter-doc .doc li { font-family:'Newsreader', serif; color: #2c2416; }        
     .chapter-doc .doc tbody td:last-child { color: #7a6a50; }
+    .chapter-doc .doc #budget x-prim-str { color: #7a6a50; }
+    .chapter-doc .doc #budget x-prim-num { font-weight:500; }
     .chapter-doc .doc tbody tr:last-child td { border-bottom: none; }    
 
-    #chapter2 .doc { border: 1px solid #dbdbdb; border-radius:10px; background:#f8f8f8; margin-top:10px; padding:10px 10px 50px 10px }
-    #chapter2 .doc h1 { font-size:30pt; font-family:'Roboto'; font-weight:300; color:#b83f45; text-align:center; max-width:auto;  }
-    #chapter2 .doc form { width:400px; margin:10px auto; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; }
-    #chapter2 .doc form input { width:340px; border-style:none; font-size:14pt; font-weight:200; font-family:'Roboto';  }
-    #chapter2 .doc button { height:25px; width:50px; border-radius:0px; border-style:none; background:#b83f45; color:white; margin:4px 0px; font-weight:400; font-family:'Roboto'; }
-    #chapter2 .doc .treedoc { width:400px; margin:20px auto; }
-    #chapter2 .doc ul { width:400px; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; margin:20px auto; padding:0px; }
-    #chapter2 .doc ul li { font-size: 14pt; font-weight:200; font-family:'Roboto'; list-style-type: none; margin:4px 0px 4px 0px; padding:0px; }
-    #chapter2 .doc ul li input { margin:8px; float:left; }
-    #chapter2 .doc ul li:has(input:checked) { color:#c0c0c0; text-decoration:line-through; }
-    #chapter2 .doc ul li input:checked { color:#c0c0c0; opacity:0.5; }
-
+    .chapter-app .doc { border: 1px solid #dbdbdb; border-radius:10px; background:#f8f8f8; margin-top:10px; padding:10px 10px 50px 10px }
+    .chapter-app .doc h1 { font-size:30pt; font-family:'Roboto'; font-weight:300; color:#b83f45; text-align:center; max-width:auto;  }
+    .chapter-app .doc form { width:400px; margin:10px auto; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; }
+    .chapter-app .doc form input { width:340px; border-style:none; font-size:14pt; font-weight:200; font-family:'Roboto';  }
+    .chapter-app .doc button { height:25px; width:50px; border-radius:0px; border-style:none; background:#b83f45; color:white; margin:4px 0px; font-weight:400; font-family:'Roboto'; }
+    .chapter-app .doc .treedoc { width:400px; margin:20px auto; }
+    .chapter-app .doc ul { width:400px; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; margin:20px auto; padding:0px; }
+    .chapter-app .doc ul li { font-size: 14pt; font-weight:200; font-family:'Roboto'; list-style-type: none; margin:4px 0px 4px 0px; padding:0px; }
+    .chapter-app .doc ul li input { margin:8px; float:left; }
+    .chapter-app .doc ul li:has(input:checked) { color:#c0c0c0; text-decoration:line-through; }
+    .chapter-app .doc ul li input:checked { color:#c0c0c0; opacity:0.5; }
+    #chapter5 .doc p { width:240px; margin:20px auto; background:white; border:solid 1px #d0d0d0; box-shadow:0px 5px 8px 8px #e0e0e0; padding:5px;  }
+    #chapter5 .doc { text-align:center; }
+    #chapter5 .doc button { width:110px; padding:6px 0px; margin:0px 10px; font-size:11pt; height:30px; }
 </style>
 
 </head>
@@ -388,7 +408,7 @@
   <!---                                       CHAPTER 2                                          -->
   <!-- ========================================================================================= -->
 
-  <div class="chapter" id="chapter2">
+  <div class="chapter chapter-app" id="chapter2">
   <div class="sidebyside">
   <section>
     <h2><strong>Chapter 2:</strong> Building a todo list app</h2>
@@ -459,18 +479,16 @@
     </div>
     <div id="chapter2-use-it" data-speed="1">  
       <h3><strong>Step 5:</strong> Adding more todo items</h3>
-      <p>Now, what if we use the saved interaction to add a new item to the list? 
-        If you replay the demo, you'll see that it is added with the label and
-        checkbox!</p>
-      <p>Denicek remembers the point in history when the interaction was recorded.
-        This is the hash <em>c45b2fc4</em> in the history panel &mdash; click on it to go back in time.
+      <p>If we add a new item using the saved interactions, you'll see that a new item is added with 
+        the label and checkbox! To do this, Denicek remembers when the interaction was recorded
+        (the hash <em>c45b2fc4</em> in the history panel).
       </p>
-      <p>When replaying edits, Denicek does not directly add them to the history. Instead,
-        it creates a history fork with the replayed edits, branching off from the 
+      <p>When replaying edits, Denicek creates a history fork with the replayed edits, branching off from the 
         point when they were recorded. The histories are then merged, which transforms the
         saved edits. In this case, the transformation adds the label and the done checkbox.</p>
       <img src="essay/mergeba.png" style="max-width:80%;margin:auto;display:block;width:300px;">
-      
+      <p>When you mark items as done (or not done) using the checkbox, this again creates new
+        edits that add or remove the <code>@checked</code> field of the checkbox.</p>
       <p>In Denicek, merging is a central operation that is behind many of its capabilities.
         Programming by demonstration is one example. In <a href="#chapter3">chapter 3</a>,
         we look at collaborative editing, which is another one.</p>
@@ -582,6 +600,151 @@
       </p>
       <p>Denicek also supports formulas. In <a href="#chapter4">chapter 4</a>, we will use them
         to calculate the budget for our conference.</p>
+    </div>
+  </section>
+  </div>
+  </div>
+
+  
+  <!-- ========================================================================================= -->
+  <!---                                       CHAPTER 4                                          -->
+  <!-- ========================================================================================= -->
+
+  <div class="chapter chapter-doc" id="chapter4">
+  <div class="sidebyside">
+  <section>
+    <h2><strong>Chapter 4:</strong> Calculating conference budget</h2>
+    <div id="chapter4-demo" class="demo" data-file="essay/budget.json"></div>
+  </section>
+  <section class="comment"> 
+    <div id="chapter4-start" data-speed="2">
+      <h3><strong>Step 1:</strong> Adding budget calculation</h3>
+      <p>Denicek documents can contain formulas similar to those in spreadsheets.
+        Formulas are just document nodes with a special tag name (<code>x-formula</code>).
+        They are created in the same way as other nodes and can refer to other elements
+        in the document using selectors such as <code>/speakers</code>.        
+      </p>
+      <p>To calculate our sample conference budget, we add a budget section to our document.
+        The travel per speaker is a numerical field. Number of speakers is computed
+        using a formula <code>count(/speakers)</code>, which counts the number of 
+        elements of a list and the total cost is the cost multiplied by the count.
+      </p>
+      <p>Denicek does not (yet?) have a nice formula editor, so we need to manually construct
+        the underlying representation using references to other document nodes and 
+        special <code>$builtins</code> operation names:</p>
+        <pre>&lt;x-formula&gt;
+  &lt;x-reference id="op"&gt;/$builtins/mul&lt;/x-reference&gt;
+  &lt;x-reference id="left"&gt;/budget/travel/value&lt;/x-reference&gt;
+  &lt;x-reference id="right"&gt;/budget/count/value&lt;/x-reference&gt;
+&lt;/x-formula&gt;</pre>
+        <p>Locate the formula in the document and use <kbd>Alt</kbd>+<kbd>U</kbd> to see the source code!</p>
+    </div>
+    <div id="chapter4-eval" data-speed="1">
+      <h3><strong>Step 2:</strong> Formula evaluation</h3>
+      <p>You can evaluate formulas using <kbd>Alt</kbd>+<kbd>E</kbd>. Formula evaluation
+        uses the same mechanism as everything else in Denicek &mdash; edit history!</p>
+      <p>
+        When you evaluate a formula, the evaluation engine generates edits that 
+        attach result to the formula node. This is done step-by-step and so, for example, 
+        evaluating <code>count(/speakers)</code> first replaces the reference with the 
+        target element node using a <code>copy</code> edit and then replaces the formula with 
+        the result. If you know programming language theory, this may remind you of 
+        small-step operational semantics.</p>
+      <p>The evaluated edits have dashed borders in the edit history.
+        They are special in that Denicek always keeps them on top of the history.
+        If we make an edit, like changing the travel per speaker to €2000, Denicek will
+        add the new edit just before evaluated edits and use merge to reconcile the 
+        evaluated edits with the new manual edit. If the edits conflict, the evaluated
+        edits are removed.</p>
+      <p>After running the demo, there are only 5 evaluated edits. Changing the travel of speaker 
+        invalidated the total costs, but not the number of speakers. This way, Denicek automatically
+        supports <em>incremental recomputation</em>! Hit <kbd>Alt</kbd>+<kbd>E</kbd>
+        to compute the new total cost.</p>
+    </div>
+    <div id="chapter4-provenance" data-speed="1">
+      <h3><strong>Step 3:</strong> Tracking provenance of results</h3>
+      <p>When evaluating formulas, Denicek wraps the original <code>x-formula</code> element in an 
+        element named <code>x-evaluated</code> with two fields. The <code>formula</code> field stores the original
+        formula and <code>result</code> contains the result. This is not displayed in the
+        final document, but you can see it in the source view by using <kbd>Alt</kbd>+<kbd>U</kbd>.
+      </p>
+      <p>The fact that a Denicek document node representing an (evaluated) formula still
+        contains the original formula makes it easy to find out what other nodes in the document
+        the result depends on. This works even for transitive references &mdash; because
+        formulas are evaluated step-by-step, the formula for total cost contains a copy of 
+        the formula that counted the number of speakers.</p>
+      <p>You can see what an evaluated value depends on by navigating to the value in the
+        document and toggling the provenance view using <kbd>Alt</kbd>+<kbd>P</kbd>.
+      </p>
+    </div>
+    <div id="chapter4-merge-add" data-speed="1">
+      <h3><strong>Step 4:</strong> Merging concurrent document edits</h3>
+      <p>Formula evaluation also works well with concurrent document editing.
+        In <a href="#chapter3">chapter 3</a>, we looked at a scenario where 
+        Alice adds a new speaker, while Bob refactors the speaker list into a table.</p>
+      <p>This step shows what happens when we merge Alice's changes into the document.
+        Edits that add a speaker conflict with the edits that count the number of speakers
+        and so those evaluated edits are removed. Consequently, the edits that compute the
+        total are also removed. The only three independent evaluated edits are those that
+        copy the value €2000 into the first argument of the multiplication.
+      </p>
+      <p>Play the demo to see how the individual edits affect the document. You can also
+        reevaluate the document using <kbd>Alt</kbd>+<kbd>E</kbd>.</p>
+    </div>
+    <div id="chapter4-merge-table" data-speed="1">
+      <h3><strong>Step 5:</strong> Merging structural document edits</h3>
+      <p>A more interesting mergeing scenario is when we take the document with the newly added
+        budget calculation and merge it with Bob's changes that transform the list of speakers 
+        into a table.
+      </p>
+      <p>Denicek supports this scenario too. It knows that the <code>wraprec</code> operation,
+        applied to the list of speakers, wrapped it as a field named <code>body</code> of the
+        newly created <code>&lt;table&gt;</code> element. Because this is an edit that
+        updates references in the document (solid border in edit history view), Denicek
+        automatically transforms the reference <code>/speakers</code> to 
+        <code>/speakers/body</code> and the formula continues working after the refactoring!</p>
+      <p>If you play the demo, it jumps to the relevant edit and you can see the 
+        formula for number of speakers changing. </p>
+      <p>You've already seen programming by demonstration in <a href="#chapter2">chapter 2</a>
+        and this demo showed formulas, incremental recomputation and handling of schema change.
+        The <a href="#chapter5">next chapter</a> combines formulas with programming by demonstration
+        to build a simple counter.</p>
+    </div>
+  </section>
+  </div>
+  </div>
+
+  
+  <!-- ========================================================================================= -->
+  <!---                                       CHAPTER 4                                          -->
+  <!-- ========================================================================================= -->
+
+  <div class="chapter chapter-app" id="chapter5">
+  <div class="sidebyside">
+  <section>
+    <h2><strong>Chapter 5:</strong> Implementing a counter</h2>
+    <div id="chapter5-demo" class="demo" data-file="essay/counter.json"></div>
+  </section>
+  <section class="comment"> 
+    <div id="chapter5-start" data-speed="2">
+      <h3><strong>Step 1:</strong> x</h3>
+      xx
+    </div>
+    <div id="chapter5-increment" data-speed="1">
+      <h3><strong>Step 1:</strong> x</h3>
+      xx
+    </div>
+    <div id="chapter5-handler" data-speed="1">
+      <h3><strong>Step 1:</strong> x</h3>
+      xx
+    </div>
+    <div id="chapter5-decrement" data-speed="1">
+      <h3><strong>Step 1:</strong> x</h3>
+      xx
+    </div>
+    <div id="chapter5-done" data-speed="1">
+      <h3><strong>Step 1:</strong> x</h3>
+      xx
     </div>
   </section>
   </div>
