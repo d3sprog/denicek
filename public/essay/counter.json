@@ -2,8 +2,7 @@
     { "name":"start", "before": ["init"], "events":["start"] },
     { "name":"increment", "before": ["init","start"], "events":["inc"] },
     { "name":"handler", "before": ["init","start","inc"], "events":["recinc"] },
-    { "name":"decrement", "before": ["init","start","inc","recinc"], "events":["dec"] },
-    { "name":"done", "before": ["init","start","inc","recinc","dec"], "events":[] }
+    { "name":"decrement", "before": ["init","start","inc","recinc"], "events":["dec"] }
   ],
   "events": [
     { "name": "init", "events": [

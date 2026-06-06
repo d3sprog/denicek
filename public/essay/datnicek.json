@@ -1,0 +1,47 @@
+{ "steps": [
+    { "name":"start", "before": ["init"], "events":["code"] }
+  ],
+  "events": [
+    { "name": "init", "events": 
+    [ {"kind":"applyEdits","groupLabel":"add cell cell-d380eca8","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-d380eca8"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]}]},
+      {"kind":"selectCell","cell":"cell-d380eca8"},
+      {"kind":"applyEdits","groupLabel":"edit text","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-d380eca8"]]}],["field","ln-f93a4b7f"],["node",""],["pred","ln-00000000"]]},
+      {"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-d380eca8"]]}],["field","ln-00000000"],["node","# Analysis of Eurostat aviation accidents"],["succ","ln-f93a4b7f"]]}]},
+      {"kind":"editParagraph","cell":"cell-d380eca8","id":"ln-f93a4b7f"},
+      {"kind":"applyEdits","groupLabel":"edit text","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-d380eca8"]]}],["field","ln-48a1aa0"],["node",""],["pred","ln-f93a4b7f"]]},
+      {"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-d380eca8"]]}],["field","ln-f93a4b7f"],["node","Datnicek is a simple data science notebook that lets analysts combine text, code with visual outputs and interactive data wrangling grid based on programming-by-demonstration."],["pred","ln-00000000"],["succ","ln-48a1aa0"]]}]},
+      {"kind":"editParagraph","cell":"cell-d380eca8","id":"ln-48a1aa0"},
+      {"kind":"applyEdits","groupLabel":"add cell cell-f6d53e89","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-f6d53e89"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-d380eca8"]]}]},
+      {"kind":"selectCell","cell":"cell-d380eca8"}]
+    },
+    { "name": "code", "events": 
+    [ {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"toggleMenu","path":["cell-f6d53e89"]},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"applyEdits","groupLabel":"add formula to (x) => x","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-f6d53e89"]]}],["field","unnamed-61a47102"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]}]},
+      {"kind":"editValue","selector":null},
+      {"kind":"toggleMenu","path":null},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"toggleMenu","path":["cell-f6d53e89","unnamed-61a47102"]},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"applyEdits","groupLabel":"select completion","edits":[{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-f6d53e89"],["1","unnamed-61a47102"]]}],["refs","keep"]]},
+      {"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-f6d53e89"],["1","unnamed-61a47102"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]}]},
+      {"kind":"editValue","selector":null},
+      {"kind":"toggleMenu","path":null},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"toggleMenu","path":["cell-f6d53e89","unnamed-61a47102"]},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"applyEdits","groupLabel":"select completion","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-f6d53e89"],["1","unnamed-61a47102"]]}],["field","file"],["node",""]]}]},
+      {"kind":"editValue","selector":["cell-f6d53e89","unnamed-61a47102","file"]},
+      {"kind":"toggleMenu","path":null},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"selectCell","cell":"cell-f6d53e89"},
+      {"kind":"applyEdits","groupLabel":"update value","edits":[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-f6d53e89"],["1","unnamed-61a47102"]]}],["field","file"],["node","eurostat/avia.tsv"]]}]},
+      {"kind":"editValue","selector":null}]
+    }
+  ]
+}
+  

@@ -4,8 +4,8 @@ open Denicek.App
 open Denicek
 open Denicek.Html
 
-type ReplayEvent =
-  { Event : Webnicek.ApplicationEvent 
+type ReplayEvent<'AppEvent> =
+  { Event : 'AppEvent
     Timeout : int } 
 
 type ReplayState = 
@@ -13,29 +13,28 @@ type ReplayState =
     StepIndex : int
     EventIndex : int }
 
-type ReplayStep = 
+type ReplayStep<'AppEvent, 'AppState> = 
   { Name : string
-    InitialApplicationState : Webnicek.ApplicationState 
-    Events : ReplayEvent[] }
+    InitialApplicationState : 'AppState
+    Events : ReplayEvent<'AppEvent>[] }
 
-type DemoState = 
+type DemoState<'AppEvent, 'AppState> = 
   { DemoId : string
-    InitialApplicationState : Webnicek.ApplicationState 
-    ApplicationState : Webnicek.ApplicationState 
-    ReplaySteps : ReplayStep[]
+    InitialApplicationState : 'AppState 
+    ApplicationState : 'AppState
+    ReplaySteps : ReplayStep<'AppEvent, 'AppState>[]
     ReplayState : ReplayState }
 
-type DemoEvent = 
-  | ApplicationEvent of Webnicek.ApplicationEvent
+type DemoEvent<'AppEvent> = 
+  | ApplicationEvent of 'AppEvent
   | TogglePlay
   | PlayStep of bool
   | PreviousStep
   | NextStep
   | ResetDemo
 
-
 // --------------------------------------------------------------------------------------
-// Rendering essay 
+// UNIVERSAL - Rendering essay 
 // --------------------------------------------------------------------------------------
 
 module WebDemo = 
@@ -99,32 +98,37 @@ module WebDemo =
         yield renderStep state step i s.Name
     ]
 
-  let render id triggerDemo stateDemo = 
-    let trigger = ApplicationEvent >> triggerDemo
-    let state = stateDemo.ApplicationState
+  let webnicekRender trigger (state:Webnicek.ApplicationState) = [
+    h?div [ "class" => "main" ] [
+      yield h?div [ "class" => "doc" ] [
+        let doc = state.DocumentState.CurrentDocument // TODO: Restore... Matcher.applyMatchers state.CurrentDocument 
+        yield Webnicek.Document.renderDocument state trigger doc
+      ]
+      yield! Webnicek.Commands.renderContext id state trigger
+      yield! Webnicek.History.renderHistory trigger state
+    ]
+    h?div [ "class" => "loc" ] [
+      yield h?label [] [ text "Selected" ]
+      yield h?i [] [ text "•" ] 
+      yield! Webnicek.View.renderLocationInfo state
+    ] ]
+
+  let datnicekRender trigger (state:Datnicek.State) =
+    [ Datnicek.render trigger state ]
+
+  let render appRender trigger state = 
     h?div [] [
-      renderStepper triggerDemo stateDemo
-      h?div [ "class" => "main" ] [
-        yield h?div [ "class" => "doc" ] [
-          let doc = state.DocumentState.CurrentDocument // TODO: Restore... Matcher.applyMatchers state.CurrentDocument 
-          yield Webnicek.Document.renderDocument state trigger doc
-        ]
-        yield! Webnicek.Commands.renderContext id state trigger
-        yield! Webnicek.History.renderHistory trigger state
-      ]
-      h?div [ "class" => "loc" ] [
-        yield h?label [] [ text "Selected" ]
-        yield h?i [] [ text "•" ] 
-        yield! Webnicek.View.renderLocationInfo state
-      ]
+      renderStepper trigger state
+      yield! appRender (ApplicationEvent >> trigger) state.ApplicationState
     ]
 
 // --------------------------------------------------------------------------------------
-// Update state on interaction
+// GENERIC - Update state on interaction
 // --------------------------------------------------------------------------------------
+
   open Fable.Core.JsInterop
 
-  let rec update appEvent (state:DemoState) trigger evt = 
+  let rec update appUpdate logAppEvent (state:DemoState<'AppEvent, 'AppState>) trigger evt = 
     let withRepl p s e st = { st with ReplayState = { Playing = p; StepIndex = s; EventIndex = e } }
     match evt with 
     | ResetDemo ->
@@ -149,28 +153,29 @@ module WebDemo =
           let speed = stepEl?dataset?speed
           let speed = match System.Double.TryParse(speed) with true, f -> f | _ -> 1.0
           if auto then Browser.Dom.window.setTimeout((fun () -> trigger (PlayStep true)), int (float es.[i].Timeout / speed)) |> ignore
-          update appEvent state trigger (ApplicationEvent es.[i].Event) |> withRepl auto step (i + 1)
+          update appUpdate logAppEvent state trigger (ApplicationEvent es.[i].Event) |> withRepl auto step (i + 1)
     | PlayStep _ -> state
         
     | TogglePlay when not state.ReplayState.Playing ->
         let step = state.ReplayState.StepIndex
         if step < state.ReplaySteps.Length then
           let state = state |> withRepl true state.ReplayState.StepIndex state.ReplayState.EventIndex
-          update appEvent state trigger (PlayStep true)
+          update appUpdate logAppEvent state trigger (PlayStep true)
         else state
     | TogglePlay -> 
         state |> withRepl false state.ReplayState.StepIndex state.ReplayState.EventIndex
 
     | ApplicationEvent evt ->
-        appEvent evt
-        let nst = Webnicek.update state.ApplicationState (ApplicationEvent >> trigger) evt
+        logAppEvent evt
+        let nst = appUpdate state.ApplicationState (ApplicationEvent >> trigger) evt
         { state with ApplicationState = nst }
 
 
 // --------------------------------------------------------------------------------------
-// Loading of replays from JSON
+// WEBNICEK - Loading of replays from JSON
 // --------------------------------------------------------------------------------------
-module Loader = 
+
+module WebnicekLoader = 
 
   type ReplayJsonStep = {
     name : string
@@ -197,7 +202,7 @@ module Loader =
     Array.scan (fun prev e -> Some { Event = e; Timeout = getTimeout prev e }) None
     >> Array.choose id
   
-  let loadDemo (id, url) : Async<string * ReplayStep[]> = async { 
+  let loadDemo (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
     let! demo = Webnicek.Loader.asyncRequest url
     let demo = Fable.Core.JS.JSON.parse(demo) |> unbox<ReplayJson>
     let eventsDb = dict [ for es in demo.events -> es.name, Webnicek.EventLogger.deserializeAppEvents es.events ]
@@ -221,29 +226,98 @@ module Loader =
     return id, demo.steps |> Array.map loadStep
   }
 
+  
+// --------------------------------------------------------------------------------------
+// DATNICEK - Loading of replays from JSON
+// --------------------------------------------------------------------------------------
+
+module DatnicekLoader = 
+
+  type ReplayJsonStep = {
+    name : string
+    //merge : {| ``base``:string[]; ``with``:string[] |}
+    before : string[]
+    events : string[] 
+  }
+  type ReplayJson = { 
+    steps : ReplayJsonStep[]
+    events : {| name:string; events:obj[] |}[] 
+  }
+
+  //let getTimeout prev evt =
+  //  match prev, evt with
+  //  | Some { Timeout = pt; Event = Webnicek.CommandEvent (Webnicek.TypeCommand _) }, 
+  //      Webnicek.CommandEvent (Webnicek.TypeCommand _) -> max (pt - 15) 20
+  //  | _, Webnicek.CommandEvent (Webnicek.TypeCommand _) -> 200
+  //  | Some { Timeout = pt; Event = Webnicek.ViewEvent (Webnicek.MoveCursor _) }, 
+  //      Webnicek.ViewEvent (Webnicek.MoveCursor _) -> max (pt - 15) 20
+  //  | _, Webnicek.ViewEvent (Webnicek.MoveCursor _) -> 200
+  //  | _ -> 600
+
+  let preprocessReplay = 
+    Array.scan (fun prev e -> Some { Event = e; Timeout = 600 (*getTimeout prev e*) }) None
+    >> Array.choose id
+  
+  let loadDemo (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
+    let! demo = Webnicek.Loader.asyncRequest url
+    let demo = Fable.Core.JS.JSON.parse(demo) |> unbox<ReplayJson>
+    let eventsDb = dict [ for es in demo.events -> es.name, Datnicek.EventLogger.deserializeEvents es.events ]
+    
+    let replayEvents groups = 
+      let initEdits = groups |> Array.collect (fun e -> eventsDb.[e]) 
+      let init = Datnicek.Loader.initial
+      initEdits |> Array.fold (fun state e -> Datnicek.update state ignore e) init
+
+    let loadStep (s:ReplayJsonStep) = 
+      let events = s.events |> Array.collect (fun e -> eventsDb.[e]) |> preprocessReplay
+      let state = 
+        //if unbox<obj> s.merge <> null then  
+        //  let baseState = replayEvents s.merge.``base`` 
+        //  let mergeState = replayEvents s.merge.``with`` 
+        //  Webnicek.update baseState ignore 
+        //    (Webnicek.DocumentEvent(Webnicek.MergeEdits(mergeState.DocumentState.DocumentEdits)))
+        //else
+          replayEvents s.before
+      { Name = s.name; Events = events; InitialApplicationState = state }
+    return id, demo.steps |> Array.map loadStep
+  }
 
   
 // --------------------------------------------------------------------------------------
-// Browser integrfation
+// WEBNICEK - Browser integrfation
 // --------------------------------------------------------------------------------------
+  
+module WebnicekDemos = 
+  open WebnicekLoader
   open Fable.Core.JsInterop
-    
-  let findDemos () =
-    let demos = Browser.Dom.document.getElementsByClassName("demo")
-    [ for i in 0 .. demos.length - 1 -> demos.[i].id.Replace("-demo", ""), demos.[i]?dataset?file ]
 
-  let startDemos appEvent =  async {
+  let findDemos () =
+    let demos = Browser.Dom.document.getElementsByClassName("webnicek-demo")
+    [ for i in 0 .. demos.length - 1 -> 
+      demos.[i].id.Replace("-demo", ""), demos.[i]?dataset?file ]
+
+  let loadData () = async { 
+    let data = [ "avia.csv"; "rail.csv" ]
+    let! csvs = [ for d in data -> Webnicek.Loader.asyncRequest $"/essay/{d}" ] |> Async.Parallel
+    return Map.ofSeq (Seq.zip data (Seq.map Webnicek.Loader.readCsvWithHeading csvs)) }
+
+  let startDemos logAppEvent = async {
+    let! dataTask = loadData() |> Async.StartChild
     let! demos = findDemos() |> List.map loadDemo |> Async.Parallel
+    let! data = dataTask
     let activations = System.Collections.Generic.Dictionary<_, _>()
     for demoId, demoSteps in demos do
       let repl = { Playing = false; StepIndex = 0; EventIndex = 0 }
       let initialStep = demoSteps |> Array.find (fun s -> s.Name = "start")
-      let initialAppState = initialStep.InitialApplicationState
+      let initialAppState = { initialStep.InitialApplicationState with DemoState.Data = data }
       let initial = 
         { ApplicationState = initialAppState; InitialApplicationState = initialAppState
           ReplaySteps = demoSteps; ReplayState = repl; DemoId = demoId }
       let id = (demoId + "-demo")
-      let trigger, _, getState = createVirtualDomApp id initial (WebDemo.render id) (WebDemo.update appEvent)
+      let trigger, _, getState = 
+        createVirtualDomApp id initial 
+          (WebDemo.render WebDemo.webnicekRender) 
+          (WebDemo.update Webnicek.update logAppEvent)
       let activate () = 
         Log.log "essay" $"Activating '{demoId}'"
         Webnicek.Loader.setupHandlers (ApplicationEvent >> trigger) (fun () -> getState().ApplicationState)
@@ -251,6 +325,54 @@ module Loader =
     return activations
   }
 
+// --------------------------------------------------------------------------------------
+// DATNICEK - Browser integrfation
+// --------------------------------------------------------------------------------------
+  
+module DatnicekDemos = 
+  open DatnicekLoader
+  open Fable.Core.JsInterop
+
+  let findDemos () =
+    let demos = Browser.Dom.document.getElementsByClassName("datnicek-demo")
+    [ for i in 0 .. demos.length - 1 -> 
+      demos.[i].id.Replace("-demo", ""), demos.[i]?dataset?file ]
+
+  let loadData () = async { 
+    let data = [ "eurostat/avia.tsv" ]
+    let! tsvs = [ for d in data -> Datnicek.Loader.asyncRequest $"/data/{d}" ] |> Async.Parallel
+    return Map.ofSeq (Seq.zip data (Seq.map Datnicek.Loader.readTsv tsvs)) }
+
+  let startDemos logAppEvent = async {
+    let! dataTask = loadData() |> Async.StartChild
+    let! demos = findDemos() |> List.map loadDemo |> Async.Parallel
+    let! data = dataTask
+    let activations = System.Collections.Generic.Dictionary<_, _>()
+    for demoId, demoSteps in demos do
+      let repl = { Playing = false; StepIndex = 0; EventIndex = 0 }
+      let initialStep = demoSteps |> Array.find (fun s -> s.Name = "start")
+      let initialAppState = { initialStep.InitialApplicationState with DataFiles = data }
+      let initial = 
+        { ApplicationState = initialAppState; InitialApplicationState = initialAppState
+          ReplaySteps = demoSteps; ReplayState = repl; DemoId = demoId }
+      let id = (demoId + "-demo")
+      let trigger, _, getState = 
+        createVirtualDomApp id initial 
+          (WebDemo.render WebDemo.datnicekRender) 
+          (WebDemo.update Datnicek.update logAppEvent)
+      let activate () = 
+        Log.log "essay" $"Activating '{demoId}'"
+        Datnicek.Loader.setupHandlers (ApplicationEvent >> trigger) 
+      activations.Add(demoId, activate)
+    return activations
+  }
+
+// --------------------------------------------------------------------------------------
+// WEBNICEK - Browser integrfation
+// --------------------------------------------------------------------------------------
+
+module Loader = 
+  open Fable.Core.JsInterop
 
   let startWithHandlerAndCont cont op = 
     let op = async {
@@ -258,7 +380,7 @@ module Loader =
       with e -> Browser.Dom.console.error(e); return! raise e }
     Async.StartWithContinuations(op, cont, ignore, ignore)
 
-  let displayChapter (activations:ref<System.Collections.Generic.Dictionary<_, _>>) =
+  let displayChapter (activations:System.Collections.Generic.Dictionary<_, _>) =
     let hash = Browser.Dom.window.location.hash
     let current = if hash <> null && hash.StartsWith("#chapter") then hash.Substring(1) else "chapter1"
     Log.log "essay" $"Display chapter '{current}'"
@@ -268,22 +390,30 @@ module Loader =
       Browser.Dom.document.getElementById(chaps.[i].id+"-link").className <- ""
     Browser.Dom.document.getElementById(current).setAttribute("style", "display:block;")
     Browser.Dom.document.getElementById(current+"-link").className <- "current"
-    activations.Value.[current] ()
+    if activations.ContainsKey current then activations.[current] ()
+    else Log.log "essay" $"Could not activate chapter '{current}'"
 
   let events = ResizeArray<obj>() 
-
-  let logAppEvent e = 
+  let logWebnicekEvent e = 
     let ejs = Webnicek.EventLogger.serializeAppEvent e
+    events.Add(ejs)
+  let logDatnicekEvent e = 
+    let ejs = Datnicek.EventLogger.serializeEvent e
     events.Add(ejs)
 
   Browser.Dom.window?resetEventLog <- fun () -> events.Clear()
   Browser.Dom.window?getEventLog <- fun () -> Fable.Core.JS.JSON.stringify(events)
 
   let start () =
-    let activations = ref (System.Collections.Generic.Dictionary<_, _>())
+    let activations = System.Collections.Generic.Dictionary<_, _>()
     Browser.Dom.window.addEventListener("hashchange", fun e -> 
       Log.log "essay" $"Hash changed to '{Browser.Dom.window.location.hash}'." 
       displayChapter activations)
-    startDemos logAppEvent  |> startWithHandlerAndCont (fun a -> 
-      Log.log "essay" $"Initialized ${List.ofSeq a.Keys}"
-      activations.Value <- a; displayChapter activations)
+    WebnicekDemos.startDemos logWebnicekEvent  |> startWithHandlerAndCont (fun a -> 
+      Log.log "essay" $"Initialized webnicek {List.ofSeq a.Keys}"
+      for kv in a do activations.Add(kv.Key, kv.Value)
+      displayChapter activations)
+    DatnicekDemos.startDemos logDatnicekEvent  |> startWithHandlerAndCont (fun a -> 
+      Log.log "essay" $"Initialized datnicek {List.ofSeq a.Keys}"
+      for kv in a do activations.Add(kv.Key, kv.Value)
+      displayChapter activations)

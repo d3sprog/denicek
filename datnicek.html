@@ -14,7 +14,7 @@
     a, a:visited, a:active { color:#1F77B4; }
 
     #main { display:flex; }
-    #notebook { flex:1; padding:20px; max-width:1200px; padding-bottom:800px;  }
+    .notebook { flex:1; padding:20px; max-width:1200px; padding-bottom:800px;  }
     #history { flex:0 0 40%; position:sticky; top:0px; align-self:flex-start; }    
 
     #history { font:500 8pt Quicksand, sans-serif; height:100vh; overflow:scroll; padding:20px }
@@ -22,22 +22,22 @@
     #history h3 { color:#808080; }
     #history ol li { margin:4px 0px 6px 0px; padding:0px; padding-left:10px; color:#808080; }
 
-    #notebook { margin:0px auto; }
-    #notebook .cell { background:white; margin:15px 0px 15px 0px; border-left:5px solid #f0f0f0; border-right:5px solid #f0f0f0; padding:8px 12px; }
-    #notebook .cell-text { border-color:#92D1C6; }
-    #notebook .cell-code { border-color:#F9B56B; }
-    #notebook .cell-grid { border-color:#BDB9D7; }
-    #notebook .links { text-align:right; margin-right:15px; }
-    #notebook .cell .title { font-size:9pt; font-weight:700; margin-bottom:12px; }
-    #notebook .cell .links { margin-right:0px;}
-    #notebook .links a { font-weight:700; font-size:9pt; text-decoration:none; margin-left:15px; color:#a0a0a0; }
-    #notebook .links a:hover { opacity:0.75; }
-    #notebook .links a i, #notebook .title i { margin-right:4px; font-size:8pt;}
-    #notebook .cell-text .links a, #notebook .cell-text .title { color:#92D1C6; }
-    #notebook .cell-code .links a, #notebook .cell-code .title { color:#F9B56B; }
-    #notebook .cell-grid .links a, #notebook .cell-grid .title { color:#BDB9D7; }
-    #notebook .cell .actions { position:relative; top:20px; text-align:left; display:inline-block; }
-    #notebook .cell .actions a { margin-left:0px; }
+    .notebook { margin:0px auto; }
+    .notebook .cell { background:white; margin:15px 0px 15px 0px; border-left:5px solid #f0f0f0; border-right:5px solid #f0f0f0; padding:8px 12px; }
+    .notebook .cell-text { border-color:#92D1C6; }
+    .notebook .cell-code { border-color:#F9B56B; }
+    .notebook .cell-grid { border-color:#BDB9D7; }
+    .notebook .links { text-align:right; margin-right:15px; }
+    .notebook .cell .title { font-size:9pt; font-weight:700; margin-bottom:12px; }
+    .notebook .cell .links { margin-right:0px;}
+    .notebook .links a { font-weight:700; font-size:9pt; text-decoration:none; margin-left:15px; color:#a0a0a0; }
+    .notebook .links a:hover { opacity:0.75; }
+    .notebook .links a i, .notebook .title i { margin-right:4px; font-size:8pt;}
+    .notebook .cell-text .links a, .notebook .cell-text .title { color:#92D1C6; }
+    .notebook .cell-code .links a, .notebook .cell-code .title { color:#F9B56B; }
+    .notebook .cell-grid .links a, .notebook .cell-grid .title { color:#BDB9D7; }
+    .notebook .cell .actions { position:relative; top:20px; text-align:left; display:inline-block; }
+    .notebook .cell .actions a { margin-left:0px; }
 
     /* source code view */
     .treedoc * { font:400 8pt 'roboto mono',monospace; color:#383838; }

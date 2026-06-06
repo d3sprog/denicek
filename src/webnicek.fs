@@ -1620,6 +1620,23 @@ module Loader =
       Record("tr", fields) ) |> List.ofSeq
     List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
 
+  let readCsvWithHeading (s:string) = 
+    let lines = s.Replace("\r", "").Split('\n')
+    let cols = lines.[0].Split(',')
+    let rows = lines.[1..] |> Seq.map (fun l ->
+      let data = l.Split(',') |> Array.map (fun s -> 
+        Record("td", OrdList.ofList [ "value", Primitive(readPrimitive s) ]))
+      let fields = Seq.zip cols data |> List.ofSeq |> OrdList.ofList
+      Record("tr", fields) ) |> List.ofSeq
+    let heads = [ for c in cols -> c, Record("th", OrdList.ofList [ "value", Primitive(readPrimitive c) ]) ]
+    Record("div", OrdList.ofList [
+      "@class", Primitive(String "table-box")
+      "table", Record("table", OrdList.ofList [
+        "head", Record("thead", OrdList.ofList [ "h", Record("tr", OrdList.ofList heads) ])
+        "data", List("tbody", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
+      ])
+    ])
+
   let loadData trigger = async { 
     let data = [ "avia.csv"; "rail.csv" ]
     let! csvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
