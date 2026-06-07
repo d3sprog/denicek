@@ -202,14 +202,14 @@ module WebnicekLoader =
     Array.scan (fun prev e -> Some { Event = e; Timeout = getTimeout prev e }) None
     >> Array.choose id
   
-  let loadDemo (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
+  let loadDemo data (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
     let! demo = Webnicek.Loader.asyncRequest url
     let demo = Fable.Core.JS.JSON.parse(demo) |> unbox<ReplayJson>
     let eventsDb = dict [ for es in demo.events -> es.name, Webnicek.EventLogger.deserializeAppEvents es.events ]
     
     let replayEvents groups = 
       let initEdits = groups |> Array.collect (fun e -> eventsDb.[e]) 
-      let init = Webnicek.Loader.fromOperationsList []
+      let init = {Webnicek.Loader.fromOperationsList [] with DemoState.Data = data }
       initEdits |> Array.fold (fun state e -> Webnicek.update state ignore e) init
 
     let loadStep (s:ReplayJsonStep) = 
@@ -244,28 +244,24 @@ module DatnicekLoader =
     events : {| name:string; events:obj[] |}[] 
   }
 
-  //let getTimeout prev evt =
-  //  match prev, evt with
-  //  | Some { Timeout = pt; Event = Webnicek.CommandEvent (Webnicek.TypeCommand _) }, 
-  //      Webnicek.CommandEvent (Webnicek.TypeCommand _) -> max (pt - 15) 20
-  //  | _, Webnicek.CommandEvent (Webnicek.TypeCommand _) -> 200
-  //  | Some { Timeout = pt; Event = Webnicek.ViewEvent (Webnicek.MoveCursor _) }, 
-  //      Webnicek.ViewEvent (Webnicek.MoveCursor _) -> max (pt - 15) 20
-  //  | _, Webnicek.ViewEvent (Webnicek.MoveCursor _) -> 200
-  //  | _ -> 600
+  let getTimeout evt =
+    match evt with
+    | Datnicek.SelectCell _ -> 1
+    | Datnicek.GridRecommend(_, _, recs) when recs.Length = 0 -> 1
+    | Datnicek.SelectCell _ 
+    | Datnicek.GridRecommend _ -> 600
+    | _ -> 300
 
-  let preprocessReplay = 
-    Array.scan (fun prev e -> Some { Event = e; Timeout = 600 (*getTimeout prev e*) }) None
-    >> Array.choose id
+  let preprocessReplay = Array.map (fun e -> { Event = e; Timeout = getTimeout e }) 
   
-  let loadDemo (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
+  let loadDemo data (id, url) : Async<string * ReplayStep<_, _>[]> = async { 
     let! demo = Webnicek.Loader.asyncRequest url
     let demo = Fable.Core.JS.JSON.parse(demo) |> unbox<ReplayJson>
     let eventsDb = dict [ for es in demo.events -> es.name, Datnicek.EventLogger.deserializeEvents es.events ]
     
     let replayEvents groups = 
       let initEdits = groups |> Array.collect (fun e -> eventsDb.[e]) 
-      let init = Datnicek.Loader.initial
+      let init = { Datnicek.Loader.initialFromJson "[]" with DataFiles = data }
       initEdits |> Array.fold (fun state e -> Datnicek.update state ignore e) init
 
     let loadStep (s:ReplayJsonStep) = 
@@ -302,14 +298,13 @@ module WebnicekDemos =
     return Map.ofSeq (Seq.zip data (Seq.map Webnicek.Loader.readCsvWithHeading csvs)) }
 
   let startDemos logAppEvent = async {
-    let! dataTask = loadData() |> Async.StartChild
-    let! demos = findDemos() |> List.map loadDemo |> Async.Parallel
-    let! data = dataTask
+    let! data = loadData()
+    let! demos = findDemos() |> List.map (loadDemo data) |> Async.Parallel
     let activations = System.Collections.Generic.Dictionary<_, _>()
     for demoId, demoSteps in demos do
       let repl = { Playing = false; StepIndex = 0; EventIndex = 0 }
       let initialStep = demoSteps |> Array.find (fun s -> s.Name = "start")
-      let initialAppState = { initialStep.InitialApplicationState with DemoState.Data = data }
+      let initialAppState = initialStep.InitialApplicationState
       let initial = 
         { ApplicationState = initialAppState; InitialApplicationState = initialAppState
           ReplaySteps = demoSteps; ReplayState = repl; DemoId = demoId }
@@ -344,14 +339,15 @@ module DatnicekDemos =
     return Map.ofSeq (Seq.zip data (Seq.map Datnicek.Loader.readTsv tsvs)) }
 
   let startDemos logAppEvent = async {
-    let! dataTask = loadData() |> Async.StartChild
-    let! demos = findDemos() |> List.map loadDemo |> Async.Parallel
-    let! data = dataTask
+    let! data = loadData() 
+    let! demos = findDemos() |> List.map (loadDemo data) |> Async.Parallel
+    let demos = demos |> Array.map (fun (k, v) -> 
+      k, v |> Array.map (fun s -> { s with InitialApplicationState.DataFiles = data }))
     let activations = System.Collections.Generic.Dictionary<_, _>()
     for demoId, demoSteps in demos do
       let repl = { Playing = false; StepIndex = 0; EventIndex = 0 }
       let initialStep = demoSteps |> Array.find (fun s -> s.Name = "start")
-      let initialAppState = { initialStep.InitialApplicationState with DataFiles = data }
+      let initialAppState = initialStep.InitialApplicationState 
       let initial = 
         { ApplicationState = initialAppState; InitialApplicationState = initialAppState
           ReplaySteps = demoSteps; ReplayState = repl; DemoId = demoId }

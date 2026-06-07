@@ -28,6 +28,7 @@
     p.info .sep { margin:0px 5px; }
     h1 { font:26pt 'Merriweather', serif; color:#071C4F; font-weight:400; max-width:800px; }
     h2 { font:20pt 'Merriweather', serif; color:#071C4F; font-weight:400; }
+    .chapter h2 { margin-bottom:40px; }
     h3 { font:16pt 'Merriweather', serif; color:#071C4F; font-weight:400; }
     h1 strong { font-weight:900; }
     ul.icons { list-style-type:none; padding:0px; }
@@ -79,6 +80,7 @@
 
     /* DENICEK */
     .main { background:white; display:flex; flex-direction:row; align-items:flex-start; width:100%; max-height:520px; margin:0px 0px 20px 0px; }
+    .notebook { flex:20; padding:2px 20px 200px 2px; }
     .doc { flex:20; padding:2px 20px 200px 2px; font-family:'Merriweather'; line-height:1.5em; max-height:300px; overflow-y:auto; }
     .edits { font:300 10px Inter, sans-serif; left:70vw; overflow-y:auto; padding:0px 0px 0px 10px; max-height:500px; }
     .loc { font:300 12px Inter, sans-serif; color:#909090; padding:6px 8px; height:20px; overflow:hidden; margin:10px 0px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
@@ -138,7 +140,7 @@
     .edits table tr.selected { background:#f0f0f0; }
     .edits .edidx { text-align:center; font-weight:bold; color:#d0d0d0; width:14px; text-align:center; } 
     .edits .edidx a { color:#b0b0b0; text-decoration:none; }
-    .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; }
+    .edits .edname a { border-radius:2px; width:calc(100% - 15px); display:inline-block; padding:0px 6px; text-align:center; font-weight:bold; text-decoration: none; cursor:default; }
     
     .edits .edref a { color:#a0a0a0; font-weight:500; text-decoration:none; width:100px; display:inline-block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis;}
     .edits .edref a.selsel { outline-width:0px; color:#8C564B; font-weight:600; background:inherit; }
@@ -253,8 +255,13 @@
     #chapter6 .edits { max-height:800px; }
     #chapter6 .ctx { z-index:3; }
     
+    .chapter-nb section { background:#F2F9F6;} 
+    .chapter-nb section.comment { background:white; align-self:start; padding-bottom:50px; } 
+    .chapter-nb .edits { max-height:100%; }
+    .chapter-nb .treedoc { max-height:600px; overflow-y:auto; }
+    .chapter-nb .main { max-height:none; background:#F2F9F6; }
     .chapter-nb .notebook * { margin:0px; padding:0px; }
-    .chapter-nb .notebook { border: 1px solid #dbdbdb; border-radius:10px; background:#f8f8f8; margin-top:10px; padding:10px 10px 50px 10px }
+    .chapter-nb .notebook { background:#F2F9F6; padding:10px 10px 50px 10px }
     .chapter-nb .cell { background:white; margin:15px 0px 15px 0px; border-left:5px solid #f0f0f0; border-right:5px solid #f0f0f0; padding:8px 12px; }
     .chapter-nb .cell-text { border-color:#92D1C6; }
     .chapter-nb .cell-code { border-color:#F9B56B; }
@@ -299,16 +306,17 @@
     /* pretty table formatting in code cells */ 
     .chapter-nb .cell-code .table-box { width:0px; min-width:calc(100% - 10px); border:4px solid #F9B56B; max-height:200px; overflow:auto; font:400 9pt Inter, sans-serif; overscroll-behavior:none; }
     .chapter-nb .cell-code table { border-collapse:collapse; width:100%; }
-    .chapter-nb .cell-code th, td { padding:2px 4px; text-align: left; }
+    .chapter-nb .cell-code th, .chapter-nb .cell-code td { padding:4px 6px; text-align: left; border-style:none; font-weight:300; font-size:11px; }
+    .chapter-nb .cell-code th { font-weight:600; }
     .chapter-nb .cell-code thead { position:sticky; top:0px; z-index:2; }
     .chapter-nb .cell-code table thead { background:#F9B56B; color:white; }
     .chapter-nb .cell-code table tr:nth-child(even) td {background: #f9b46b30;}
     .chapter-nb .cell-code .compost { padding-top:10px; }
 
     /* pretty text formatting for text cells */
-    .chapter-nb .cell-text .text-body h1 {font-size:18pt;; font-family:Inter, sans-serif; }
+    .chapter-nb .cell-text .text-body h1 {font-size:18pt;; font-family:Inter, sans-serif; color:black; }
     .chapter-nb .cell-text .text-body { padding:10px; font-family:Inter, sans-serif;  }
-    .chapter-nb .cell-text .text-body p { margin:0px 0px 10px 0px; line-height:1.6em; }
+    .chapter-nb .cell-text .text-body p { margin:0px 0px 10px 0px; line-height:1.6em; color:black; }
     .chapter-nb .cell-text .text-body li { margin:0px 0px 3px 0px; }
     .chapter-nb .cell-text .text-body li.selected { list-style-type: none; margin-left:-11px;}
     .chapter-nb .cell-text .text-body ul, .cell-text .text-body ol { margin:0px 0px 10px 25px; }
@@ -322,7 +330,8 @@
     .chapter-nb .cell-grid .table-caption input { max-width:100px; }
     .chapter-nb .cell-grid .table-box { width:0px; min-width:calc(100% - 10px); border:4px solid #BDB9D7; max-height:400px; overflow:auto; font:400 9pt Inter, sans-serif; overscroll-behavior:none; }
     .chapter-nb .cell-grid table { width:100%; border-collapse:collapse; }
-    .chapter-nb .cell-grid th, td { padding:2px 4px; text-align: left; height:20px; cursor:pointer; }
+    .chapter-nb .cell-grid th, .chapter-nb .cell-grid  td { padding:4px 6px; text-align: left; border-style:none; font-weight:300; font-size:11px; }
+    .chapter-nb .cell-code th { font-weight:600; }
     .chapter-nb .cell-grid thead { position:sticky; top:0px; z-index:2; }
     .chapter-nb .cell-grid table thead { background:#BDB9D7; color:white; }
     .chapter-nb .cell-grid table tr:nth-child(even) td {background: #BDB9D730;}
@@ -336,13 +345,13 @@
     .chapter-nb .cell-grid .grid-context h3 { height:20px; padding:2px 4px; background:#BDB9D7; color:white; font:800 9pt Inter, sans-serif;  }
     .chapter-nb .cell-grid .grid-context .panel-body h4 { padding:6px; background:#BDB9D730; color:#968FC4; font:600 9pt Inter, sans-serif;  }
     .chapter-nb .cell-grid .grid-context .panel-body h4 i { font-size: 8pt; margin-right:6px; }
-    .chapter-nb .cell-grid .grid-context .panel-body p { margin:6px 8px; line-height:1.4em; font-size:9pt; }
+    .chapter-nb .cell-grid .grid-context .panel-body p { margin:6px 8px; line-height:1.4em; font-size:9pt; font-weight:200; }
     .chapter-nb .cell-grid .grid-context .panel-body p.break { overflow-wrap:anywhere; word-break: break-all; }
     .chapter-nb .cell-grid .grid-context .panel-body p.action { text-align:right; margin-right:12px; }
-    .chapter-nb .cell-grid .grid-context .panel-body p a { font:800 9pt Inter, sans-serif; color:#BDB9D7; text-decoration:none; }
+    .chapter-nb .cell-grid .grid-context .panel-body p a { font:600 9pt Inter, sans-serif; color:#BDB9D7; text-decoration:none; }
     .chapter-nb .cell-grid .grid-context .panel-body p a i { margin-right:8px;}
-    .chapter-nb .cell-grid .grid-context .panel-body li { text-indent:-9px; padding-left:22px; font:400 9pt Inter, sans-serif; line-height:1.4em; list-style-type: none; margin:6px 4px; overflow-wrap:anywhere; word-break: break-all;  }
-    .chapter-nb .cell-grid .grid-context .panel-body li i { margin-right:6px; color:#968FC4; }    
+    .chapter-nb .cell-grid .grid-context .panel-body li { text-indent:-14px; padding-left:22px; font:200 9pt Inter, sans-serif; line-height:1.4em; list-style-type: none; margin:6px 4px; overflow-wrap:anywhere; word-break: break-all;  }
+    .chapter-nb .cell-grid .grid-context .panel-body li i { margin-right:0px; color:#968FC4; }    
     .chapter-nb .cell-grid .grid-context .panel-body code { color:#968FC4; }
 </style>
 
@@ -388,7 +397,7 @@
     <a id="chapter4-link" href="#chapter4"><strong>Chapter 4</strong>: Conference budget</a>
     <a id="chapter5-link" href="#chapter5"><strong>Chapter 5</strong>: Counter</a>
     <a id="chapter6-link" href="#chapter6"><strong>Chapter 6</strong>: Traffic accidents</a>
-    <a id="chapter7-link" href="#chapter7"><strong>Chapter 7</strong>: Under the cover</a>
+    <a id="chapter7-link" href="#chapter7"><strong>Chapter 7</strong>: Datnicek notebooks</a>
   </nav>
 
   <!-- ========================================================================================= -->
@@ -508,7 +517,7 @@
           combines formulas with programming by demonstration.</li>
         <li><a href="#chapter6"><strong>Chapter 6</strong>: Traffic accidents</a>
           shows how concrete programming enables tracking of code copies.</li>
-        <li><a href="#chapter7"><strong>Chapter 7</strong>: Under the cover</a>
+        <li><a href="#chapter7"><strong>Chapter 7</strong>: Datnicek notebooks</a>
           provides some more background on how Denicek works.</li>
       </ul>
 
@@ -947,15 +956,65 @@
   <div class="chapter chapter-nb" id="chapter7">
   <div class="sidebyside">
   <section>
-    <h2><strong>Chapter 7:</strong> Datnicek</h2>
+    <h2><strong>Chapter 7:</strong> Denicek-based data science notebooks</h2>
     <div id="chapter7-demo" class="datnicek-demo" data-file="essay/datnicek.json"></div>
   </section>
   <section class="comment"> 
     <div id="chapter7-start" data-speed="1">
-      <h3><strong>Step 1:</strong> x</h3>
-      xx
+      <h3><strong>Step 1:</strong> Denicek as a computational substrate</h3>
+      <p>The demos in the previous chapters were using Denicek abstractions directly.
+        While the interface enables a lot of interesting features, it is not very 
+        user-friendly. But Denicek was intended as a <em>computational substrate</em>,
+        i.e., an underlying representation for more interesting programming systems.</p>
+      <p>To show that Denicek can really work this way, we also built <strong>Datnicek</strong>, 
+        a user-friendly programming system for data science. Datnicek supports:</p>
+      <ul>
+        <li>Structure editing for code inside code blocks</li>
+        <li>Collaborative editing with tree-based merging</li>
+        <li>Type-provider like code completion</li>
+        <li>Interactive data wrangling that generates code</li>
+        <li>Output invalidation when code changes</li>
+      </ul>
+      <p>All of these are built on top of Denicek, using history of edits and document structure.</p>
+      <p>This demo illustrates some of the capabilities of Denicek. Again, it runs the real
+        system and so you can play around, this time in a more user-friendly environment!</p>
     </div>
-    </section>
+    <div id="chapter7-cells" data-speed="1">
+      <h3><strong>Step 2:</strong> Code and grid cells</h3>
+      <p>Code cells in Datnicek are represented as records with fields for individual formulas.
+        Formulas use the same representation we saw earlier &mdash; a formula is a <code>&lt;x-formula&gt;</code>
+        document node and evaluating it wraps the formula with <code>&lt;x-evaluated&gt;</code> and adds the
+        <code>result</code> field containing the evaluated result. You can see this by switching to the source
+        view using <kbd>Alt</kbd>+<kbd>U</kbd>.
+      </p>
+      <p>To show that Denicek can be used as the basis for interesting user experiences, 
+        Datnicek uses it to build an interactive data cleaning environment. Here, we use it to 
+        clean the data on air traffic accidents from Eurostat.</p>
+      <p>The grid cell shows the data in a spreadsheet-like view. When you click on a cell or
+        a header and edit the value, the tool suggests possible edits to apply to all rows.
+        We use, for example:</p>
+      <ul>
+        <li>When you click in a data cell, Datnicek suggests to drop/keep rows with this
+          particular value in the cell.
+        </li>
+        <li>When you edit a value in a data cell, Datnicek suggest to apply the same replacement
+          to all other rows or across the whole dataset</li>
+        <li>When you click in a header and change the value, Datnicek suggests to rename
+          the header. It also suggests to drop it, or split the column.</li>
+      </ul>
+      <p>Denicek stores information about the applied transformations in the document and
+        so you can see them using <kbd>Alt</kbd>+<kbd>U</kbd>.
+
+    </div>
+    <div id="chapter7-coding" data-speed="1">
+      <h3><strong>Step 2:</strong> foof</h3>
+
+    </div>
+    <div id="chapter7-visualize" data-speed="1">
+      <h3><strong>Step 2:</strong> foof</h3>
+
+    </div>
+  </section>
   </div>
   </div>
 

@@ -622,7 +622,6 @@ module History =
         h?td ["class" => "edhash"; "title" => (histhash.ToString("x")) ] [ Helpers.renderHistoryHash state trigger histhash ]
       ]
     let renderv = render KeepReferences
-    let fmtprev k = function Some s -> [k, text s] | _ -> []
     match ed.Edit.Kind with 
     | PrimitiveEdit(sel, fn, None) -> renderv "edit" sel $"Apply transformation @{fn}"
     | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" sel $"Apply transformation @{fn}({arg})"

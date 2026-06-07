@@ -1,3 +1,4 @@
+#nowarn "40"
 module Denicek.App.Datnicek
 
 open Denicek
@@ -358,6 +359,7 @@ type State =
     DisplayMenuPath : string list option
     ViewSource : bool
     ShowHistory : bool
+    HistoryExpanded : Map<string, bool>
 
     // Code editing
     EditingBindingPath : Selectors option
@@ -380,6 +382,7 @@ type CellKind =
 type Event =
   | ToggleViewSource
   | ToggleShowHistory
+  | ToggleHistoryFull of string
   | UndoLastEdit
   | ToggleMenu of path:string list option
   | SelectCell of cellIdOpt:string option
@@ -390,7 +393,7 @@ type Event =
   | EditValue of sel:Selectors option
   | EditBinding of sel:Selectors option
   // Grid editing
-  | GridToCode of cell:string * nextCell:string option
+  | GridToCode of cell:string * nextCell:string option * newCellId:string * newVarName:string
   | EditGrid of cell:string * sel:GridLocation option
   | GridRecommend of cell:string * kind:string * recs:GridEdit list
   | GridApplyEdit of cell:string * edits:GridEdit
@@ -604,17 +607,15 @@ let applyGridEdits cellId recm state =
   |> updateGridState cellId
 
 
-let turnGridToCode cellId nextCell state = 
+let turnGridToCode cellId nextCell newCellId newVarName state = 
   match getGridState cellId state with 
-  | Some(src, name, ops, _) ->
-      let id = uniqueId "cell"
-      let name = uniqueId "unnamed" // if name = "" then uniqueId "unnamed" else name
+  | Some(src, _, ops, _) ->
       let code = Reference(Absolute, src)
       let code = ops |> List.fold (fun inst op -> replace (fun _ nd -> 
         match nd with Record("x-hole", _) -> Some inst | _ -> None) op ) code
       let eds = [
-        RecordAdd([], id, Some cellId, nextCell, rcd $"cell-{asCellKindName CodeCell}")
-        RecordAdd([Field id], name, None, None, code)
+        RecordAdd([], newCellId, Some cellId, nextCell, rcd $"cell-{asCellKindName CodeCell}")
+        RecordAdd([Field newCellId], newVarName, None, None, code)
       ]
       mergeEdits state "turn to code" eds
   | _ -> state
@@ -636,6 +637,10 @@ let update state trigger evt =
       { state with EvaluatedEdits = Map.empty } |> updateDocument
 
   | ToggleShowHistory -> { state with ShowHistory = not state.ShowHistory }
+  | ToggleHistoryFull(id) -> 
+      let toggle = if state.HistoryExpanded.ContainsKey(id) then not state.HistoryExpanded.[id] else true
+      { state with HistoryExpanded = state.HistoryExpanded.Add(id, toggle) }
+
   | ToggleViewSource -> { state with ViewSource = not state.ViewSource }
   | SelectCell sel -> { state with SelectedCell = sel }
   | ToggleMenu path -> { state with DisplayMenuPath = path }
@@ -660,7 +665,7 @@ let update state trigger evt =
 
   | GridApplyEdit(cellId, recm) -> applyGridEdits cellId recm state 
   | UpdateGridState(cellId) -> updateGridState cellId state |> updateDocument
-  | GridToCode(cellId, nextCell) -> turnGridToCode cellId nextCell state
+  | GridToCode(cellId, nextCell, newCellId, newVarName) -> turnGridToCode cellId nextCell newCellId newVarName state
 
   | EditParagraph(cellId, pid) -> 
       { state with SelectedCell = Some cellId; SelectedParagraph = state.SelectedParagraph.Add(cellId, pid) }
@@ -1077,6 +1082,7 @@ let renderGridEditorCell trigger state flds cell loc v =
     let s, parse = parseFormat v
     h?input [
       "type" => "text"
+      "size" => "1"
       "value" => s
       "keyup" =!> fun el evt ->
         let ke = unbox<KeyboardEvent> evt
@@ -1094,6 +1100,7 @@ let renderGridEditorColumnHeader trigger state flds cell loc f =
     h?input [
       "type" => "text"
       "value" => f
+      "size" => "1"
       "keyup" =!> fun el evt ->
         let ke = unbox<KeyboardEvent> evt
         let ie = unbox<HTMLInputElement> el
@@ -1108,6 +1115,7 @@ let renderGridEditorHeader trigger state cell loc name =
     h?input [
       "type" => "text"
       "value" => name
+      "size" => "1"
       "keyup" =!> fun el evt ->
         let ke = unbox<KeyboardEvent> evt
         let ie = unbox<HTMLInputElement> el
@@ -1221,7 +1229,7 @@ let renderGridCell trigger state cell =
             h?div [ "class" => "panel" ] [            
               h?h3 [] [ text "Actions" ]
               h?div [ "class" => "panel-body" ] [ h?p [] [ 
-                h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(GridToCode(cell.Id, cell.NextId)) ] [ 
+                h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(GridToCode(cell.Id, cell.NextId, uniqueId "cell", uniqueId "unnamed")) ] [ 
                   h?i ["class" => $"fa fa-code"] []; text "Insert as code cell" ] ]
               ]
             ]
@@ -1383,82 +1391,63 @@ let renderTextCell trigger state cell =
 // Rendering of history
 // --------------------------------------------------------------------------------------
 
-let formatNode path nd =
-  let rec loop depth path nd =
-    match nd with
-    | _ when depth > 4 -> text "..."
-    | Primitive(Number n) -> text (string n)
-    | Primitive(String s) -> text s
-    | Reference(kind, sel) -> renderReference (kind, sel)
-    | List(tag, nds) -> h?span [] [
-          yield text (tag + "[")
-          for j, (i, nd) in Seq.indexed nds do
-            if j <> 0 then yield text ", "
-            yield text $"{i}="
-            yield loop (depth+1) (path @ [Index i]) nd
-          yield text "]"
-        ]
-    | Record(tag, nds) -> h?span [] [
-          yield text (tag + "{")
-          for i, (f, nd) in Seq.indexed nds do
-            if i <> 0 then yield text ", "
-            yield text $"{f}="
-            yield loop (depth+1) (path @ [Field f]) nd
-          yield text "}"
-        ]
-  loop 0 path nd
+let renderHistoryHash (hist:int) =
+  h?a [ ] [ text (hist.ToString("x")) ]
 
-let renderEdit (ed:Edit) =
-  let render rb n fa sel args =
-    h?li [] [
-      h?i [ "class" => "fa " + fa ] []
-      text " "
-      h?strong [] [ text (if rb = KeepReferences then "v." + n else "s." + n) ]
-      text " "
-      renderReference (Absolute, sel)
-      h?br [] []
-      for i, (k, v) in Seq.indexed args do
-        if i <> 0 then text ", "
-        text $"{k} = "
-        h?span [] [ v ]
-      if ed.Dependencies <> [] then
-        h?br [] []
-        text "deps=("
-        for i, dep in Seq.indexed ed.Dependencies do
-          if i <> 0 then text ", "
-          renderReference (Absolute, dep)
-        text ")"
+let renderEdit (i, (histhash:int, ed:Edit)) = 
+  let render rb n sel title = 
+    h?tr [ ] [ 
+      h?td ["class" => "edidx"] [ text (string i) ]
+      h?td ["class" => "edname"] [ 
+        h?a [ "class" => (if rb = KeepReferences then "value " + n else "struct " + n) 
+              "title" => title ] [ text n ] ]
+      h?td ["class" => "edref"; "title" => Format.formatReference (Absolute, sel) ] [ renderReference (Absolute, sel) ]
+      h?td ["class" => "edhash"; "title" => (histhash.ToString("x")) ] [ renderHistoryHash histhash ]
     ]
   let renderv = render KeepReferences
-  let fmtprev k = function Some s -> [k, text s] | _ -> []
-  match ed.Kind with
-  | PrimitiveEdit(sel, fn, None) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn]
-  | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" "fa-solid fa-i-cursor" sel ["fn", text fn; "arg", text arg]
-  | RecordAdd(sel, f, prev, succ, nd) -> renderv "addfield" "fa-plus" sel <| ["node", formatNode sel nd; "fld", text f] @ fmtprev "prev" prev @ fmtprev "succ" succ
-  | UpdateTag(sel, t) -> renderv "retag" "fa-code" sel ["t", text t]
-  | ListAppend(sel, i, prev, succ, nd) -> renderv "append" "fa-at" sel <| ["i", text i; "node", formatNode sel nd ] @ fmtprev "prev" prev @ fmtprev "succ" succ
-  | ListReorder(sel, perm) -> renderv "reorder" "fa-list-ol" sel ["perm", text (string perm)]
-  | Copy(rk, tgt, src) -> render rk "copy" "fa-copy" tgt ["from", renderReference (Absolute, src)]
-  | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" "fa-regular fa-square" sel ["id", text id; "tag", text tg]
-  | WrapList(rk, tg, i, sel) -> render rk "wraplist" "fa-solid fa-list-ul" sel ["i", text i; "tag", text tg]
-  | RecordRenameField(rk, sel, fold, fnew) -> render rk "updid" "fa-font" sel ["old", text fold; "new", text fnew]
-  | ListDelete(sel, i) -> renderv "delitm" "fa-xmark" sel ["index", text (string i)]
-  | RecordDelete(rk, sel, fld) -> render rk "delfld" "fa-rectangle-xmark" sel ["fld", text fld]
-
-let renderHistory state = h?div [ "id" => "history" ] [
-    h?h3 [] [ text $"Source edits" ]
-    h?ol [] (List.map renderEdit (List.rev state.SourceEdits))
-    for cell in getNotebookCells state.Document do
-      match getGridState cell.Id state with 
-      | Some(_, _, _, eds) ->
-          h?h3 [] [ text $"Grid edits for {cell.Id}" ]
-          h?ol [] (List.map renderEdit (List.rev [ for ed in eds -> mkEd ed.Edit ]))
-      | _ -> ()
-    for (KeyValue(k,v)) in state.EvaluatedEdits do
-      if not (List.isEmpty v) then
-        h?h3 [] [ text $"Evaluated for {k}" ]
-        h?ol [] (List.map renderEdit (List.rev v))
+  match ed.Kind with 
+  | PrimitiveEdit(sel, fn, None) -> renderv "edit" sel $"Apply transformation @{fn}"
+  | PrimitiveEdit(sel, fn, Some arg) -> renderv "edit" sel $"Apply transformation @{fn}({arg})"
+  | RecordAdd(sel, f, prev, succ, nd) -> renderv "addfield" sel $"Add field '{f}'"
+  | UpdateTag(sel, t) -> renderv "retag" sel $"Update tag to '{t}'"
+  | ListAppend(sel, i, prev, succ, nd) -> renderv "append" sel $"Append item with index '{i}'"
+  | ListReorder(sel, perm) -> renderv "reorder" sel $"Reorder items using {perm}"
+  | Copy(rk, tgt, src) -> render rk "copy" tgt $"Copy node from {Format.formatSelector src} to {Format.formatSelector tgt}"
+  | WrapRecord(rk, id, tg, sel) -> render rk "wraprec" sel $"Wrap inside record <{tg}> as '{id}'"
+  | WrapList(rk, tg, i, sel) -> render rk "wraplist" sel $"Wrap inside list <{tg}> with index '{i}'"
+  | RecordRenameField(rk, sel, fold, fnew) -> render rk "updid" sel $"Rename field from '{fold}' to '{fnew}'"
+  | ListDelete(sel, i) -> renderv "delitm" sel $"Delete list item at '{i}'"
+  | RecordDelete(rk, sel, fld) -> render rk "delfld" sel $"Delete field '{fld}'"
+  
+let renderHistoryTable state trigger tableId lbl eds = 
+  let withHashAndIdx = Merge.withHistoryHash 0 id eds |> List.indexed |> List.rev  
+  h?table [] [
+    yield h?tr [] [
+      h?th ["colspan" => "4"] [ text lbl ] 
+    ]    
+    let skipped, withHashAndIdx = 
+      match state.HistoryExpanded.TryGetValue(tableId) with
+      | true, true -> 0, withHashAndIdx
+      | _ -> max 0 (withHashAndIdx.Length - 15), List.truncate 15 withHashAndIdx
+    for ied in withHashAndIdx -> renderEdit ied
+    yield h?tr [ "class" => "more" ] [ h?th ["colspan" => "4"] [ 
+      h?a [ "href" => "javascript:;"; "click" =!> fun _ _ -> trigger(ToggleHistoryFull(tableId)) ] [ 
+        if skipped > 0 then text $"+ {skipped} more operations" else text "no more operations"
+      ] 
+    ] ]
   ]
+
+let renderHistory trigger state = h?div [ "class" => "edits" ] [
+  renderHistoryTable state trigger $"source" $"Source edits • {state.SourceEdits.Length} edits" state.SourceEdits
+  for cell in getNotebookCells state.Document do
+    match getGridState cell.Id state with 
+    | Some(_, _, _, eds) ->
+        renderHistoryTable state trigger $"grid-{cell.Id}" $"Grid edits • {cell.Id}" [ for e in eds -> mkEd e.Edit ]
+    | _ -> ()
+  for (KeyValue(k,v)) in state.EvaluatedEdits do
+    if not (List.isEmpty v) then
+      renderHistoryTable state trigger $"eval-{k}" $"Evaluated edits • {k}" v
+]
 
 // --------------------------------------------------------------------------------------
 // Render cells and main
@@ -1489,7 +1478,7 @@ let renderTitle kind =
   | CodeCell -> h?p ["class" => "title"] [ h?i [ "class" => "fa fa-code" ] []; text "code" ]
   | GridCell -> h?p ["class" => "title"] [ h?i [ "class" => "fa fa-table" ] []; text "grid" ]
 
-let render trigger state = h?div [ "id" => "main" ] [
+let render trigger state = h?div [ "class" => "main" ] [
   let cells = getNotebookCells state.Document
   h?div [ "class" => "notebook" ] [
     let firstid = match cells with c::_ -> Some c.Id | _ -> None
@@ -1524,7 +1513,7 @@ let render trigger state = h?div [ "id" => "main" ] [
     ]
   ]
   if state.ShowHistory then
-    renderHistory state
+    renderHistory trigger state
 ]
 
 // --------------------------------------------------------------------------------------
@@ -1593,9 +1582,9 @@ module EventLogger =
   let gridEditFromJson o : GridEdit =
     { Title = o?title; Icon = o?icon; EditType = o?editType; Description = o?description
       Edits = [ for e in unbox<obj[]> o?edits -> expandedEditFromJson e ]
-      Code = nodeFromJson o?code }
+      Code = nodeFromJson o?code }    
   let gridEditsToJson (gs:GridEdit list) = box [| for g in gs -> gridEditToJson g |]
-  let gridEditsFromJson o = [ for g in unbox<obj[]> o -> gridEditFromJson o ]
+  let gridEditsFromJson o = [ for g in unbox<obj[]> o -> gridEditFromJson g ]
 
   // Serializing events. Returns 'None' for events that should not be replayed
   // (LoadData carries the loaded data files, which are re-loaded on startup).
@@ -1611,12 +1600,13 @@ module EventLogger =
     | Evaluate cell -> jsObj [ "kind", box "evaluate"; "cell", box cell ] |> Some
     | EditValue sel -> jsObj [ "kind", box "editValue"; "selector", selsOptToJson sel ] |> Some
     | EditBinding sel -> jsObj [ "kind", box "editBinding"; "selector", selsOptToJson sel ] |> Some
-    | GridToCode(cell, next) -> jsObj [ "kind", box "gridToCode"; "cell", box cell; "nextCell", strOptToJson next ] |> Some
+    | GridToCode(cell, next, newCellId, newVarName) -> jsObj [ "kind", "gridToCode"; "cell", cell; "nextCell", strOptToJson next; "newId", newCellId; "newVar", newVarName ] |> Some
     | EditGrid(cell, loc) -> jsObj [ "kind", box "editGrid"; "cell", box cell; "location", gridLocationOptToJson loc ] |> Some
     | GridRecommend(cell, kind, recs) -> jsObj [ "kind", box "gridRecommend"; "cell", box cell; "recKind", box kind; "recs", gridEditsToJson recs ] |> Some
     | GridApplyEdit(cell, edit) -> jsObj [ "kind", box "gridApplyEdit"; "cell", box cell; "edit", gridEditToJson edit ] |> Some
     | UpdateGridState cell -> jsObj [ "kind", box "updateGridState"; "cell", box cell ] |> Some
     | EditParagraph(cell, id) -> jsObj [ "kind", box "editParagraph"; "cell", box cell; "id", strOptToJson id ] |> Some
+    | ToggleHistoryFull(k) -> jsObj ["kind", box "toggleHistoryFull"; "id", box k ] |> Some
     | LoadData _ -> None
 
   // Deserializing events (inverse of 'serializeEvent')
@@ -1632,12 +1622,13 @@ module EventLogger =
     | "evaluate" -> Evaluate(o?cell)
     | "editValue" -> EditValue(selsOptFromJson o?selector)
     | "editBinding" -> EditBinding(selsOptFromJson o?selector)
-    | "gridToCode" -> GridToCode(o?cell, strOptFromJson o?nextCell)
+    | "gridToCode" -> GridToCode(o?cell, strOptFromJson o?nextCell, o?newId, o?newVar)
     | "editGrid" -> EditGrid(o?cell, gridLocationOptFromJson o?location)
     | "gridRecommend" -> GridRecommend(o?cell, o?recKind, gridEditsFromJson o?recs)
     | "gridApplyEdit" -> GridApplyEdit(o?cell, gridEditFromJson o?edit)
     | "updateGridState" -> UpdateGridState(o?cell)
     | "editParagraph" -> EditParagraph(o?cell, strOptFromJson o?id)
+    | "toggleHistoryFull" -> ToggleHistoryFull(o?id)
     | k -> failwith $"deserializeEvent: unexpected kind '{k}'"
 
   let deserializeEvents (o:obj) =
@@ -1686,16 +1677,18 @@ module Loader =
   //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-e70e2eaf"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]}]"""
 
   //let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-e70e2eaf"],["node",{"kind":"record","tag":"cell-text","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-7bc8e9a4"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-e70e2eaf"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"]]}],["field","unnamed-b2f8c8be"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"],["1","unnamed-b2f8c8be"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"],["1","unnamed-b2f8c8be"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"],["1","unnamed-b2f8c8be"]]}],["field","file"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"],["1","unnamed-b2f8c8be"]]}],["field","file"],["node","sf_aviaca_eukil.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"]]}],["old","unnamed-b2f8c8be"],["new","aviaRaw"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-7bc8e9a4"],["1","aviaRaw"]]}],["field","file"],["node","eurostat/sf_aviaca_eukil.tsv"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-e8cd2cd6"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-7bc8e9a4"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"]]}],["field","target"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-7bc8e9a4","aviaRaw"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"]]}],["field","edits"],["node",{"kind":"list","tag":"edits","nodes":[]}]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Rename columns"],["icon","fa-i-cursor"],["description","Rename column `freq,unit,victim,c_regis,geo\\TIME_PERIOD' to `freq,unit,victim,c_regis,geo'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","rename"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["old","freq,unit,victim,c_regis,geo\\TIME_PERIOD"],["new","freq,unit,victim,c_regis,geo"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["old","freq,unit,victim,c_regis,geo\\TIME_PERIOD"],["new","freq,unit,victim,c_regis,geo"],["refs","update"]]}]]}]]}],["index","0"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Split column by delimiter"],["icon","fa-scissors"],["description","Split column `freq,unit,victim,c_regis,geo' by delimiter `,'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","split"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","freq,unit,victim,c_regis,geo"],["by",","]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","unit"],["node",""],["pred","freq,unit,victim,c_regis,geo"]]}],["1",{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","unit"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","freq,unit,victim,c_regis,geo"]]}],["refs","update"]]}],["2",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","unit"]]}],["op","take-by"],["arg",",/1"]]}],["3",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","victim"],["node",""],["pred","unit"]]}],["4",{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","victim"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","freq,unit,victim,c_regis,geo"]]}],["refs","update"]]}],["5",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","victim"]]}],["op","take-by"],["arg",",/2"]]}],["6",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","c_regis"],["node",""],["pred","victim"]]}],["7",{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","c_regis"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","freq,unit,victim,c_regis,geo"]]}],["refs","update"]]}],["8",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","c_regis"]]}],["op","take-by"],["arg",",/3"]]}],["9",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","geo"],["node",""],["pred","c_regis"],["succ","2006"]]}],["10",{"kind":"record","tag":"x-edit-copy","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","geo"]]}],["source",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","freq,unit,victim,c_regis,geo"]]}],["refs","update"]]}],["11",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","geo"]]}],["op","take-by"],["arg",",/4"]]}],["12",{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["old","freq,unit,victim,c_regis,geo"],["new","freq"],["refs","update"]]}],["13",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","freq"]]}],["op","take-by"],["arg",",/0"]]}]]}]]}],["index","1"],["pred","0"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Drop columns"],["icon","fa-rectangle-xmark"],["description","Drop column `freq'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","drop"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","freq"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","freq"]]}]]}]]}],["index","2"],["pred","1"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Drop columns"],["icon","fa-rectangle-xmark"],["description","Drop column `unit'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","drop"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","unit"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","unit"]]}]]}]]}],["index","3"],["pred","2"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Drop columns"],["icon","fa-rectangle-xmark"],["description","Drop column `victim'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","drop"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","victim"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","victim"]]}]]}]]}],["index","4"],["pred","3"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Keep rows by value"],["icon","fa-circle-check"],["description","Keep only rows with value `EU27_2020' in column `c_regis'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","filter"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","c_regis"],["cond","nequals"],["value","EU27_2020"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","$cond"],["node",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$builtins","nequals"]}],["left","EU27_2020"],["right",{"kind":"reference","refkind":"relative","selectors":["..","..","c_regis"]}]]}]]}],["1",{"kind":"record","tag":"x-expandable-edit","nodes":[["condition",{"kind":"reference","refkind":"relative","selectors":["$cond"]}],["prefix",{"kind":"reference","refkind":"absolute","selectors":["#0"]}],["target",{"kind":"reference","refkind":"absolute","selectors":["*"]}],["edit",{"kind":"record","tag":"x-edit-listdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["index","0"]]}]]}],["2",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","$cond"]]}]]}]]}],["index","5"],["pred","4"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Delete rows by value"],["icon","fa-circle-xmark"],["description","Delete rows with value `EU27_2020' in column `geo'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","filter"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","geo"],["cond","equals"],["value","EU27_2020"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","$cond"],["node",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$builtins","equals"]}],["left","EU27_2020"],["right",{"kind":"reference","refkind":"relative","selectors":["..","..","geo"]}]]}]]}],["1",{"kind":"record","tag":"x-expandable-edit","nodes":[["condition",{"kind":"reference","refkind":"relative","selectors":["$cond"]}],["prefix",{"kind":"reference","refkind":"absolute","selectors":["#0"]}],["target",{"kind":"reference","refkind":"absolute","selectors":["*"]}],["edit",{"kind":"record","tag":"x-edit-listdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["index","0"]]}]]}],["2",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","$cond"]]}]]}]]}],["index","6"],["pred","5"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Delete rows by value"],["icon","fa-circle-xmark"],["description","Delete rows with value `EU28' in column `geo'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","filter"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","geo"],["cond","equals"],["value","EU28"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","$cond"],["node",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$builtins","equals"]}],["left","EU28"],["right",{"kind":"reference","refkind":"relative","selectors":["..","..","geo"]}]]}]]}],["1",{"kind":"record","tag":"x-expandable-edit","nodes":[["condition",{"kind":"reference","refkind":"relative","selectors":["$cond"]}],["prefix",{"kind":"reference","refkind":"absolute","selectors":["#0"]}],["target",{"kind":"reference","refkind":"absolute","selectors":["*"]}],["edit",{"kind":"record","tag":"x-edit-listdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["index","0"]]}]]}],["2",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","$cond"]]}]]}]]}],["index","7"],["pred","6"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Delete rows by value"],["icon","fa-circle-xmark"],["description","Delete rows with value `OTH' in column `geo'"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","filter"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","geo"],["cond","equals"],["value","OTH"]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["field","$cond"],["node",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$builtins","equals"]}],["left","OTH"],["right",{"kind":"reference","refkind":"relative","selectors":["..","..","geo"]}]]}]]}],["1",{"kind":"record","tag":"x-expandable-edit","nodes":[["condition",{"kind":"reference","refkind":"relative","selectors":["$cond"]}],["prefix",{"kind":"reference","refkind":"absolute","selectors":["#0"]}],["target",{"kind":"reference","refkind":"absolute","selectors":["*"]}],["edit",{"kind":"record","tag":"x-edit-listdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["index","0"]]}]]}],["2",{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"]]}],["refs","update"],["field","$cond"]]}]]}]]}],["index","8"],["pred","7"]]},{"kind":"record","tag":"x-edit-append","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"],["1","edits"]]}],["node",{"kind":"record","tag":"transform","nodes":[["title","Replace string in all columns"],["icon","fa-pencil"],["description","Replace ` p' with `' in all columns"],["code",{"kind":"record","tag":"x-formula","nodes":[["op",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","replace"]}],["inst",{"kind":"record","tag":"x-hole","nodes":[]}],["column","*"],["old"," p"],["new",""]]}],["edits",{"kind":"list","tag":"edits","nodes":[["0",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","c_regis"]]}],["op","replace"],["arg"," p/"]]}],["1",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","geo"]]}],["op","replace"],["arg"," p/"]]}],["2",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2006"]]}],["op","replace"],["arg"," p/"]]}],["3",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2007"]]}],["op","replace"],["arg"," p/"]]}],["4",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2008"]]}],["op","replace"],["arg"," p/"]]}],["5",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2009"]]}],["op","replace"],["arg"," p/"]]}],["6",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2010"]]}],["op","replace"],["arg"," p/"]]}],["7",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2011"]]}],["op","replace"],["arg"," p/"]]}],["8",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2012"]]}],["op","replace"],["arg"," p/"]]}],["9",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2013"]]}],["op","replace"],["arg"," p/"]]}],["10",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2014"]]}],["op","replace"],["arg"," p/"]]}],["11",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2015"]]}],["op","replace"],["arg"," p/"]]}],["12",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2016"]]}],["op","replace"],["arg"," p/"]]}],["13",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2017"]]}],["op","replace"],["arg"," p/"]]}],["14",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2018"]]}],["op","replace"],["arg"," p/"]]}],["15",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2019"]]}],["op","replace"],["arg"," p/"]]}],["16",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2020"]]}],["op","replace"],["arg"," p/"]]}],["17",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2021"]]}],["op","replace"],["arg"," p/"]]}],["18",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2022"]]}],["op","replace"],["arg"," p/"]]}],["19",{"kind":"record","tag":"x-edit-primitive","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","*"],["1","2023"]]}],["op","replace"],["arg"," p/"]]}]]}]]}],["index","9"],["pred","8"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-e8cd2cd6"]]}],["field","name"],["node","aviaClean"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-2df8d6c8"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-e8cd2cd6"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-2df8d6c8"]]}],["field","unnamed-95efb861"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-e8cd2cd6","aviaClean"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-2df8d6c8"],["1","unnamed-95efb861"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-2df8d6c8"],["1","unnamed-95efb861"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","table","sum"]}]]},{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["refs","update"],["field","cell-2df8d6c8"]]}]"""
-  let json = "[]"
+  
+  //let json = "[]"
+  let json = """[{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-eb533474"],["node",{"kind":"record","tag":"cell-code","nodes":[]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"]]}],["field","unnamed-24037075"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data"]}]]},{"kind":"record","tag":"x-edit-wraprec","nodes":[["tag","inst"],["fld","x-formula"],["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"],["1","unnamed-24037075"]]}],["refs","keep"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"],["1","unnamed-24037075"]]}],["field","op"],["node",{"kind":"reference","refkind":"absolute","selectors":["$datnicek","data","load"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"],["1","unnamed-24037075"]]}],["field","file"],["node",""]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"],["1","unnamed-24037075"]]}],["field","file"],["node","eurostat/avia.tsv"]]},{"kind":"record","tag":"x-edit-renamefld","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-eb533474"]]}],["old","unnamed-24037075"],["new","aviaRaw"],["refs","update"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-779e7420"],["node",{"kind":"record","tag":"cell-code","nodes":[]}],["pred","cell-eb533474"]]},{"kind":"record","tag":"x-edit-recdelete","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["refs","update"],["field","cell-779e7420"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[]}],["field","cell-c8abecf3"],["node",{"kind":"record","tag":"cell-grid","nodes":[]}],["pred","cell-eb533474"]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c8abecf3"]]}],["field","target"],["node",{"kind":"reference","refkind":"absolute","selectors":["cell-eb533474","aviaRaw"]}]]},{"kind":"record","tag":"x-edit-add","nodes":[["target",{"kind":"list","tag":"x-selectors","nodes":[["0","cell-c8abecf3"]]}],["field","edits"],["node",{"kind":"list","tag":"edits","nodes":[]}]]}]"""
 
   let readJsonOps json =
     List.collect (Represent.unrepresent >> List.map fst) (Serializer.nodesFromJsonString json)
 
-  let initial =
+  let initialFromJson json =
     { DisplayMenuPath = None; SelectedCell = None; ViewSource = false; EditingBindingPath = None; GridEvaluatedEdits = Map.empty
       SourceEdits = readJsonOps json; EvaluatedEdits = Map.empty; ShowHistory = false; EditingGridPath = Map.empty
       Document = rcd "notebook"; EditingValuePath = None; Bindings = []; DataFiles = Map.empty; GridCellState = Map.empty
-      GridRecommendations = Map.empty; SelectedParagraph = Map.empty }
+      GridRecommendations = Map.empty; SelectedParagraph = Map.empty; HistoryExpanded = Map.empty }
     |> updateDocument
 
 
@@ -1720,9 +1713,8 @@ module Loader =
       Record("row", fields) ) |> List.ofSeq
     List("table", OrdList.ofList (List.mapi (fun i v -> string i, v) rows))
 
-  let allData = [ "eurostat/avia.tsv"; "eurostat/sf_aviaca.tsv"; "eurostat/sf_railvi.tsv"; "eurostat/sf_railvi_totalkil.tsv"; "eurostat/sf_aviaca_eukil.tsv"; "eurostat/sf_aviaca_euinj.tsv"  ]
-
-  let loadData data trigger = async {
+  let loadData trigger = async {
+    let data = [ "eurostat/avia.tsv"; "eurostat/sf_aviaca.tsv"; "eurostat/sf_railvi.tsv"; "eurostat/sf_railvi_totalkil.tsv"; "eurostat/sf_aviaca_eukil.tsv"; "eurostat/sf_aviaca_euinj.tsv"  ]
     let! tsvs = [ for d in data -> asyncRequest $"/data/{d}" ] |> Async.Parallel
     let dataFiles = Map.ofSeq (Seq.zip data (Seq.map readTsv tsvs))
     trigger(LoadData dataFiles)
@@ -1738,7 +1730,8 @@ module Loader =
         e.preventDefault(); trigger(UndoLastEdit)
 
   let start () =
+    let initial = initialFromJson json
     let trigger, _, _ = createVirtualDomApp "out" initial render update
     updateGridCells trigger initial.Document
-    loadData allData trigger |> Async.StartImmediate
+    loadData trigger |> Async.StartImmediate
     setupHandlers trigger
